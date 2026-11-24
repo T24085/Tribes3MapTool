@@ -18,7 +18,7 @@ Direct Host export and staging check the target bundle's support for editor draf
 
 ## Flag boundary verification
 
-An Unreal Engine 5.3 draft with a three-second flag return timer passed a Windows cook, Direct Host export, staging and rollback checks. In an offline match, reentry cleared the warning and kept the flag with the carrier. A second exit returned the flag home after 3.034 seconds and displayed the HUD notice.
+An Unreal Engine 5.3 draft with a three-second flag return timer passed a Windows cook, Direct Host export, staging and rollback checks. In an offline match, reentry cleared the warning and kept the flag with the carrier. A second exit returned the flag home after 3.034 seconds and displayed the HUD notice. A later windowed capture confirmed that the warning sits below the match-start announcement.
 
 Two isolated Direct Host matches verified notification delivery to a connected client. With an on-foot carrier, the host returned the flag after 3.060 seconds. In the second match, an Unreal test pawn with a Vehicle-channel root crossed the ceiling while the attached character remained inside. The flag returned after 3.066 seconds. Reentry cleared the warning and kept the flag in both matches. A drivable vehicle and the rendered network HUD still need in-game verification.
 
