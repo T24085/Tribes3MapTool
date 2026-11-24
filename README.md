@@ -60,9 +60,9 @@ exporter and client support up to 1,024 lighting bindings per draft.
 
 In a joined headless match, the red alarm switched on after both
 generators went offline. All 18 animated red slots kept their automatic
-clock, and the other base stayed normal. The host detected restored
-power when the first generator revived. Client recovery still needs
-verification.
+clock and returned to normal after power came back. The other base
+stayed normal throughout. The fixture used native damage and a
+40-second auto-revive timer.
 
 The stock Unreal workspace can use **Build for Direct Host** after importing a draft. Select a verified Direct Host bundle that supports standard Unreal World Settings. Offline playtesting uses the separate game-compatible setup described in the editor guide.
 
