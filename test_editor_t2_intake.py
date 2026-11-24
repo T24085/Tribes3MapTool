@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "tools/community_map_ed
 from conversion_window import coverage_status
 from batch_rebuild import compare_drafts, create_batch, load_batch, save_batch
 from conversion_rules import checksum, create_snapshot, draft_rules_path, edit_scope, history, profile_config, selectors, write
-from intake_contract import load_intake, load_intake_geometry
+from intake_contract import PLAYABLE_BOUNDS, load_intake, load_intake_geometry, playable_bounds
 from interior_geometry import render_sections
 from interior_lighting import LIGHTING_INDEX, lighting_summary, load_lighting_index
 from map_pipeline import PipelineRun, pipeline_config, validate_pipeline
@@ -771,6 +771,7 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual(rows[1]["properties"]["Area"], "-6 -10 8 12")
         settings = header["minimap"]
         self.assertEqual(settings["image_bounds"], [[-630, -210], [210, 1050]])
+        self.assertEqual(rows[1]["properties"][PLAYABLE_BOUNDS], settings["image_bounds"])
         self.assertEqual(settings["center"], [-210, 420])
         self.assertNotEqual(settings["center"], terrain["origin_cm"][:2])
         self.assertAlmostEqual(settings["extent"][0], 924)
@@ -988,6 +989,28 @@ class IntakeTests(unittest.TestCase):
         rows[-1]["position_cm"] = [0, 700, 0]
         with self.assertRaisesRegex(ValueError, "Red Flag"):
             plan_boundaries(header, {}, rows, **options)
+
+    def test_minimap_artwork_crop_is_independent_of_all_gameplay_boundaries(self):
+        area = [[-2200, -2400], [2300, 2500]]
+        crop = [[-400, -300], [900, 1100]]
+        settings = framing(area, image_bounds=crop)
+        header = {"minimap": settings}
+        terrain = {"origin_cm": [0, 0, 0], "cm_per_m": 100, "height_m": [0, 5]}
+        rows = [{"status": "boundary", "properties": {PLAYABLE_BOUNDS: area}},
+                {"status": "marker", "kind": "flag", "name": "Blue Flag", "position_cm": [-1000, 0, 200]},
+                {"status": "marker", "kind": "flag", "name": "Red Flag", "position_cm": [1200, 0, 200]}]
+        walls, flag, warning = plan_boundaries(header, terrain, rows, perimeter=True, flag_inset_m=3,
+                                               warn_players=True)
+        lower, upper = verified_extents(walls)
+        self.assertEqual([lower[:2], upper[:2]], area)
+        self.assertEqual(flag.points, ([-1900, -2100], [2000, 2200]))
+        self.assertEqual(warning.vertices, ((-2200, -2400), (2300, -2400), (2300, 2500), (-2200, 2500)))
+        self.assertEqual(settings["image_bounds"], crop)
+        self.assertEqual(settings["center"], [50, 50])
+        self.assertEqual(playable_bounds(header, [{"status": "boundary"}]), crop)
+        rows[0]["properties"][PLAYABLE_BOUNDS] = [[True, 0], [1, 1]]
+        with self.assertRaisesRegex(ValueError, "Invalid playable bounds"):
+            plan_boundaries(header, terrain, rows, perimeter=True, flag_inset_m=None)
 
     def test_solid_polygon_caps_cover_the_exact_concave_shape_in_either_order(self):
         outer = ((-1700, -1700), (1700, -1700), (1700, 1700), (600, 1700),

@@ -14,7 +14,7 @@ from zipfile import ZipFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "tools/community_map_editor"))
 from conversion_rules import create_snapshot
-from intake_contract import load_intake, load_intake_geometry
+from intake_contract import load_intake, load_intake_geometry, playable_bounds
 from interior_geometry import render_sections
 from interior_lighting import LIGHTING_INDEX, load_lighting_index
 from mesh_mappings import placements, source_reference
@@ -702,6 +702,7 @@ class TribesOneIntakeTests(unittest.TestCase):
             self.assertEqual(len(header["sources"]), 3)
             self.assertEqual((terrain["height_m"][0], terrain["height_m"][-1]), (0, 128))
             self.assertEqual(header["minimap"]["image_bounds"], [[-40000, -40000], [40000, 40000]])
+            self.assertEqual(playable_bounds(header, rows), [[-40000, -40000], [40000, 40000]])
             self.assertEqual(header["environment"]["fog"], {"start_cm": 10000, "visible_cm": 70000})
             catalog = load_catalog(source_profile=T1)
             buildable = build_rows(rows, classify(rows, terrain, catalog))
@@ -728,6 +729,7 @@ class TribesOneIntakeTests(unittest.TestCase):
             public_data = unpack_intake(shared, root / "shared")
             public_header, public_terrain, public_rows = load_intake(public_data)
             self.assertEqual(public_header["profile"], T1)
+            self.assertEqual(playable_bounds(public_header, public_rows), playable_bounds(header, rows))
             self.assertEqual(set(public_terrain["height_m"]), {0})
             self.assertEqual([r["position_cm"] for r in public_rows if r["status"] == "marker"],
                              [r["position_cm"] for r in markers])

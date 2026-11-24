@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 
 from ascend_static_mesh import read_placed_meshes as read_ascend_meshes
-from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, UNREAL_READER, UNREAL_SCENE,
+from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, PLAYABLE_BOUNDS, UNREAL_READER, UNREAL_SCENE,
                              bounded, finite, validate_minimap)
 from interior_geometry import MAX_GEOMETRY_BYTES
 from model_textures import SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
@@ -358,6 +358,7 @@ def convert_unreal(source, output, metadata=None):
     if native and scene["native_terrain"]["export_index"] in markers:
         raise ValueError("A terrain actor cannot be assigned as a CTF marker.")
     rows = project_rows(scene, markers, settings.get("heightmap"))
+    next(row for row in rows if row["status"] == "boundary")["properties"][PLAYABLE_BOUNDS] = bounds
     interiors, files = {}, dict(paint.files)
     placed = {row["model_reference"] for row in rows if "model_reference" in row}
     mesh_docs = {reference: geometry for reference, geometry in mesh_docs.items() if reference in placed}

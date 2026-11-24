@@ -13,7 +13,7 @@ from intake_contract import MAX_MANIFEST_BYTES, bounded, validate_minimap
 from terrain_grid import CELLS, VERTICES, TiledTerrain, height_range
 
 
-def framing(bounds, rotation=0, scale=1, low=0.75, default=1, high=2):
+def framing(bounds, rotation=0, scale=1, low=0.75, default=1, high=2, *, image_bounds=None):
     if not all(math.isfinite(v) for v in (rotation, scale, low, default, high)):
         raise ValueError("Minimap settings must be finite numbers.")
     if not (-360 <= rotation <= 360 and 0.1 <= scale <= 10
@@ -35,7 +35,7 @@ def framing(bounds, rotation=0, scale=1, low=0.75, default=1, high=2):
         "rotation_deg": rotation,
         "zoom": {"min": low, "default": default, "max": high},
         "image": "minimap.png",
-        "image_bounds": bounds,
+        "image_bounds": bounds if image_bounds is None else image_bounds,
     }
 
 

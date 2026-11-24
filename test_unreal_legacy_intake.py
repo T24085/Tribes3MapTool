@@ -11,7 +11,7 @@ from zipfile import ZipFile
 
 TOOL = Path(__file__).resolve().parent / "tools/community_map_editor"
 sys.path.insert(0, str(TOOL))
-from intake_contract import UNREAL_SCENE, load_intake
+from intake_contract import UNREAL_SCENE, load_intake, playable_bounds
 from map_pipeline import pipeline_config
 from mesh_mappings import placements
 from minimap import grayscale_png
@@ -76,7 +76,9 @@ class UnrealLegacyIntakeTests(unittest.TestCase):
                 self.assertEqual((header["format"], header["profile"]), (22, profile))
                 self.assertEqual(terrain["origin_cm"], [-3200, 4000, 0])
                 self.assertEqual(terrain["height_m"][-1], 1)
-                self.assertEqual(header["minimap"]["image_bounds"], [[-3200, -2400], [3200, 4000]])
+                area = [[-3200, -2400], [3200, 4000]]
+                self.assertEqual(header["minimap"]["image_bounds"], area)
+                self.assertEqual(playable_bounds(header, rows), area)
                 self.assertEqual(header["files"][UNREAL_SCENE], sha256(manifest.with_name(UNREAL_SCENE).read_bytes()).hexdigest())
                 self.assertEqual(pipeline_config(source_profile=profile)["profile"], profile)
                 catalog = load_catalog(source_profile=profile)
@@ -93,6 +95,11 @@ class UnrealLegacyIntakeTests(unittest.TestCase):
                 self.assertEqual((row["name"], location, scale), ("Deck", (60, 160, 400), (2, 1, 2)))
                 self.assertAlmostEqual(rotation[2], 0.7071067811865475)
 
+                artwork = [[-50, -50], [50, 50]]
+                header["minimap"]["image_bounds"] = artwork
+                manifest.write_text(json.dumps(header), encoding="utf-8")
+                cropped, _, cropped_rows = load_intake(manifest)
+                self.assertEqual(playable_bounds(cropped, cropped_rows), area)
                 public = export_public_layout(manifest, root / "Share.zip")
                 with ZipFile(public) as archive:
                     self.assertNotIn(UNREAL_SCENE, archive.namelist())
@@ -100,6 +107,8 @@ class UnrealLegacyIntakeTests(unittest.TestCase):
                 opened = unpack_intake(public, root / "Shared")
                 shared, ground, shared_rows = load_intake(opened)
                 self.assertEqual(shared["profile"], profile)
+                self.assertEqual(playable_bounds(shared, shared_rows), area)
+                self.assertEqual(shared["minimap"]["image_bounds"], artwork)
                 self.assertEqual(set(ground["height_m"]), {0})
                 self.assertEqual(next(row for row in shared_rows if "model_reference" in row)["model_reference"],
                                  "unrealmesh:model-00001")

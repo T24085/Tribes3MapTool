@@ -3,11 +3,13 @@
 import tkinter as tk
 from tkinter import ttk
 
+from intake_contract import playable_bounds
 from minimap import framing, terrain_pixels, view_transform
 from perimeter import MAX_VERTICES, check_polygon_clearance, check_polygon_outline, parse_polygon, rectangle_outline
 
 
 def show_polygon(parent, header, terrain, rows, initial, on_save, *, kind="flag", constrain_pawns=True):
+    bounds = playable_bounds(header, rows)
     window = tk.Toplevel(parent)
     label, boundary, color = {
         "wall": ("Solid perimeter", "mission perimeter", "#7ce0de"),
@@ -28,7 +30,6 @@ def show_polygon(parent, header, terrain, rows, initial, on_save, *, kind="flag"
     size = 416
     canvas = tk.Canvas(body, width=size, height=size, highlightthickness=0)
     canvas.pack(pady=(6, 0))
-    bounds = header["minimap"]["image_bounds"]
     project, world = view_transform(framing(bounds), size)
     pixels = terrain_pixels(terrain, size, size, world)
     canvas.image = tk.PhotoImage(master=window, data=f"P5\n{size} {size}\n255\n".encode() + pixels, format="PPM")

@@ -10,7 +10,7 @@ from pathlib import Path
 import tempfile
 import zipfile
 
-from intake_contract import EQUIPMENT_FILE, PUBLIC_LAYOUT_READER, load_intake
+from intake_contract import EQUIPMENT_FILE, PLAYABLE_BOUNDS, PUBLIC_LAYOUT_READER, load_intake
 from mesh_mappings import REFERENCE_FIELDS, source_reference
 from minimap import grayscale_png, terrain_png
 from mission_equipment import EQUIPMENT_ROLES, mission_equipment, power_context
@@ -66,6 +66,8 @@ def public_objects(rows, *, legacy=False):
                   if isinstance(value, str)}
         properties = {key: numeric_text(source[key], sizes) for key, sizes in NUMERIC_FIELDS.items()
                       if key in source}
+        if status == "boundary" and PLAYABLE_BOUNDS in row["properties"]:
+            properties[PLAYABLE_BOUNDS] = row["properties"][PLAYABLE_BOUNDS]
         if (team := source.get("team", "").strip()) in {"0", "1", "2"}:
             properties["team"] = team
         elif "team" in source:

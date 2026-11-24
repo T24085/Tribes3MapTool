@@ -9,7 +9,7 @@ import math
 from pathlib import Path
 import re
 
-from intake_contract import bounded, finite, validate_legacy_height_header, validate_minimap
+from intake_contract import PLAYABLE_BOUNDS, bounded, finite, validate_legacy_height_header, validate_minimap
 from minimap import framing, terrain_png
 from source_profiles import NAMES, T1
 from t1_terrain import ARCHIVE_LIMIT, SCALE, Volume, load_binary, resource_name
@@ -134,6 +134,7 @@ def minimap_for_rows(rows):
         row["reason"] = "Invalid mission rectangle. Review before setting minimap framing."
         return None
     row.update(status="boundary", reason="Playable mission rectangle")
+    row["properties"][PLAYABLE_BOUNDS] = result["image_bounds"]
     return result
 
 

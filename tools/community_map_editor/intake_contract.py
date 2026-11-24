@@ -31,6 +31,7 @@ INTERIOR_FILE = re.compile(r"interior-[0-9]{4}\.json")
 SHAPE_FILE = re.compile(r"shape-[0-9]{4}\.json")
 MAX_INTAKE_INTERIORS = 128
 MAX_INTAKE_INTERIOR_BYTES = 96 * 1024 * 1024
+PLAYABLE_BOUNDS = "playable_bounds_cm"
 LATEST_INTAKE_VERSION = UNREAL_INTAKE_VERSION
 T1_SHAPE_INTAKE_VERSION = {4: 18, 5: 19, 6: 20, 7: 21}
 EQUIPMENT_FILE = "equipment.json"
@@ -255,6 +256,21 @@ def validate_environment(settings):
                 or any(not finite(fog[key], 2e6) or fog[key] < 0 for key in fog.keys() - {"color"})
                 or ("color" in fog and (not vector(fog["color"]) or min(fog["color"]) < 0))):
             raise ValueError("Invalid intake fog.")
+
+
+def playable_bounds(header, rows):
+    """Get the gameplay rectangle in Unreal centimetres, including legacy intakes."""
+    settings = header.get("minimap")
+    boundaries = [row for row in rows if row["status"] == "boundary"]
+    if settings is None or len(boundaries) != 1:
+        raise ValueError("A playable MissionArea is required for a boundary.")
+    bounds = boundaries[0].get("properties", {}).get(PLAYABLE_BOUNDS, settings["image_bounds"])
+    if (not isinstance(bounds, (list, tuple)) or len(bounds) != 2
+            or any(not isinstance(point, (list, tuple)) or len(point) != 2
+                   or not all(finite(coordinate, 10_000_000) for coordinate in point) for point in bounds)
+            or not all(low < high for low, high in zip(*bounds))):
+        raise ValueError("Invalid playable bounds in centimetres.")
+    return bounds
 
 
 def validate_minimap(settings):
@@ -915,13 +931,14 @@ def load_intake(manifest):
         raise ValueError("Object counts do not match the manifest.")
     if header["coverage"].get("boundary", 0) != int("minimap" in header):
         raise ValueError("Intake minimap requires one playable boundary.")
+    bounds = playable_bounds(header, rows) if "minimap" in header else None
     if unreal:
         ctf = [row for row in rows if row["status"] == "marker"]
         totals = Counter((row["team"], row["kind"]) for row in ctf)
         if (header["coverage"].get("terrain") != 1
                 or any(totals[team, "flag"] != 1 or not 1 <= totals[team, "spawn"] <= 24 for team in (1, 2))):
             raise ValueError("An Unreal draft requires one terrain and a complete CTF layout.")
-        low, high = header["minimap"]["image_bounds"]
+        low, high = bounds
         if any(not all(lo <= point <= hi for lo, point, hi in zip(low, row["position_cm"], high)) for row in ctf):
             raise ValueError("An Unreal CTF marker lies outside the declared playable bounds.")
     if UNREAL_SCENE in docs:

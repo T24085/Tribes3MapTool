@@ -3,6 +3,7 @@
 import math
 from typing import NamedTuple, Optional
 
+from intake_contract import playable_bounds
 from perimeter_collision import TAG, blocks_pawns, configure_wall, filter_tags, has_wall_collision, probe_profiles, read_channels, validate_channels
 from terrain_grid import height_range
 
@@ -178,9 +179,7 @@ def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limi
         raise ValueError(f"Enter a flag return delay from 1 to {MAX_FLAG_RETURN_SECONDS} whole seconds.")
     if not perimeter and flag_inset_m is None and flag_polygon_m is None and not warn_players:
         return None, None, None
-    if "minimap" not in header or not any(row["status"] == "boundary" for row in rows):
-        raise ValueError("A playable MissionArea is required for a boundary.")
-    bounds = header["minimap"]["image_bounds"]
+    bounds = playable_bounds(header, rows)
     markers = [(row["name"] or row["kind"], row["position_cm"])
                for row in rows if row["status"] == "marker"] if blocks_pawns(channels) else []
     flags = [(row["name"] or "Flag", row["position_cm"])

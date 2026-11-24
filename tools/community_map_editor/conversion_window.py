@@ -11,7 +11,7 @@ import zipfile
 
 from conversion_rules import checksum, sha256_file, write
 from boundary_polygon_window import show_polygon
-from intake_contract import load_intake
+from intake_contract import load_intake, playable_bounds
 from map_pipeline import PipelineRun, pipeline_config
 from interior_lighting import lighting_summary, load_lighting_index
 from mesh_mappings import placements, source_reference
@@ -292,7 +292,7 @@ def show_minimap(parent, manifest, header, terrain, rows, *, flag_limit=None, wa
     ttk.Label(body, text="Minimap framing", font="TkHeadingFont").grid(row=0, column=1, columnspan=2, sticky="w")
 
     initial = header["minimap"]
-    bounds = initial["image_bounds"]
+    bounds = playable_bounds(header, rows)
     fields = (
         ("Rotation (°)", initial["rotation_deg"]), ("Scale", initial["scale"]),
         ("Minimum zoom", initial["zoom"]["min"]), ("Default zoom", initial["zoom"]["default"]),
@@ -311,7 +311,7 @@ def show_minimap(parent, manifest, header, terrain, rows, *, flag_limit=None, wa
             values = [float(entry.get()) for entry in inputs]
         except ValueError as exc:
             raise ValueError("Enter a number in each framing field.") from exc
-        return framing(bounds, *values)
+        return framing(bounds, *values, image_bounds=initial["image_bounds"])
 
     def draw(settings):
         project, world = view_transform(settings, size)

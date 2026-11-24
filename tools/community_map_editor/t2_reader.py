@@ -12,7 +12,8 @@ import tempfile
 import zipfile
 
 from intake_contract import (
-    EQUIPMENT_FILE, INTERIOR_FILE, SHAPE_FILE, LATEST_INTAKE_VERSION, MAX_INTAKE_FILES, MAX_INTAKE_INTERIOR_BYTES, MAX_MANIFEST_BYTES,
+    EQUIPMENT_FILE, INTERIOR_FILE, SHAPE_FILE, LATEST_INTAKE_VERSION, MAX_INTAKE_FILES,
+    MAX_INTAKE_INTERIOR_BYTES, MAX_MANIFEST_BYTES, PLAYABLE_BOUNDS,
     bounded, intake_file_limit, intake_filename, load_intake, max_intake_files, validate_minimap,
 )
 from minimap import framing, grayscale_png, terrain_png
@@ -284,6 +285,7 @@ def mission_minimap(rows, profile):
         row["reason"] = "Missing or invalid MissionArea rectangle"
         return None
     row.update(status="boundary", reason="Playable area for minimap framing")
+    row["properties"][PLAYABLE_BOUNDS] = bounds
     return settings
 
 
