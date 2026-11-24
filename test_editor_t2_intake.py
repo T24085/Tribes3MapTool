@@ -1072,6 +1072,9 @@ class IntakeTests(unittest.TestCase):
         self.assertNotEqual(warning, wall_surface(walls))
         self.assertEqual(flag, ([-4700, -3700], [5700, 6700]))
         self.assertEqual(plan_boundaries(header, terrain, rows, perimeter=False, **options), (None, flag, expected))
+        for audience in ("foot", "vehicle"):
+            self.assertEqual(plan_boundaries(header, terrain, rows, perimeter=False,
+                                             warning_audience=audience, **options), (None, flag, expected))
 
         # A saved warning without overrides still follows the solid perimeter and its caps.
         self.assertEqual(plan_boundaries(header, terrain, rows, perimeter=True, flag_inset_m=3,
@@ -1084,3 +1087,5 @@ class IntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Ceiling distance"):
             plan_boundaries(header, terrain, rows, perimeter=False,
                             **dict(options, warning_limits={"ceiling_m": -1, "floor_m": None}))
+        with self.assertRaisesRegex(ValueError, "who gets the warning"):
+            plan_boundaries(header, terrain, rows, perimeter=False, warning_audience="projectile", **options)

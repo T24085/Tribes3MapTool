@@ -21,7 +21,7 @@ from mission_weather import cloud_layers, mission_weather, precipitation_emitter
 from model_textures import load_texture_index
 from object_catalog import applicable_mappings, build_rows, classify, load_catalog
 from object_review_window import ObjectReview
-from perimeter import DEFAULT_CEILING_M, DEFAULT_DEPTH_M, PolygonWalls, plan_boundaries, rectangle_outline
+from perimeter import DEFAULT_CEILING_M, DEFAULT_DEPTH_M, PolygonWalls, WARNING_AUDIENCES, plan_boundaries, rectangle_outline
 from perimeter_collision import blocks_pawns, validate_channels
 from pipeline_window import show_pipeline
 from public_layout import READER as PUBLIC_LAYOUT_READER, export_public_layout
@@ -66,6 +66,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
     saved_warning_limits = selection.get("warning_limits")
     warning_limits = saved_warning_limits or {"ceiling_m": None, "floor_m": None}
     custom_warning_height = tk.BooleanVar(window, value=saved_warning_limits is not None)
+    audience = tk.StringVar(window, value=WARNING_AUDIENCES[selection.get("warning_audience")])
     solid_polygon = list(selection.get("wall_polygon_m", ()))
     custom = tk.BooleanVar(window, value=bool(solid_polygon))
     channels = validate_channels(selection.get("wall_block_channels"))
@@ -88,6 +89,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         wall_style.configure(state="readonly" if solid.get() else "disabled")
         fade_distance.configure(state="normal" if solid.get() and WALL_VISUAL_CHOICES[style_choice.get()] else "disabled")
         warning_shape.configure(state="normal" if warn.get() else "disabled")
+        warning_audience.configure(state="readonly" if warn.get() else "disabled")
         warning_draw.configure(state="normal" if warn.get() and custom_warning.get() else "disabled")
         warning_height.configure(state="normal" if warn.get() else "disabled")
         adjust_height = warn.get() and custom_warning_height.get()
@@ -174,19 +176,22 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
     ttk.Checkbutton(warning_group, text="Warn players on crossing", variable=warn, command=update_fields).grid(
         row=0, columnspan=2, sticky="w", pady=(0, 3),
     )
+    ttk.Label(warning_group, text="Warn").grid(row=1, column=0, sticky="w")
+    warning_audience = ttk.Combobox(warning_group, textvariable=audience, values=list(WARNING_AUDIENCES.values()), width=22)
+    warning_audience.grid(row=1, column=1, sticky="w", pady=3)
     warning_shape = ttk.Checkbutton(warning_group, text="Draw a separate outline", variable=custom_warning,
                                     command=update_fields)
-    warning_shape.grid(row=1, column=0, sticky="w", padx=(0, 10))
+    warning_shape.grid(row=2, column=0, sticky="w", padx=(0, 10))
     warning_draw = ttk.Button(warning_group, text=f"Edit {len(warning_polygon)} corners…" if warning_polygon else
                               "Draw on minimap…", command=draw_warning)
-    warning_draw.grid(row=1, column=1, sticky="w", pady=3)
+    warning_draw.grid(row=2, column=1, sticky="w", pady=3)
     warning_height = ttk.Checkbutton(warning_group, text="Set warning height limits", variable=custom_warning_height,
                                      command=update_fields)
-    warning_height.grid(row=2, columnspan=2, sticky="w")
+    warning_height.grid(row=3, columnspan=2, sticky="w")
     for index, (key, title, initial) in enumerate((
         ("ceiling_m", "Above highest terrain (m)", DEFAULT_CEILING_M),
         ("floor_m", "Below lowest terrain (m)", DEFAULT_DEPTH_M),
-    ), 3):
+    ), 4):
         saved = warning_limits[key]
         enabled = tk.BooleanVar(window, value=saved is not None)
         toggle = ttk.Checkbutton(warning_group, text=title, variable=enabled, command=update_fields)
@@ -214,6 +219,8 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
                 options["flag_polygon_m"] = polygon
             if warn.get():
                 options["warn_players"] = True
+                if selected := next(key for key, label in WARNING_AUDIENCES.items() if label == audience.get()):
+                    options["warning_audience"] = selected
                 if custom_warning.get():
                     options["warning_polygon_m"] = warning_polygon
                 if custom_warning_height.get():

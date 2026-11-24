@@ -26,6 +26,22 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def editor_cache_path(configured, project_dir):
+    # UE 5.3's file-system cache reserves room for the generated cache keys.
+    path = (project_dir / configured).resolve()
+    if len(str(path).encode('utf-16-le')) // 2 < 119:
+        return path
+    local = os.environ.get('LOCALAPPDATA')
+    if local:
+        key = hashlib.sha256(os.path.normcase(str(path)).encode('utf-8')).hexdigest()[:12]
+        fallback = Path(local).resolve() / 'Tribes3MapTool' / 'DDC' / key
+        if len(str(fallback).encode('utf-16-le')) // 2 < 119:
+            fallback.mkdir(parents=True, exist_ok=True)
+            print(f'Using a shorter Unreal cache directory: {fallback}', flush=True)
+            return fallback
+    raise ValueError('Set ddc in local-settings.json to an absolute path shorter than 119 characters.')
+
+
 def read_json(path, limit=2*1024*1024):
     with path.open('rb') as stream:
         raw = stream.read(limit + 1)
@@ -416,7 +432,7 @@ def run(config, *, smoke=False):
     for field in ('dts_decoder', 'dts_assets'):
         if config.get(field):
             env['T3_' + field.upper()] = str(Path(config[field]).resolve())
-    env['UE-LocalDataCachePath'] = config['ddc']
+    env['UE-LocalDataCachePath'] = str(editor_cache_path(config['ddc'], project.parent))
     env.pop('T3_EDITOR_DESCRIPTOR', None)
     env.pop('T3_EDITOR_STARTER_PALETTE', None)
     if config.get('starter_palette'):

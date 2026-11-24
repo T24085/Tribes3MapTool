@@ -50,18 +50,26 @@ class MissionBoundaryWarningTest(unittest.TestCase):
           return row
          end
          local noticePath='/Script/Engine.PlayerController:ClientMessage'
+         local characterClass,pawnClass,primitiveClass={},{},{}
+         local nativeFields={
+          [noticePath]={{'S','StrProperty',0},{'Type','NameProperty',16},{'MsgLifeTime','FloatProperty',24}},
+          ['/Script/Engine.Actor:GetAttachParentActor']={{'ReturnValue','ObjectProperty',0}},
+          ['/Script/Engine.PrimitiveComponent:GetCollisionObjectType']={{'ReturnValue','ByteProperty',0}},
+         }
          StaticFindObject=function(path)
-          if path==noticePath then
+          if nativeFields[path] then
            local method=object('Function '..path,world)
            method.ForEachProperty=function(_,callback)
-            for _,p in ipairs({{'S','StrProperty',0},{'Type','NameProperty',16},{'MsgLifeTime','FloatProperty',24}})do
+            for _,p in ipairs(nativeFields[path])do
              callback({GetFullName=function()return p[2]..' '..path..':'..p[1]end,
                        GetOffset_Internal=function()return p[3]end})
             end
            end
            return method
           end
-          return ({['/Script/UMG.TextBlock']=textClass,['/Script/UMG.CanvasPanel']=canvasClass})[path]
+          return ({['/Script/UMG.TextBlock']=textClass,['/Script/UMG.CanvasPanel']=canvasClass,
+                   ['/Script/Valhalla.ValCharacter']=characterClass,['/Script/Engine.Pawn']=pawnClass,
+                   ['/Script/Engine.PrimitiveComponent']=primitiveClass})[path]
          end
          local rpc
          RegisterHook=function(path,_,callback)
@@ -95,6 +103,8 @@ class MissionBoundaryWarningTest(unittest.TestCase):
          local ps,pawn,pc=object('PS',world),object('Pawn',world),object('PC',world)
          pc.PlayerState,pc.Pawn=ps,pawn
          pc.IsLocalPlayerController=function()return true end
+         pawn.IsA=function(_,cls)return cls==characterClass or cls==pawnClass end
+         pawn.GetAttachParentActor=function()return pawn.mount end
          ExecuteInGameThreadWithDelay=function(ms,fn)assert(ms==100 and not timer);timer=fn;return 1 end
          local function at(x,y,z)
           pawn.point={X=x,Y=y,Z=z}
@@ -151,5 +161,66 @@ class MissionBoundaryWarningTest(unittest.TestCase):
          stamp=19
          at(0,0,0)
          assert(not current and plays==3)
+
+         local vehicle, spectator=object('Vehicle',world),object('Spectator',world)
+         vehicle.IsA=function(_,cls)return cls==pawnClass end
+         spectator.IsA=vehicle.IsA
+         vehicle.RootComponent={IsA=function(_,cls)return cls==primitiveClass end,
+                                GetOwner=function()return vehicle end,GetCollisionObjectType=function()return 6 end}
+         table.insert(points,flagMin)
+         FindAllOf=function(kind)
+          return ({AmbientSound={cue},TargetPoint=points,UI_Game_Overlays_C={overlay}})[kind]
+         end
+         cue.tags.T3MissionWarningCue=nil
+         cue.tags.T3MissionWarningFilteredCue=true
+         cue.tags.T3MissionWarningWarnVehicle=true
+         local function change_controller(name)
+          local controller=object(name,world)
+          controller.PlayerState,controller.Pawn=ps,pawn
+          controller.IsLocalPlayerController=pc.IsLocalPlayerController
+          timer=nil -- Like travel, replace the old world's scheduled tick.
+          service(controller,ps)
+          return controller
+         end
+         local vehiclePC=change_controller('Vehicle PC')
+         at(0,0,0);at(0,0,11)
+         assert(not current and plays==3)
+         pawn.mount=vehicle
+         vehicle.point={X=0,Y=0,Z=0}
+         at(0,0,11)
+         assert(not current and plays==3) -- Uses the vehicle position rather than the attached pawn.
+         vehicle.point.Z=11;at(0,0,0)
+         assert(current and plays==4)
+         pawn.mount=nil
+         at(0,0,11)
+         assert(not current and plays==4)
+         vehiclePC.Pawn=vehicle
+         at(0,0,0)
+         assert(current and plays==4) -- Possessing an already-outside vehicle is not a crossing.
+         vehicle.point.Z=0;at(0,0,0)
+         vehicle.point.Z=11;at(0,0,0)
+         assert(current and plays==5)
+         vehiclePC.Pawn=spectator
+         at(0,0,0)
+         assert(not current and plays==5)
+
+         cue.tags.T3MissionWarningWarnVehicle=nil
+         cue.tags.T3MissionWarningWarnFoot=true
+         change_controller('Foot PC')
+         at(0,0,0);at(0,0,11)
+         assert(current and plays==6)
+         pawn.mount=vehicle
+         at(0,0,11)
+         assert(not current and plays==6)
+         pawn.mount=nil
+         at(0,0,11)
+         assert(current and plays==6)
+
+         cue.tags.T3MissionWarningWarnVehicle=true
+         local flagPC=change_controller('Flag PC')
+         assert(reports[#reports]:find('invalid_boundary_warning_audience',1,true))
+         notice(flagPC,'T3FlagBoundaryDrop')
+         at(0,0,11)
+         assert(current=='FLAG DROPPED AT THE MISSION BOUNDARY' and plays==6)
         end
         """)(factory)

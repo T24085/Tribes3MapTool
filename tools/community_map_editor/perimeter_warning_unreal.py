@@ -13,6 +13,8 @@ from perimeter import check_polygon_outline
 
 TAG = "T3MissionWarning"
 CUE = TAG + "Cue"
+FILTERED_CUE = TAG + "FilteredCue"
+AUDIENCE_TAGS = {"foot": TAG + "WarnFoot", "vehicle": TAG + "WarnVehicle"}
 VERTEX = TAG + "Vertex"
 FLOOR = TAG + "Floor"
 CEILING = TAG + "Ceiling"
@@ -46,7 +48,7 @@ def import_cue(folder):
     return assets[0]
 
 
-def place_warning(actors, draft, perimeter):
+def place_warning(actors, draft, perimeter, *, audience=None):
     points = perimeter.vertices
     check_polygon_outline(points, "Mission boundary warning")
     folder = f"/Game/Community/{draft}"
@@ -70,7 +72,9 @@ def place_warning(actors, draft, perimeter):
                                  (CEILING, perimeter.z_max, perimeter.ceiling)):
         if enabled:
             add(unreal.TargetPoint, (*points[0], height), cap[len(TAG):].lower(), (TAG, cap))
-    cue_tags = [CUE, f"{TAG}Count{len(points)}"]
+    cue_tags = [CUE if audience is None else FILTERED_CUE, f"{TAG}Count{len(points)}"]
+    if audience is not None:
+        cue_tags.append(AUDIENCE_TAGS[audience])
     cue_tags.extend(tag for tag, active in ((FLOOR, perimeter.floor), (CEILING, perimeter.ceiling)) if active)
     cue = add(unreal.AmbientSound, (*points[0], 0), "local tone", cue_tags)
     component = cue.audio_component
@@ -81,7 +85,7 @@ def place_warning(actors, draft, perimeter):
 
 def verify_warning(actors, draft):
     markers = [actor for actor in actors if actor.actor_has_tag(unreal.Name(TAG))]
-    cues = [actor for actor in actors if actor.actor_has_tag(unreal.Name(CUE))]
+    cues = [actor for actor in actors if any(actor.actor_has_tag(unreal.Name(tag)) for tag in (CUE, FILTERED_CUE))]
     if not markers and not cues:
         return
     if len(cues) != 1 or not isinstance(cues[0], unreal.AmbientSound):
@@ -89,6 +93,9 @@ def verify_warning(actors, draft):
     cue, = cues
     component = cue.audio_component
     tags = list(map(str, cue.tags))
+    filtered = FILTERED_CUE in tags
+    if filtered == (CUE in tags) or sum(tag in tags for tag in AUDIENCE_TAGS.values()) != int(filtered):
+        raise ValueError("Mission warning needs a valid audience.")
     caps = {tag for tag in (FLOOR, CEILING) if tag in tags}
     vertices = {}
     for actor in markers:

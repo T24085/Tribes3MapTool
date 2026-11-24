@@ -25,6 +25,7 @@ POLYGON_REQUIRED = TAG + "PolygonRequired"
 VISUAL_TAG = TAG + "Visual"
 VISUAL_REQUIRED = TAG + "VisualRequired"
 WALL_STYLES = {"energy": (0.08, 1.05, 1.35), "warning": (1.45, 0.44, 0.06)}
+WARNING_AUDIENCES = {None: "On foot and in vehicles", "foot": "On foot only", "vehicle": "Vehicles only"}
 
 
 class PolygonWalls(NamedTuple):
@@ -142,11 +143,13 @@ def warning_surface(bounds, terrain, walls, polygon, limits):
 
 def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limits=None, flag_polygon_m=None,
                     wall_polygon_m=None, wall_block_channels=None, wall_visual=None, warn_players=False,
-                    warning_polygon_m=None, warning_limits=None):
+                    warning_polygon_m=None, warning_limits=None, warning_audience=None):
     if type(warn_players) is not bool:
         raise ValueError("Choose whether to warn players outside the mission area.")
-    if not warn_players and (warning_polygon_m is not None or warning_limits is not None):
-        raise ValueError("Enable player warnings before setting their shape or height limits.")
+    if warning_audience is not None and (not isinstance(warning_audience, str) or warning_audience not in WARNING_AUDIENCES):
+        raise ValueError("Choose who gets the warning.")
+    if not warn_players and any(value is not None for value in (warning_polygon_m, warning_limits, warning_audience)):
+        raise ValueError("Enable player warnings before setting their shape, height limits or audience.")
     channels = validate_channels(wall_block_channels)
     appearance = wall_appearance(wall_visual)
     if any(value is not None for value in (wall_limits, wall_polygon_m, channels, appearance)) and not perimeter:

@@ -19,6 +19,17 @@ REQUEST = {'map': DRAFT, 'markers': {
 
 
 class EditorHostExportTests(unittest.TestCase):
+    def test_long_workspace_cache_gets_a_stable_short_local_path(self):
+        with TemporaryDirectory() as folder, patch.dict('os.environ', {'LOCALAPPDATA': folder}):
+            root = Path(folder).resolve()
+            long_path = root / ('nested-' * 16) / 'DDC'
+            fallback = launch.editor_cache_path(long_path, root)
+            self.assertTrue(fallback.is_dir())
+            self.assertEqual(fallback.parent, root / 'Tribes3MapTool' / 'DDC')
+            self.assertEqual(launch.editor_cache_path(long_path, root), fallback)
+            self.assertNotEqual(launch.editor_cache_path(long_path.with_name('Other'), root), fallback)
+            self.assertEqual(launch.editor_cache_path('DDC', root), root / 'DDC')
+
     def test_clean_authoring_workspace_opens_with_no_game_or_host_inputs(self):
         with TemporaryDirectory() as folder:
             root = Path(folder).resolve()
