@@ -11,6 +11,7 @@ import re
 
 from ascend_materials import resolve_material as resolve_ascend_material
 from ascend_static_mesh import read_placed_meshes as read_ascend_meshes
+from ascend_texture_cache import AscendTextureCache
 from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, PLAYABLE_BOUNDS, UNREAL_READER, UNREAL_SCENE,
                              bounded, finite, validate_minimap)
 from interior_geometry import MAX_GEOMETRY_BYTES
@@ -276,7 +277,8 @@ def convert_unreal(source, output, metadata=None):
             artwork = PackageMaterials(companions, resolve_vengeance_material, "Vengeance")
             read_meshes = partial(read_vengeance_meshes, artwork=artwork)
         else:
-            artwork = PackageMaterials(companions, resolve_ascend_material, "Ascend")
+            rtc = AscendTextureCache(source.resolve(strict=True).parent)
+            artwork = PackageMaterials(companions, partial(resolve_ascend_material, rtc=rtc), "Ascend")
             read_meshes = partial(read_ascend_meshes, artwork=artwork)
         with open_package(source, game) as (report, stream):
             scene = actor_scene(report, stream, units)
@@ -444,7 +446,8 @@ def convert_unreal(source, output, metadata=None):
                 "vengeance_bsp.py", "vengeance_materials.py", "vengeance_normal_maps.py", "vengeance_static_mesh.py", "vengeance_terrain.py",
                 "vengeance_terrain_layers.py", "vengeance_brushes.py", "vengeance_mover_plan.py", "vengeance_triggers.py"))
         else:
-            scripts.extend(Path(__file__).with_name(name) for name in ("ascend_static_mesh.py", "ascend_materials.py"))
+            scripts.extend(Path(__file__).with_name(name) for name in ("ascend_static_mesh.py", "ascend_materials.py",
+                                                                      "ascend_texture_cache.py"))
     if native:
         scripts.append(Path(__file__).with_name("unreal_native_terrain.py"))
     version = UNREAL_INTAKE_VERSIONS[0]

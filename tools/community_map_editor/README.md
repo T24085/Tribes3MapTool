@@ -371,6 +371,14 @@ companion packages. It reads inline BGRA8, DXT1, DXT3 and DXT5 mips and
 uses the largest available supported mip. Object Review reports missing
 artwork, smaller fallback mips, and shader inputs requiring author review.
 The draft supplies an opaque base-color material for supported slots.
+
+To recover cached textures, place `texture.cache.hdr.rtc` and
+`texture.cache.data.rtc` beside the Ascend map. The importer matches the
+full texture object path and uses the cached zlib mip when it is at least
+as large as the available inline mip. If a cache entry cannot be read,
+Object Review shows the reason and the draft uses available inline
+artwork. The private intake records both cache checksums when it uses a
+cached texture.
 Simple BodySetup collision, lower-detail models, and ambiguous component
 placements still need author review. Public layout exports omit the mesh
 files and source package receipts.

@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from hashlib import sha256
+import zlib
 
 from model_textures import MAX_SIDE
 from unreal_binary_scene import property_tag, read_properties
@@ -96,7 +97,7 @@ def bulk_range(cursor):
     return (offset, size) if flags in (0, 0x40) and size == count else None
 
 
-def texture_mip(asset, report, stream, objects):
+def texture_mip(asset, report, stream, objects, rtc):
     if asset["class_name"].casefold() != "texture2d":
         raise ValueError("Ascend base color requires a Texture2D export.")
     tags, start = properties(asset, report, stream, objects)
@@ -126,14 +127,24 @@ def texture_mip(asset, report, stream, objects):
             raise ValueError("Ascend texture mip dimensions disagree with its byte count.")
         if best is None or width * height > best[0] * best[1]:
             best = width, height, offset, length
+    cache_issue = None
+    if rtc.available:
+        try:
+            cached = rtc.read_mip(asset, report, kind, best[0] * best[1] if best else 0)
+            if cached:
+                width, height, pixels, receipts = cached
+                return texture_png(kind, width, height, pixels), [width, height], None, receipts
+        except (OSError, ValueError, zlib.error) as error:
+            cache_issue = f"Ascend RTC cache could not be used. {error}"
     if best is None:
-        raise ValueError("No supported inline Ascend texture mip. External texture caches require review.")
+        raise ValueError(cache_issue or "No supported Ascend texture mip. Supply the matching RTC cache if available.")
     width, height, offset, length = best
     data = texture_png(kind, width, height, stream[offset:offset + length])
-    return data, [width, height], width * height < largest
+    fallback = cache_issue or ("Larger mips were unavailable." if width * height < largest else None)
+    return data, [width, height], fallback, ()
 
 
-def resolve_material(asset, report, stream, objects, companions, _flags):
+def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc):
     if asset["class_name"].casefold() != "materialinstanceconstant":
         raise ValueError("Ascend shader graph requires a destination material.")
     receipts = {}
@@ -141,15 +152,18 @@ def resolve_material(asset, report, stream, objects, companions, _flags):
     with local_object(asset, report, stream, objects, companions) as (material, owner, payload, entries):
         texture = color_override(material, owner, payload, entries)
         with local_object(texture, owner, payload, entries, companions) as (image, source, pixels, exports):
-            data, size, reduced = texture_mip(image, source, pixels, exports)
+            data, size, fallback, cache_receipts = texture_mip(image, source, pixels, exports, rtc)
             for package in (owner, source):
                 item = package["source"]
                 if item["name"] != main_name:
                     receipts[item["name"]] = {key: item[key] for key in ("name", "sha256")}
     warning = "Base color imported as opaque. Other Ascend shader inputs require review."
-    if reduced:
-        warning += " Larger mips were unavailable."
+    if fallback:
+        warning = f"{warning} {fallback}"[:240]
+    for receipt in cache_receipts:
+        receipts[receipt["name"]] = receipt
+    image_source = cache_receipts[-1] if cache_receipts else source["source"]
     name = "texture_" + sha256(data).hexdigest()[:32] + ".png"
-    binding = dict(file=name, source=source["source"]["name"], source_sha256=source["source"]["sha256"],
+    binding = dict(file=name, source=image_source["name"], source_sha256=image_source["sha256"],
                    size=size, mode="opaque", two_sided=False, warning=warning)
     return binding, {name: data}, receipts.values()

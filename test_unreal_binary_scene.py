@@ -8,6 +8,7 @@ import struct
 from tempfile import TemporaryDirectory
 import unittest
 from zipfile import ZipFile
+import zlib
 
 from test_unreal_package_reader import build_package, compact
 from test_unreal_legacy_intake import unreal_draft_fixture
@@ -636,6 +637,24 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
     for index, row, start in paint_payloads:
         patch_texture_mip(source, index, start, len(row[4]))
     return source
+
+
+def write_ascend_rtc(folder):
+    pixels = bytes((12, 80, 241, 255)) * 64
+    payload = zlib.compress(pixels)
+    prefix = b"unrelated-cache-bytes"
+    (folder / "texture.cache.data.rtc").write_bytes(prefix + payload)
+
+    def entry(name, offset):
+        encoded = name.encode("ascii")
+        return (struct.pack("<i", len(encoded)) + encoded + struct.pack("<2B2hi", 2, 2, 8, 8, 1)
+                + struct.pack("<BI2i", 1, offset, len(payload), len(pixels)))
+
+    # The same leaf in another package is not a candidate for this mesh.
+    (folder / "texture.cache.hdr.rtc").write_bytes(
+        struct.pack("<i", 2) + entry("OtherPackage.AscendColor", 0)
+        + entry("meshcolor.AscendColor", len(prefix))
+    )
 
 
 class UnrealBinarySceneTests(unittest.TestCase):
@@ -1269,6 +1288,39 @@ class UnrealBinarySceneTests(unittest.TestCase):
             self.assertEqual(plain["format"], 23)
             self.assertEqual(plain["interiors"], header["interiors"])
             self.assertTrue(any("List the Ascend artwork package MeshColor.upk" in row["reason"] for row in pending))
+
+    def test_ascend_rtc_uses_exact_cached_mip_and_falls_back_on_bad_data(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "ascend", static_mesh="companion", mesh_artwork=True)
+            write_ascend_rtc(root)
+            manifest = convert_unreal(source, root / "Intakes")
+            header, _, _ = load_intake(manifest)
+            model, = header["interiors"].values()
+            binding = json.loads(manifest.with_name(TEXTURE_INDEX).read_bytes())[model]["0"]
+            self.assertEqual((binding["source"], binding["size"]), ("texture.cache.data.rtc", [8, 8]))
+            with Image.open(manifest.with_name(binding["file"])) as image:
+                self.assertEqual(image.getpixel((0, 0)), (241, 80, 12, 255))
+            sources = {row["name"]: row["sha256"] for row in header["sources"]}
+            for name in ("texture.cache.hdr.rtc", "texture.cache.data.rtc"):
+                self.assertEqual(sources[name], sha256((root / name).read_bytes()).hexdigest())
+            shared = export_public_layout(manifest, root / "Share.zip")
+            with ZipFile(shared) as archive:
+                self.assertNotIn(binding["file"], archive.namelist())
+                self.assertNotIn(b"texture.cache", archive.read("manifest.json"))
+
+            cache = root / "texture.cache.data.rtc"
+            raw = cache.read_bytes()
+            # Keep the file size and range valid while spoiling the stream bytes.
+            cache.write_bytes(raw[:-1] + bytes((raw[-1] ^ 1,)))
+            manifest = convert_unreal(source, root / "Intakes")
+            fallback, _, rows = load_intake(manifest)
+            record = json.loads(manifest.with_name(TEXTURE_INDEX).read_bytes())[model]["0"]
+            self.assertEqual((record["source"], record["size"]), ("MeshColor.upk", [2, 2]))
+            self.assertTrue(any("RTC cache could not be used" in row["reason"] for row in rows))
+            self.assertFalse(any(row["name"].endswith(".rtc") for row in fallback["sources"]))
 
     def test_world_bsp_exports_distinct_visual_and_collision_sections(self):
         with TemporaryDirectory() as directory:
