@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES 2 map intake manifest with generator groups, version 46",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage"],
+  "properties": {
+    "format": {"const": 46},
+    "profile": {"$ref": "intake-v10.schema.json#/properties/profile"},
+    "reader": {"type": "string", "enum": ["t2-mission-v46.0", "t2-public-layout-v1"]},
+    "name": {"$ref": "intake-v10.schema.json#/properties/name"},
+    "source_game": {"$ref": "intake-v10.schema.json#/properties/source_game"},
+    "profile_sha256": {"$ref": "intake-v10.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v10.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v10.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v10.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v10.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v10.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v10.schema.json#/properties/interior_review"},
+    "shapes": {"$ref": "intake-v10.schema.json#/properties/shapes"},
+    "shape_review": {"$ref": "intake-v10.schema.json#/properties/shape_review"},
+    "files": {
+      "type": "object",
+      "required": ["objects.json", "terrain.json", "height.png", "equipment.json"],
+      "dependentRequired": {"sky-artwork.json": ["weather.json"]},
+      "propertyNames": {"$ref": "intake-v10.schema.json#/properties/files/propertyNames"},
+      "additionalProperties": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+    }
+  },
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v2.schema.json#/then"},
+  "else": {"$ref": "intake-v2.schema.json#/else"},
+  "dependentRequired": {
+    "interiors": ["interior_review"],
+    "interior_review": ["interiors"],
+    "shapes": ["shape_review"],
+    "shape_review": ["shapes"]
+  }
+}

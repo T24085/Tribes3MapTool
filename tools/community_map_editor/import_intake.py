@@ -25,7 +25,7 @@ from perimeter import (POLYGON_REQUIRED, PolygonWalls, plan_boundaries, place_fl
 from perimeter_collision import validate_channels
 from sky_intake import SKY_INDEX, load_sky_index
 from source_library import record_draft
-from source_profiles import (BRUSH_PREVIEW_REFERENCE, PREFIX, VENGEANCE_BRUSH_VERSIONS,
+from source_profiles import (BRUSH_PREVIEW_REFERENCE, PREFIX, T2_GENERATOR_SCOPE_VERSION, VENGEANCE_BRUSH_VERSIONS,
                              VENGEANCE_ELEVATOR_VERSION, VENGEANCE_MOVER_PLAYBACK_VERSION, imported_draft)
 from terrain_art import SOURCE_ART, available_art
 from terrain_layers import ART_SLOT_OFFSET, FALLBACK, PALETTE_SURFACES, SIZE, layer_choices, load_weights, painted_cells
@@ -774,7 +774,8 @@ class DraftImport:
         material_overrides = self.material_overrides
         lighting_index, generated_models = self.lighting_index, self.generated_models
         boxes, flag_limit = self.boxes, self.flag_limit
-        equipment = mission_equipment(rows, terrain)
+        generator_scopes = self.header['format'] == T2_GENERATOR_SCOPE_VERSION
+        equipment = mission_equipment(rows, terrain, generator_scopes=generator_scopes)
         lighting = {}
         source_hash = None
         if lighting_index:
@@ -782,7 +783,7 @@ class DraftImport:
             from interior_lighting import alarm_switches_material, model_lighting
 
             source_hash = store_source(equipment) if equipment['equipment'] else None
-            _, scopes, _ = power_context(rows)
+            _, scopes, _ = power_context(rows, generator_scopes=generator_scopes)
             generator_groups = {group['source_id'] for group in equipment['power_groups'] if group['generators']}
             for row, *_ in planned:
                 ref = source_reference(row)

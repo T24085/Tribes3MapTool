@@ -57,7 +57,7 @@ def powered_interiors(review, groups):
             raise ValueError('A powered interior needs an exact cooked mesh and a generator circuit.')
         seen.add(actor)
         slots += len(materials)
-        if slots > 256:
+        if slots > 1024:
             raise ValueError('Too many powered interior material slots in this draft.')
         selected = set()
         for material in materials:
@@ -177,7 +177,7 @@ def lua_data(value):
 
 
 def attach(ctf, equipment_path, review_path):
-    review = load_json(review_path, 65536)
+    review = load_json(review_path, 256 * 1024)
     with equipment_path.open('rb') as source:
         raw = source.read(16 * 1024 * 1024 + 1)
     equipment_sha = hashlib.sha256(raw).hexdigest()

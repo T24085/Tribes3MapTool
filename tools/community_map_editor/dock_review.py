@@ -8,6 +8,7 @@ from mesh_mappings import source_reference
 from mission_equipment import EQUIPMENT_ROLES, power_context
 from object_catalog import SUPPORT, classify, load_catalog, source_fields
 from source_library import verified_draft_intake
+from source_profiles import T2_GENERATOR_SCOPE_VERSION
 
 
 def object_review_document(draft, header, terrain, rows, catalog, mappings):
@@ -15,7 +16,7 @@ def object_review_document(draft, header, terrain, rows, catalog, mappings):
         raise ValueError("Invalid draft ID for object review.")
     assessed = classify(rows, terrain, catalog)
     by_id = {row["id"]: row for row in rows}
-    teams, groups, contexts = power_context(rows)
+    teams, groups, contexts = power_context(rows, generator_scopes=header["format"] == T2_GENERATOR_SCOPE_VERSION)
     models = {**header.get("interiors", {}), **header.get("shapes", {})}
     model_notes = {**header.get("interior_review", {}), **header.get("shape_review", {})}
     entries = []

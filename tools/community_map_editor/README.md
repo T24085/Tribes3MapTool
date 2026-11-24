@@ -988,7 +988,11 @@ state in the editor. Direction maps are retained in the intake for
 future rendering support.
 
 When an imported interior has an alarm lightmap and an authored generator
-circuit, the editor records the link automatically. To change it, select the
+circuit, the editor records the link automatically. [Version 46](intake-v46.schema.json)
+also recognizes a same-team generator's parent group as a circuit and
+includes its descendants. Multiple generators in the same group are
+redundant. The alarm starts after the last provider goes offline.
+To change a link, select the
 baked interiors and one generator marker, then choose **Link Interior Lighting
 to Selected Generator**. Select the interiors and choose **Clear Selected
 Interior Lighting Links** to remove their links. Build for Direct Host includes

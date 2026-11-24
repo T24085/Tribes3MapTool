@@ -16,7 +16,7 @@ from minimap import grayscale_png, terrain_png
 from mission_equipment import EQUIPMENT_ROLES, mission_equipment, power_context
 from perimeter import BOUNDARY_OPTIONS, DEFAULT_BOUNDARY_OPTIONS, plan_boundaries, read_boundary_recipe, terrain_elevations
 from t2_reader import PROFILE, unpack_intake
-from source_profiles import NAMES, T1, T2, UNREAL_INTAKE_VERSIONS, UNREAL_PROFILES
+from source_profiles import NAMES, T1, T2, T2_GENERATOR_SCOPE_VERSION, UNREAL_INTAKE_VERSIONS, UNREAL_PROFILES
 from terrain_grid import preview_size
 
 
@@ -157,9 +157,10 @@ def public_files(header, terrain, rows, *, boundary_options=None):
         files["minimap.png"] = terrain_png(ground, public["minimap"]["image_bounds"])
     if "environment" in header:
         public.update(format=3 if profile == T2 else public["format"], environment=header["environment"])
-    equipment = mission_equipment(rows, ground) if profile == T2 else None
+    generator_scopes = header["format"] == T2_GENERATOR_SCOPE_VERSION
+    equipment = mission_equipment(rows, ground, generator_scopes=generator_scopes) if profile == T2 else None
     if equipment and equipment["equipment"]:
-        public["format"] = 7
+        public["format"] = T2_GENERATOR_SCOPE_VERSION if generator_scopes else 7
         files[EQUIPMENT_FILE] = encode(equipment)
     public["files"] = {name: digest(data) for name, data in files.items()}
     files["manifest.json"] = encode(public)

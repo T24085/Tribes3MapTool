@@ -133,6 +133,7 @@ def add_minimap(payload, overlay, map_id):
 EQUIPMENT_RUNTIME = b'-- T3_EDITOR_GROUPED_EQUIPMENT_V1'
 SHIELD_RUNTIME = b'-- T3_EDITOR_GROUPED_SHIELDS_V1'
 SHIELD_POLICIES_RUNTIME = b'-- T3_EDITOR_SHIELD_POWER_POLICIES_V1'
+MAX_EQUIPMENT_REVIEW_BYTES = 256 * 1024
 
 
 def write_objectives(ctf, target, run, host, existing, preview_manifest, map_id, adapter):
@@ -142,7 +143,7 @@ def write_objectives(ctf, target, run, host, existing, preview_manifest, map_id,
         return None, [], []
     if adapter is None or not adapter.is_file() or not source.is_file() or not review.is_file():
         raise ValueError('An equipment export needs the source, approved placements and native equipment adapter.')
-    if source.stat().st_size > 16*1024*1024 or review.stat().st_size > 65536:
+    if source.stat().st_size > 16*1024*1024 or review.stat().st_size > MAX_EQUIPMENT_REVIEW_BYTES:
         raise ValueError('The editor equipment approval files are too large.')
     inputs = [file_row(run, path.name) for path in (source, review)]
     for name in ('lua/objective_layouts.lua', 'lua/network.lua'):
@@ -151,7 +152,7 @@ def write_objectives(ctf, target, run, host, existing, preview_manifest, map_id,
             raise ValueError('Choose a verified Direct Host baseline with grouped draft equipment support.')
         if EQUIPMENT_RUNTIME not in (host/name).read_bytes().splitlines():
             raise ValueError('The selected Direct Host baseline cannot run grouped draft equipment.')
-    approved = load_json(review, 65536)
+    approved = load_json(review, MAX_EQUIPMENT_REVIEW_BYTES)
     if not isinstance(approved, dict) or approved.get('map') != map_id or not isinstance(approved.get('placements'), list):
         raise ValueError('Equipment approval must belong to the exported draft.')
     equipment = load_json(source, 16*1024*1024)

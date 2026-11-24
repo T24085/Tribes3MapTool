@@ -504,6 +504,61 @@ class IntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "checksum"):
             convert(self.mission, self.library)
 
+    def test_generator_parents_establish_redundant_circuits(self):
+        self.add_mission_area('''
+          new SimGroup(Team1) {
+            new SimGroup(Base0) {
+              new StaticShape(GenA) { dataBlock="GeneratorLarge"; position="1 2 3"; };
+              new StaticShape(GenB) { dataBlock="GeneratorLarge"; position="1 3 3"; };
+              new SimGroup(Defense) {
+                new Turret(Roof) { dataBlock="TurretBaseLarge"; position="4 5 6"; };
+              };
+            };
+            new SimGroup(Sibling) {
+              new StaticShape(OtherRadar) { dataBlock="SensorLargePulse"; position="3 6 8"; };
+              new StaticShape(ExcludedGen) {
+                dataBlock="GeneratorLarge"; missionTypesList="Rabbit"; position="1 5 3";
+              };
+            };
+          };
+          new SimGroup(Team2) {
+            new SimGroup(Base0) {
+              new StaticShape(GenC) { dataBlock="GeneratorLarge"; position="7 2 3"; };
+              new StaticShape(Radar) { dataBlock="SensorLargePulse"; position="7 6 8"; };
+            };
+          };
+        ''')
+        manifest = convert(self.mission, self.library)
+        header, terrain, objects = load_intake(manifest)
+        self.assertEqual(header['format'], 46)
+        equipment = json.loads((manifest.parent/'equipment.json').read_bytes())
+        names = {row['id']: row['name'] for row in objects}
+        by_name = {names[row['source_id']]: row for row in equipment['equipment']}
+        groups = {row['team']: row for row in equipment['power_groups']}
+        self.assertEqual([names[source] for source in groups[1]['generators']], ['GenA', 'GenB'])
+        self.assertEqual(groups[2]['generators'], [by_name['GenC']['source_id']])
+        self.assertEqual(by_name['Roof']['power_group'], groups[1]['source_id'])
+        self.assertEqual(by_name['Radar']['power_group'], groups[2]['source_id'])
+        self.assertIsNone(by_name['OtherRadar']['power_group'])
+
+        public_path = export_public_layout(manifest, self.folder/'generator-layout.zip')
+        restored = unpack_intake(public_path, self.library)
+        public, _, _ = load_intake(restored)
+        self.assertEqual(public['format'], 46)
+        restored_equipment = json.loads((restored.parent/'equipment.json').read_bytes())
+        self.assertEqual([len(row['generators']) for row in restored_equipment['power_groups']], [2, 1])
+
+        from mission_equipment import mission_equipment
+        old = json.dumps(mission_equipment(objects, terrain)).encode()
+        (manifest.parent/'equipment.json').write_bytes(old)
+        header['files']['equipment.json'] = hashlib.sha256(old).hexdigest()
+        manifest.write_text(json.dumps(header), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'equipment does not match'):
+            load_intake(manifest)
+        header.update(format=7, reader='t2-mission-v7.0')
+        manifest.write_text(json.dumps(header), encoding='utf-8')
+        load_intake(manifest)
+
     def test_equipment_uses_authored_power_groups_and_survives_a_zip(self):
         self.add_mission_area('''
           new MissionArea(PlayArea) { area="-6 -10 8 12"; };

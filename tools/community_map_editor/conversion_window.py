@@ -29,7 +29,7 @@ from public_layout import READER as PUBLIC_LAYOUT_READER, export_public_layout
 from rule_window import show_rules
 from sky_intake import load_sky_index
 from source_library import catalog_rows, record_source
-from source_profiles import T1, T2, UNREAL_PROFILES
+from source_profiles import T1, T2, T2_GENERATOR_SCOPE_VERSION, UNREAL_PROFILES
 from t1_reader import convert_legacy, legacy_mission
 from t1_terrain import volume_missions
 from t2_reader import convert, members, unpack_intake
@@ -798,13 +798,14 @@ def run(library, meshes=(), drafts=()):
                 warning = " · Saved mesh mappings could not be read"
         state["manifest"] = path
         state["classified"], state["active_rows"] = assessed, active
-        state["teams"], state["scopes"], state["contexts"] = power_context(rows)
+        generator_scopes = header["format"] == T2_GENERATOR_SCOPE_VERSION
+        state["teams"], state["scopes"], state["contexts"] = power_context(rows, generator_scopes=generator_scopes)
         state["rule_source"] = (header, rows)
         state["models"] = {**header.get("interiors", {}), **header.get("shapes", {})}
         state["model_review"] = {**header.get("interior_review", {}), **header.get("shape_review", {})}
         state["lighting"] = lighting_coverage(load_lighting_index(path.resolve().parent, header["files"]))
         state["textures"] = load_texture_index(path.resolve().parent, header["files"])
-        equipment = mission_equipment(rows, terrain)
+        equipment = mission_equipment(rows, terrain, generator_scopes=generator_scopes)
         state["equipment"] = {row["source_id"]: row for row in equipment["equipment"]}
         state["power_groups"] = {row["source_id"]: row for row in equipment["power_groups"]}
         weather = mission_weather(rows, terrain)

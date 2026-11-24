@@ -53,6 +53,17 @@ lighting stayed steady. The Damnation draft, animated materials, and
 mask textures cooked for Windows. Triggered and flickering tracks remain
 in review.
 
+Version 46 intakes recognize circuits from each team's generator groups.
+The original Damnation draft cooked and staged with two generators per
+side and 664 lighting bindings across six interiors. The paired Host
+exporter and client support up to 1,024 lighting bindings per draft.
+
+In a joined headless match, the red alarm switched on after both
+generators went offline. All 18 animated red slots kept their automatic
+clock, and the other base stayed normal. The host detected restored
+power when the first generator revived. Client recovery still needs
+verification.
+
 The stock Unreal workspace can use **Build for Direct Host** after importing a draft. Select a verified Direct Host bundle that supports standard Unreal World Settings. Offline playtesting uses the separate game-compatible setup described in the editor guide.
 
 From a fresh UE 5.3 workspace, authored Tribes 1, Tribes 2, Vengeance, and Ascend fixtures passed import, batch rebuild, Windows cooking, isolated Direct Host staging, and rollback.

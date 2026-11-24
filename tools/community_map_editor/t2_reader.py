@@ -22,7 +22,8 @@ from mission_weather import WEATHER_FILE, mission_weather
 from model_textures import MAX_TEXTURE_BYTES, TEXTURE_FILE, TEXTURE_INDEX
 from native_terrain_paint import MAX_PAINT_PNG_BYTES, PAINT_FILE
 from sky_intake import MAX_SKY_BYTES, SKY_PNG
-from source_profiles import T2_DIF_ANIMATION_VERSION, T2_DIF_LOD_LIGHT_VERSION, T2_DIF_LOD_VERSION
+from source_profiles import (T2_DIF_ANIMATION_VERSION, T2_DIF_LOD_LIGHT_VERSION, T2_DIF_LOD_VERSION,
+                             T2_GENERATOR_SCOPE_VERSION)
 from interior_lighting import LIGHTING_INDEX, LIGHTMAP_FILE, MAX_LIGHTMAP_BYTES
 from terrain_art import ART_FILE, MAX_ART_BYTES
 
@@ -502,7 +503,8 @@ def convert(source, output, mission=None, terrain=None, *, dif_decoder=None, dif
             header.update(format=6, reader="t2-mission-v6.0")
             files.update(artwork)
             header["files"].update({name: sha(data) for name, data in artwork.items()})
-    equipment = mission_equipment(rows, terrain_data)
+    equipment = mission_equipment(rows, terrain_data, generator_scopes=True)
+    generator_scopes = equipment != mission_equipment(rows, terrain_data)
     if equipment["equipment"]:
         files[EQUIPMENT_FILE] = json.dumps(equipment, ensure_ascii=False).encode()
         header["files"][EQUIPMENT_FILE] = sha(files[EQUIPMENT_FILE])
@@ -529,6 +531,8 @@ def convert(source, output, mission=None, terrain=None, *, dif_decoder=None, dif
         header.update(format=T2_DIF_LOD_LIGHT_VERSION, reader="t2-mission-v44.0")
     elif any('lods' in json.loads(files[name]) for name in header.get("interiors", {}).values()):
         header.update(format=T2_DIF_LOD_VERSION, reader="t2-mission-v43.0")
+    if generator_scopes:
+        header.update(format=T2_GENERATOR_SCOPE_VERSION, reader="t2-mission-v46.0")
     return publish_intake(header, files, output)
 
 
