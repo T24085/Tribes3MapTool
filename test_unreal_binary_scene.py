@@ -85,7 +85,8 @@ def vengeance_mesh_buffers():
 
 def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_terrain=False, bad_terrain_flag=False,
                          bsp_world=False, static_mesh=None, external_height=False, painted=False, source_artwork=False,
-                         bsp_artwork=False, mesh_artwork=False, shader_inputs=False, surface_detail=False, brush_mover=False):
+                         bsp_artwork=False, mesh_artwork=False, shader_inputs=False, surface_detail=False, brush_mover=False,
+                         ascend_shader=None):
     exported, settings = unreal_draft_fixture(root, game)
     modern = game == "ascend"
     source = exported.with_suffix(".fmap" if modern else ".tvm")
@@ -107,6 +108,10 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                          "TextureParameterValues", "ParameterName", "ParameterValue", "NameProperty", "ArrayProperty",
                          "Base_Color", "Normal")
         strings = tuple(dict.fromkeys((*strings, *artwork_names)))
+        if ascend_shader:
+            strings += ("MaterialExpressionTextureSampleParameter2D", "ShaderParent", "ColorParent", "Parent",
+                        "ColorNode", "RoofPaint", "DiffuseColor", "ColorMaterialInput", "Expression",
+                        "Mask", "MaskR", "MaskG", "MaskB", "MaskA", "UseConstant")
 
     def pack(form, *values):
         return struct.pack("<" + form, *values)
@@ -506,11 +511,15 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
             # A large cache-backed mip followed by a small, valid inline mip.
             texture += bytes(16) + pack("i", 2) + pack("6i", 1, 256, 256, 4096, 8, 8)
             texture += pack("4i", 0, 16, 16, 0) + bytes((70, 110, 205, 255)) * 4 + pack("2i", 2, 2)
-            color.write_bytes(build_package(game, strings, color_types, [(-2, 0, "AscendColor", 0, texture, 3)]))
-            image = inspect_package(color, "ascend")["exports"][0]
+            images = [(-2, 0, "AscendColor", 0, texture, 3)]
+            if ascend_shader:
+                default = texture.replace(bytes((70, 110, 205, 255)) * 4, bytes((9, 140, 36, 255)) * 4)
+                images.append((-2, 0, "FixtureStone", 0, default, 3))
+            color.write_bytes(build_package(game, strings, color_types, images))
             data = bytearray(color.read_bytes())
-            offset = image["serial_offset"] + mip_header
-            struct.pack_into("<i", data, offset + 12, offset + 16)
+            for image in inspect_package(color, "ascend")["exports"]:
+                offset = image["serial_offset"] + mip_header
+                struct.pack_into("<i", data, offset + 12, offset + 16)
             color.write_bytes(data)
 
             types = [("Core", "Package", 0, "Fixture"), ("Core", "Class", -1, "StaticMesh"),
@@ -520,14 +529,39 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
             def parameters(key):
                 entry = (prop("ParameterName", "NameProperty", name(key)) + reference("ParameterValue", -5)
                          + name("None"))
-                return object_bytes(prop("TextureParameterValues", "ArrayProperty", pack("i", 1) + entry))
+                return prop("TextureParameterValues", "ArrayProperty", pack("i", 1) + entry)
 
-            mesh = object_bytes() + ascend_mesh_lod((1, 2))
+            if ascend_shader:
+                types.extend((("Core", "Class", -1, "Material"),
+                              ("Core", "Class", -1, "MaterialExpressionTextureSampleParameter2D")))
+                if ascend_shader == "cycle":
+                    upstream = object_bytes(reference("Parent", 1))
+                else:
+                    upstream = object_bytes(reference("Parent", 4), parameters("RoofPaint"))
+                # First slot inherits the named override through an intermediate instance.
+                # The second slot uses the same graph directly, so it uses the sample's default.
+                child = object_bytes(reference("Parent", 3), parameters("Normal"))
+                diffuse = (reference("Expression", 5) + b"".join(
+                    prop(channel, "IntProperty", pack("i", 1)) for channel in ("Mask", "MaskR", "MaskG", "MaskB")))
+                if ascend_shader == "masked-output":
+                    diffuse += prop("MaskA", "IntProperty", pack("i", 1))
+                graph = object_bytes(prop("DiffuseColor", "StructProperty", diffuse + name("None"), "ColorMaterialInput"))
+                # Use a second package export for the sample default, with a different color cache lookup.
+                types.append(("MeshColor", "Texture2D", -4, "FixtureStone"))
+                node = object_bytes(prop("ParameterName", "NameProperty", name("RoofPaint")), reference("Texture", -8))
+                mesh = object_bytes() + ascend_mesh_lod((1, 4))
+                art_exports = [(-3, 0, "FixtureStone", 0, child, 3),
+                               (-3, 0, "FixtureGlass", 0, object_bytes(), 3),
+                               (-3, 0, "ShaderParent", 0, upstream, 3),
+                               (-6, 0, "ColorParent", 0, graph, 3),
+                               (-7, 4, "ColorNode", 0, node, 3)]
+            else:
+                mesh = object_bytes() + ascend_mesh_lod((1, 2))
+                art_exports = [(-3, 0, "FixtureStone", 0, object_bytes(parameters("Base_Color")), 3),
+                               (-3, 0, "FixtureGlass", 0, object_bytes(parameters("Normal")), 3)]
             companion = source.with_name("Fixture.upk")
-            companion.write_bytes(build_package(game, strings, types,
-                                                 [(-3, 0, "FixtureStone", 0, parameters("Base_Color"), 3),
-                                                  (-3, 0, "FixtureGlass", 0, parameters("Normal"), 3),
-                                                  (-2, 0, "OriginalMesh", 0, mesh, 3)]))
+            art_exports.append((-2, 0, "OriginalMesh", 0, mesh, 3))
+            companion.write_bytes(build_package(game, strings, types, art_exports))
             settings["asset_packages"] = [companion.name, color.name]
             source.with_suffix(".import.json").write_text(json.dumps(settings), encoding="utf-8")
         elif static_mesh == "embedded":
@@ -1321,6 +1355,32 @@ class UnrealBinarySceneTests(unittest.TestCase):
             self.assertEqual((record["source"], record["size"]), ("MeshColor.upk", [2, 2]))
             self.assertTrue(any("RTC cache could not be used" in row["reason"] for row in rows))
             self.assertFalse(any(row["name"].endswith(".rtc") for row in fallback["sources"]))
+
+    def test_ascend_direct_diffuse_uses_parent_parameter_and_base_default(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "ascend", static_mesh="companion", mesh_artwork=True, ascend_shader="direct")
+            write_ascend_rtc(root)
+            manifest = convert_unreal(source, root / "Intakes")
+            header, _, _ = load_intake(manifest)
+            model, = header["interiors"].values()
+            index = json.loads(manifest.with_name(TEXTURE_INDEX).read_bytes())[model]
+            self.assertEqual((index["0"]["source"], index["0"]["size"]), ("texture.cache.data.rtc", [8, 8]))
+            self.assertEqual((index["1"]["source"], index["1"]["size"]), ("MeshColor.upk", [2, 2]))
+            for slot, pixel in (("0", (241, 80, 12, 255)), ("1", (36, 140, 9, 255))):
+                with Image.open(manifest.with_name(index[slot]["file"])) as image:
+                    self.assertEqual(image.getpixel((0, 0)), pixel)
+
+    def test_ascend_reports_cycles_and_nondirect_diffuse(self):
+        for mode, reason in (("cycle", "parent chain contains a cycle"), ("masked-output", "not a direct RGB texture sample")):
+            with self.subTest(mode=mode), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = binary_draft_fixture(root, "ascend", static_mesh="companion", mesh_artwork=True, ascend_shader=mode)
+                manifest = convert_unreal(source, root / "Intakes")
+                _, _, rows = load_intake(manifest)
+                self.assertTrue(any(reason in row["reason"] for row in rows))
 
     def test_world_bsp_exports_distinct_visual_and_collision_sections(self):
         with TemporaryDirectory() as directory:

@@ -364,13 +364,17 @@ Keep the companion files beside the map and add a setting such as
 geometry, first UV channel, material slot names, actor transforms, and
 serialized triangle collision.
 
-[Intake version 39](intake-v39.schema.json) uses a saved, unambiguous
-base-color Texture2D parameter from a material instance. The reader
-resolves both the material and texture by object path, including listed
-companion packages. It reads inline BGRA8, DXT1, DXT3 and DXT5 mips and
-uses the largest available supported mip. Object Review reports missing
-artwork, smaller fallback mips, and shader inputs requiring author review.
+[Intake version 39](intake-v39.schema.json) reads a direct RGB
+`DiffuseColor` texture sample that uses the mesh's first UV channel.
+For a named sampler it follows the material instance parents to find the
+nearest override, or uses the sampler's saved default. When a source
+package lacks the diffuse graph, an unambiguous base-color override can
+still supply the texture. The reader resolves materials and textures by
+object path, including listed companion packages. It reads inline BGRA8,
+DXT1, DXT3 and DXT5 mips and uses the largest available supported mip.
 The draft supplies an opaque base-color material for supported slots.
+Object Review reports unresolved assets, smaller fallback mips, and
+shader inputs requiring author review.
 
 To recover cached textures, place `texture.cache.hdr.rtc` and
 `texture.cache.data.rtc` beside the Ascend map. The importer matches the

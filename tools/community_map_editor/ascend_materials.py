@@ -1,6 +1,6 @@
-"""Resolve base-color texture overrides on Ascend static mesh materials."""
+"""Resolve saved base-color texture inputs on Ascend static mesh materials."""
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from hashlib import sha256
 import zlib
 
@@ -13,6 +13,13 @@ from vengeance_terrain_layers import COLOR_FORMATS, texture_png
 COLOR_PARAMETERS = {"basecolor", "basetexture", "diffuse", "diffusecolor", "diffusetexture", "albedo"}
 PIXEL_FORMATS = {"PF_A8R8G8B8": 5, "PF_B8G8R8A8": 5, "PF_DXT1": 3, "PF_DXT3": 7, "PF_DXT5": 8}
 EXTERNAL_OR_UNUSED = 0x21
+TEXTURE_SAMPLE = "materialexpressiontexturesample"
+TEXTURE_PARAMETER = "materialexpressiontexturesampleparameter2d"
+MASK_FIELDS = {"mask", "maskr", "maskg", "maskb", "maska", "gcc64_padding"}
+
+
+class MissingArtPackage(ValueError):
+    pass
 
 
 def properties(asset, report, stream, objects):
@@ -40,7 +47,7 @@ def local_object(asset, report, stream, objects, companions):
         raise ValueError("Ascend material or texture import has no package namespace.")
     companion = companions.get(namespace.casefold())
     if companion is None:
-        raise ValueError(f"List the Ascend artwork package {namespace}.upk in asset_packages.")
+        raise MissingArtPackage(f"List the Ascend artwork package {namespace}.upk in asset_packages.")
     with open_package(companion, "ascend") as (partner, payload):
         matches = [row for row in partner["exports"] if row["object_path"].casefold() == path.casefold()]
         if (len(matches) != 1 or not matches[0]["serial_bytes"]
@@ -50,14 +57,33 @@ def local_object(asset, report, stream, objects, companions):
         yield matches[0], partner, payload, entries
 
 
-def color_override(asset, report, stream, objects):
-    tags, _ = properties(asset, report, stream, objects)
-    arrays = [tag for tag in tags if tag["name"].casefold() == "textureparametervalues"]
-    if len(arrays) != 1 or arrays[0]["kind"] != "ArrayProperty" or arrays[0]["slot"]:
-        raise ValueError("No single usable Ascend texture parameter array.")
-    cursor = tag_data(stream, arrays[0])
+def typed_tag(tags, name, kind, structure=None):
+    matches = [tag for tag in tags if tag["name"].casefold() == name]
+    if not matches:
+        return None
+    tag = matches[0]
+    if (len(matches) != 1 or tag["kind"] != kind or tag["slot"]
+            or structure and (tag["structure"] or "").casefold() != structure):
+        raise ValueError(f"Invalid or repeated Ascend property {tag['name']}.")
+    return tag
+
+
+def object_reference(tags, stream, name):
+    tag = typed_tag(tags, name, "ObjectProperty")
+    if tag is None:
+        return 0
+    if tag["size"] != 4:
+        raise ValueError(f"Invalid Ascend object reference in {name}.")
+    return tag_data(stream, tag).index(True)
+
+
+def texture_overrides(tags, report, stream):
+    tag = typed_tag(tags, "textureparametervalues", "ArrayProperty")
+    if tag is None:
+        return {}
+    cursor = tag_data(stream, tag)
     names = report["names"]
-    color = []
+    overrides = {}
     for _ in range(cursor.count(128)):
         fields = {}
         for _ in range(64):
@@ -76,13 +102,120 @@ def color_override(asset, report, stream, objects):
             cursor.offset += tag["size"]
         else:
             raise ValueError("Oversized Ascend texture parameter entry.")
-        name = fields.get("parametername", "").lower().replace("_", "").replace(" ", "")
-        if name in COLOR_PARAMETERS:
-            color.append(fields.get("parametervalue"))
-    if (cursor.offset != cursor.limit or len(color) != 1 or color[0] not in objects
-            or objects[color[0]]["class_name"].casefold() != "texture2d"):
-        raise ValueError("Ascend material has no unambiguous base-color Texture2D override.")
-    return objects[color[0]]
+        name = fields.get("parametername", "").casefold()
+        if not name or name == "none" or name in overrides:
+            raise ValueError("Invalid or repeated Ascend texture parameter name.")
+        # A null or omitted ParameterValue is an explicit empty override.
+        overrides[name] = fields.get("parametervalue", 0)
+    if cursor.offset != cursor.limit:
+        raise ValueError("Unexpected trailing bytes in the Ascend texture parameter array.")
+    return overrides
+
+
+def material_input(tag, report, stream):
+    data = tag_data(stream, tag)
+    result = {}
+    for _ in range(16):
+        member = property_tag(data, report["names"], True)
+        if member is None:
+            if data.offset == data.limit:
+                return result
+            break
+        key = member["name"].casefold()
+        if key in result or member["slot"]:
+            break
+        if key == "useconstant" and member["kind"] == "BoolProperty":
+            result[key] = bool(member["boolean"])
+        elif ((key == "expression" and member["kind"] == "ObjectProperty"
+               or key in MASK_FIELDS and member["kind"] == "IntProperty") and member["size"] == 4):
+            result[key], = tag_data(stream, member).fields("i")
+        elif key == "constant" and member["kind"] == "StructProperty":
+            result[key] = None
+        else:
+            break
+        data.offset += member["size"]
+    raise ValueError("Ascend material uses an unsupported input structure.")
+
+
+def direct_sample(tags, report, stream, objects):
+    tag = typed_tag(tags, "diffusecolor", "StructProperty", "colormaterialinput")
+    if tag is None:
+        return None
+    fields = material_input(tag, report, stream)
+    expression = objects.get(fields.get("expression", 0))
+    mask = tuple(fields.get(name, 0) for name in ("maskr", "maskg", "maskb", "maska"))
+    if (not expression or fields.get("useconstant") or fields.get("mask", 0) not in (0, 1)
+            or mask not in ((0, 0, 0, 0), (1, 1, 1, 0))
+            or (fields.get("mask") == 1 and mask != (1, 1, 1, 0))
+            or expression["class_name"].casefold() not in (TEXTURE_SAMPLE, TEXTURE_PARAMETER)):
+        raise ValueError("Ascend diffuse input is not a direct RGB texture sample.")
+    return expression
+
+
+def texture_scope(index, owner, stream, objects):
+    texture = objects.get(index)
+    if not texture or texture["class_name"].casefold() != "texture2d":
+        raise ValueError("Ascend material does not resolve to a Texture2D.")
+    return texture, owner, stream, objects
+
+
+def sample_texture(expression, owner, stream, objects, open_art, overrides):
+    sample, owner, stream, objects = open_art(expression, owner, stream, objects)
+    tags, _ = properties(sample, owner, stream, objects)
+    uv = typed_tag(tags, "coordinates", "StructProperty", "expressioninput")
+    if uv and material_input(uv, owner, stream).get("expression", 0):
+        raise ValueError("Ascend diffuse sample uses custom coordinates.")
+    if sample["class_name"].casefold() == TEXTURE_PARAMETER:
+        parameter = typed_tag(tags, "parametername", "NameProperty")
+        if not parameter or parameter["size"] != 8:
+            raise ValueError("Ascend diffuse sample has an invalid parameter name.")
+        name = table_name(tag_data(stream, parameter), owner["names"], True).casefold()
+        if name in overrides:
+            return texture_scope(*overrides[name])
+    return texture_scope(object_reference(tags, stream, "texture"), owner, stream, objects)
+
+
+def material_texture(asset, owner, stream, objects, open_art):
+    overrides = {}
+    seen = set()
+    unavailable = None
+    for _ in range(16):
+        try:
+            material, owner, stream, objects = open_art(asset, owner, stream, objects)
+        except MissingArtPackage as error:
+            unavailable = error
+            break
+        key = owner["source"]["name"].casefold(), material["index"]
+        if key in seen:
+            raise ValueError("Ascend material parent chain contains a cycle.")
+        seen.add(key)
+        klass = material["class_name"].casefold()
+        tags, _ = properties(material, owner, stream, objects)
+        if klass == "material":
+            sample = direct_sample(tags, owner, stream, objects)
+            if sample:
+                return sample_texture(sample, owner, stream, objects, open_art, overrides)
+            break
+        if klass != "materialinstanceconstant":
+            raise ValueError("Ascend shader graph requires a destination material.")
+        for name, index in texture_overrides(tags, owner, stream).items():
+            scope = index, owner, stream, objects
+            overrides.setdefault(name, scope)
+        parent = object_reference(tags, stream, "parent")
+        if not parent:
+            break
+        if parent not in objects:
+            raise ValueError("Ascend material has an invalid parent reference.")
+        asset = objects[parent]
+    else:
+        raise ValueError("Ascend material parent chain exceeds the supported depth.")
+    fallback = [scope for name, scope in overrides.items()
+                if name.replace("_", "").replace(" ", "") in COLOR_PARAMETERS]
+    if len(fallback) == 1:
+        return texture_scope(*fallback[0])
+    if unavailable:
+        raise unavailable
+    raise ValueError("Ascend material has no unambiguous base-color Texture2D override.")
 
 
 def bulk_range(cursor):
@@ -145,18 +278,22 @@ def texture_mip(asset, report, stream, objects, rtc):
 
 
 def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc):
-    if asset["class_name"].casefold() != "materialinstanceconstant":
-        raise ValueError("Ascend shader graph requires a destination material.")
     receipts = {}
     main_name = report["source"]["name"]
-    with local_object(asset, report, stream, objects, companions) as (material, owner, payload, entries):
-        texture = color_override(material, owner, payload, entries)
-        with local_object(texture, owner, payload, entries, companions) as (image, source, pixels, exports):
-            data, size, fallback, cache_receipts = texture_mip(image, source, pixels, exports, rtc)
-            for package in (owner, source):
-                item = package["source"]
-                if item["name"] != main_name:
-                    receipts[item["name"]] = {key: item[key] for key in ("name", "sha256")}
+    with ExitStack() as scope:
+        def open_art(asset, owner, stream, objects):
+            local = scope.enter_context(local_object(asset, owner, stream, objects, companions))
+            item = local[1]["source"]
+            if item["name"] != main_name:
+                receipt = {key: item[key] for key in ("name", "sha256")}
+                previous = receipts.setdefault(item["name"], receipt)
+                if previous != receipt:
+                    raise ValueError("Ascend artwork package changed during import.")
+            return local
+
+        texture = material_texture(asset, report, stream, objects, open_art)
+        image, source, pixels, exports = open_art(*texture)
+        data, size, fallback, cache_receipts = texture_mip(image, source, pixels, exports, rtc)
     warning = "Base color imported as opaque. Other Ascend shader inputs require review."
     if fallback:
         warning = f"{warning} {fallback}"[:240]
