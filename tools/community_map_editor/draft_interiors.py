@@ -134,26 +134,39 @@ def install_dif_lods(asset, data, slots, lighting, texture_sizes):
     if len(levels) != len(detail['secondary']) or len(levels) >= MAX_UNREAL_LODS:
         unreal.log_warning(f"{data['source']['name']}: Some DIF levels are intake-only because they have no "
                            "renderable surfaces or exceed Unreal's eight-level limit.")
+    if not levels:
+        return
     indices = {key: slot for slot, key in enumerate(slots)}
     options = unreal.GeometryScriptCopyMeshToAssetOptions(enable_recompute_normals=True,
                                                            enable_recompute_tangents=True)
     sizes = [1.0]
     previous = detail['primary']
-    for index, (position, level) in enumerate(levels[:MAX_UNREAL_LODS - 1], 1):
-        model = dif_detail_mesh(data, level)
-        mesh, sections = dynamic_mesh(model, dif_detail_lighting(lighting, position), texture_sizes)
-        _, outcome = unreal.GeometryScript_AssetUtils.copy_mesh_to_static_mesh(
-            mesh, asset, options, unreal.GeometryScriptMeshWriteLOD(lod_index=index))
-        if outcome != unreal.GeometryScriptOutcomePins.SUCCESS or asset.get_num_sections(index) != len(sections):
-            raise ValueError(f'Unreal could not build DIF detail level {index}.')
-        source_slots = [editor.get_lod_material_slot(asset, index, section) for section in range(len(sections))]
-        if sorted(source_slots) != list(range(len(sections))):
-            raise ValueError(f'Unreal did not preserve the source material sections for DIF detail level {index}.')
-        for section, local_slot in enumerate(source_slots):
-            editor.set_lod_material_slot(asset, indices[sections[local_slot]], index, section)
-        threshold = previous['min_pixels'] / DIF_REFERENCE_HEIGHT
-        sizes.append(min(sizes[-1] - 0.0001, max(0.001, threshold)))
-        previous = level
+    original = editor.get_lod_build_settings(asset, 0)
+    staged = editor.get_lod_build_settings(asset, 0)
+    # Unreal rebuilds mesh resources on each section edit. Preserve the
+    # source mesh's distance field settings and generate its field once.
+    staged.set_editor_property('distance_field_resolution_scale', 0.0)
+    editor.set_lod_build_settings(asset, 0, staged)
+    try:
+        for index, (position, level) in enumerate(levels[:MAX_UNREAL_LODS - 1], 1):
+            model = dif_detail_mesh(data, level)
+            mesh, sections = dynamic_mesh(model, dif_detail_lighting(lighting, position), texture_sizes)
+            _, outcome = unreal.GeometryScript_AssetUtils.copy_mesh_to_static_mesh(
+                mesh, asset, options, unreal.GeometryScriptMeshWriteLOD(lod_index=index))
+            if outcome != unreal.GeometryScriptOutcomePins.SUCCESS or asset.get_num_sections(index) != len(sections):
+                raise ValueError(f'Unreal could not build DIF detail level {index}.')
+            source_slots = [editor.get_lod_material_slot(asset, index, section) for section in range(len(sections))]
+            if sorted(source_slots) != list(range(len(sections))):
+                raise ValueError(f'Unreal did not preserve the source material sections for DIF detail level {index}.')
+            for section, local_slot in enumerate(source_slots):
+                target_slot = indices[sections[local_slot]]
+                if target_slot != local_slot:
+                    editor.set_lod_material_slot(asset, target_slot, index, section)
+            threshold = previous['min_pixels'] / DIF_REFERENCE_HEIGHT
+            sizes.append(min(sizes[-1] - 0.0001, max(0.001, threshold)))
+            previous = level
+    finally:
+        editor.set_lod_build_settings(asset, 0, original)
     if (editor.get_lod_count(asset) != len(sizes)
             or len(sizes) > 1 and not editor.set_lod_screen_sizes(asset, sizes)):
         raise ValueError('Unreal could not set the DIF detail transitions.')

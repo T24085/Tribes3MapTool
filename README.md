@@ -39,6 +39,13 @@ that all three red-base material slots switched to alarm after generator
 loss and returned to normal after auto-revive. The three blue-base slots
 stayed normal. The authored test map used a 40-second auto-revive timer.
 
+Original Damnation and High Octane missions built and reopened in Unreal
+5.3.1. All five building meshes retained their 14 authored detail levels,
+material assignments, and primary-mesh collision. Deferring distance-field
+rebuilds brought the two-map import to 64 seconds in local verification.
+High Octane also cooked successfully for Windows. The importer preserves
+original animated light tracks for review. Playback remains open.
+
 The stock Unreal workspace can use **Build for Direct Host** after importing a draft. Select a verified Direct Host bundle that supports standard Unreal World Settings. Offline playtesting uses the separate game-compatible setup described in the editor guide.
 
 From a fresh UE 5.3 workspace, authored Tribes 1, Tribes 2, Vengeance, and Ascend fixtures passed import, batch rebuild, Windows cooking, isolated Direct Host staging, and rollback.
