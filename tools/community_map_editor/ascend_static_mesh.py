@@ -47,7 +47,7 @@ def mesh_sections(cursor, objects):
         if cursor.take(1) != b"\0":
             raise ValueError("Console mesh section data is unsupported.")
         path = objects[material]["object_path"] if material else "DefaultMaterial"
-        sections.append((path, first, count, low, high))
+        sections.append((material, path, first, count, low, high))
     return sections
 
 
@@ -78,7 +78,7 @@ def decode_lod(cursor, objects, units_per_m):
     indices = [index for index, in struct.iter_unpack(cursor.endian + "H", index_bytes)]
     triangles = []
     end = 0
-    for slot, (_, first, count, low, high) in enumerate(sections):
+    for slot, (_, _, first, count, low, high) in enumerate(sections):
         stop = first + 3 * count
         if first != end or stop > len(indices) or high >= len(vertices):
             raise ValueError("Ascend static mesh sections do not match the index buffer.")
@@ -91,7 +91,7 @@ def decode_lod(cursor, objects, units_per_m):
         end = stop
     if end != len(indices):
         raise ValueError("Ascend static mesh sections leave unused render indices.")
-    return [row[0] for row in sections], vertices, triangles
+    return [row[1] for row in sections], vertices, triangles, [(row[0], 0) for row in sections]
 
 
 def read_mesh(report, stream, export, objects, units_per_m, decoder_sha):
@@ -104,20 +104,22 @@ def read_mesh(report, stream, export, objects, units_per_m, decoder_sha):
     version, lods = cursor.fields("2i")
     if version != 18 or not 1 <= lods <= 32:
         raise ValueError("Unsupported Ascend static mesh revision or LOD count.")
-    materials, vertices, triangles = decode_lod(cursor, objects, units_per_m)
+    materials, vertices, triangles, slots = decode_lod(cursor, objects, units_per_m)
     collision = [[a, b, c] for a, b, c, _ in struct.iter_unpack(cursor.endian + "4H", kdop)
                  if len({a, b, c}) == 3]
     source = dict(name=report["source"]["name"], sha256=report["source"]["sha256"],
                   decoder_sha256=decoder_sha, export=export["index"], object_path=export["object_path"])
-    return validate_geometry(dict(format=ASCEND_STATIC_MESH, source=source, materials=materials,
-                                  vertices_m=vertices, triangles=triangles, render=True,
-                                  collision=dict(detail=0, vertices_m=vertices, triangles=collision)))
+    geometry = validate_geometry(dict(format=ASCEND_STATIC_MESH, source=source, materials=materials,
+                                      vertices_m=vertices, triangles=triangles, render=True,
+                                      collision=dict(detail=0, vertices_m=vertices, triangles=collision)))
+    return geometry, slots
 
 
-def read_placed_meshes(report, stream, units_per_m, references, *, companion=False):
+def read_placed_meshes(report, stream, units_per_m, references, *, companion=False, artwork=None):
     """Decode only exact StaticMesh references that the draft can actually place."""
     objects = {row["index"]: row for row in report["imports"] + report["exports"]}
     model_refs = {}
+    models = {}
     issues = {}
     decoder_sha = sha256(Path(__file__).read_bytes()).hexdigest()
     package = Path(report["source"]["name"]).stem.casefold()
@@ -131,8 +133,13 @@ def read_placed_meshes(report, stream, units_per_m, references, *, companion=Fal
         try:
             if ref in model_refs or ref in issues:
                 raise ValueError("Multiple exports resolve to the same Ascend mesh path.")
-            model_refs[ref] = read_mesh(report, stream, export, objects, units_per_m, decoder_sha)
+            geometry, slots = read_mesh(report, stream, export, objects, units_per_m, decoder_sha)
+            model_refs[ref] = geometry
+            models[ref] = (ref.removeprefix("unrealmesh:"), geometry, slots)
         except ValueError as error:
             model_refs.pop(ref, None)
+            models.pop(ref, None)
             issues[ref] = str(error)
+    if artwork and models:
+        artwork.read_package(models, report, stream)
     return model_refs, issues

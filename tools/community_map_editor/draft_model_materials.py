@@ -6,7 +6,7 @@ import json
 import unreal
 
 from intake_contract import bounded
-from interior_geometry import VENGEANCE_BSP, VENGEANCE_STATIC_MESH, material_slots, triangle_groups
+from interior_geometry import ASCEND_STATIC_MESH, VENGEANCE_BSP, VENGEANCE_STATIC_MESH, material_slots, triangle_groups
 from model_textures import has_shader_inputs, load_texture_index, shader_signature
 from source_profiles import BRUSH_PREVIEW_FOLDER, BRUSH_PREVIEW_REFERENCE
 from texture_batches_unreal import import_texture
@@ -264,7 +264,10 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
             elif not name:
                 continue
             else:
-                destination = vengeance_destination or (LEGACY_DESTINATION if legacy else DESTINATION)
+                if geometry['format'] == ASCEND_STATIC_MESH:
+                    destination = '/Game/Community/AscendMeshTextures'
+                else:
+                    destination = vengeance_destination or (LEGACY_DESTINATION if legacy else DESTINATION)
                 key = (name, destination, mode, two_sided)
                 if has_shader_inputs(record):
                     key += (json.dumps(shader_signature(record, inventory), separators=(',', ':')),)

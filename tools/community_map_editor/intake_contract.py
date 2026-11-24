@@ -12,7 +12,7 @@ from interior_lighting import LIGHTING_INDEX, LIGHTMAP_FILE, MAX_LIGHTMAP_BYTES,
 from mission_weather import WEATHER_FILE, mission_weather
 from native_terrain_paint import MAX_PAINT_BYTES, MAX_PAINT_LAYERS, MAX_PAINT_PNG_BYTES, PAINT_FILE, decode_mask
 from sky_intake import MAX_SKIES, MAX_SKY_BYTES, MAX_SKY_SLOTS, SKY_INDEX, SKY_PNG, validate_sky_artwork
-from source_profiles import (ASCEND, ASCEND_MESH_INTAKE_VERSION, BRUSH_PREVIEW_REFERENCE, NAMES, T2,
+from source_profiles import (ASCEND, ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION, BRUSH_PREVIEW_REFERENCE, NAMES, T2,
                              UNREAL_INTAKE_VERSION,
                              UNREAL_INTAKE_VERSIONS, VENGEANCE, VENGEANCE_ART_INTAKE_VERSION,
                              VENGEANCE_BSP_MATERIALS_VERSION, VENGEANCE_MESH_MATERIALS_VERSION,
@@ -49,7 +49,8 @@ def intake_filename(name, version):
                 or INTERIOR_FILE.fullmatch(name)
                 or version in (*VENGEANCE_TERRAIN_VERSIONS, *VENGEANCE_MODEL_VERSIONS) and PAINT_FILE.fullmatch(name)
                 or version in (VENGEANCE_ART_INTAKE_VERSION, *VENGEANCE_MODEL_VERSIONS) and ART_FILE.fullmatch(name)
-                or version in VENGEANCE_MODEL_VERSIONS and (name == TEXTURE_INDEX or TEXTURE_FILE.fullmatch(name)))
+                or version in (*VENGEANCE_MODEL_VERSIONS, ASCEND_MODEL_ART_VERSION)
+                and (name == TEXTURE_INDEX or TEXTURE_FILE.fullmatch(name)))
     if 11 <= version <= 21:
         return name in {"objects.json", "terrain.json", "height.png", "minimap.png"} or (
             version >= 14 and ART_FILE.fullmatch(name) is not None) or (
@@ -71,6 +72,8 @@ def max_intake_files(version):
     if version in UNREAL_INTAKE_VERSIONS:
         if version in VENGEANCE_MODEL_VERSIONS:
             return 6 + MAX_INTAKE_INTERIORS + 2 * MAX_PAINT_LAYERS + MAX_TEXTURES
+        if version == ASCEND_MODEL_ART_VERSION:
+            return 6 + MAX_INTAKE_INTERIORS + MAX_TEXTURES
         return (5 + MAX_INTAKE_INTERIORS + (MAX_PAINT_LAYERS if version in VENGEANCE_TERRAIN_VERSIONS else 0)
                 + (MAX_PAINT_LAYERS if version == VENGEANCE_ART_INTAKE_VERSION else 0))
     if 15 <= version <= 21:
@@ -623,6 +626,7 @@ def load_intake(manifest):
     inventory = header["files"]
     unreal = header["format"] in UNREAL_INTAKE_VERSIONS
     native_models = header["format"] in VENGEANCE_MODEL_VERSIONS
+    ascend_art = header["format"] == ASCEND_MODEL_ART_VERSION
     brush_intake = header["format"] in VENGEANCE_BRUSH_VERSIONS
     shader_inputs = header["format"] in VENGEANCE_EXTENDED_SHADER_VERSIONS
     surface_detail = header["format"] == VENGEANCE_SURFACE_DETAIL_VERSION
@@ -676,7 +680,8 @@ def load_intake(manifest):
     legacy_int = 15 <= header["format"] <= 21
     legacy_textures = 16 <= header["format"] <= 21
     vengeance_bsp = unreal and header["profile"] == VENGEANCE and header["reader"] == UNREAL_READER
-    ascend_mesh = header["format"] == ASCEND_MESH_INTAKE_VERSION and header["profile"] == ASCEND and header["reader"] == UNREAL_READER
+    ascend_mesh = (header["format"] in (ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION)
+                   and header["profile"] == ASCEND and header["reader"] == UNREAL_READER)
     if vengeance_bsp or ascend_mesh:
         interior_prefix = "unrealmesh:bsp." if vengeance_bsp and not vengeance_static else "unrealmesh:"
     else:
@@ -685,7 +690,7 @@ def load_intake(manifest):
     if vengeance_bsp:
         interior_versions += UNREAL_INTAKE_VERSIONS
     if ascend_mesh:
-        interior_versions += (ASCEND_MESH_INTAKE_VERSION,)
+        interior_versions += (ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION)
     model_files = validate_model_index(header, inventory, field="interiors", review_field="interior_review",
                                        pattern=INTERIOR_FILE, prefix=interior_prefix, supported=interior_versions,
                                        required=(4, 15, 16, 17))
@@ -696,7 +701,7 @@ def load_intake(manifest):
     texture_files = {name for name in inventory if TEXTURE_FILE.fullmatch(name)}
     has_textures = TEXTURE_INDEX in inventory
     needs_texture_index = (header["format"] in (6, 16, 17, VENGEANCE_BSP_MATERIALS_VERSION)
-                           or legacy_textures and bool(model_files) or vengeance_mesh_art or shader_inputs)
+                           or legacy_textures and bool(model_files) or vengeance_mesh_art or shader_inputs or ascend_art)
     if ((needs_texture_index or texture_files) and not has_textures
             or has_textures and not legacy_textures and not texture_files
             or len(texture_files) > MAX_TEXTURES):
@@ -759,6 +764,8 @@ def load_intake(manifest):
                 compatible = ascend_mesh if model_format == ASCEND_STATIC_MESH else vengeance_bsp and vengeance_static
                 if not compatible or not receipt_matches or model_files[name] != "unrealmesh:" + path.casefold():
                     raise ValueError("Static mesh does not match its Unreal package source.")
+                if model_format == ASCEND_STATIC_MESH and ascend_art:
+                    slots[name] = {str(slot) for slot in material_slots(geometry)}
                 if model_format == VENGEANCE_STATIC_MESH:
                     vengeance_mesh_files.add(name)
                     if vengeance_mesh_art or shader_inputs or brush_intake:
@@ -838,8 +845,8 @@ def load_intake(manifest):
         raise ValueError("Vengeance static mesh intake requires placed mesh geometry.")
     if has_textures:
         validate_bindings(docs[TEXTURE_INDEX], slots, inventory,
-                          legacy_sizes=texture_sizes if legacy_textures or native_models else None,
-                          receipts=receipts, native_bsp=native_models, shader_inputs=shader_inputs or brush_intake,
+                          legacy_sizes=texture_sizes if legacy_textures or native_models or ascend_art else None,
+                          receipts=receipts, native_bsp=native_models or ascend_art, shader_inputs=shader_inputs or brush_intake,
                           surface_detail=surface_detail or brush_intake, require_extended=not brush_intake)
         if vengeance_mesh_art and not any("file" in binding for filename in vengeance_mesh_files
                                           for binding in docs[TEXTURE_INDEX][filename].values()):

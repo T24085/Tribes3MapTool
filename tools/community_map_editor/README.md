@@ -362,7 +362,15 @@ from the map and any companion packages you list in its import settings.
 Keep the companion files beside the map and add a setting such as
 `"asset_packages": ["MyMapArt.upk"]`. The draft keeps the highest-detail
 geometry, first UV channel, material slot names, actor transforms, and
-serialized triangle collision. Assign destination materials in Unreal.
+serialized triangle collision.
+
+[Intake version 39](intake-v39.schema.json) uses a saved, unambiguous
+base-color Texture2D parameter from a material instance. The reader
+resolves both the material and texture by object path, including listed
+companion packages. It reads inline BGRA8, DXT1, DXT3 and DXT5 mips and
+uses the largest available supported mip. Object Review reports missing
+artwork, smaller fallback mips, and shader inputs requiring author review.
+The draft supplies an opaque base-color material for supported slots.
 Simple BodySetup collision, lower-detail models, and ambiguous component
 placements still need author review. Public layout exports omit the mesh
 files and source package receipts.

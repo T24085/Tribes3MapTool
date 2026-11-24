@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 39",
+  "description": "Private Ascend draft with placed static meshes and source base-color bindings.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "profile", "source_game", "name", "reader", "profile_sha256", "sources", "files", "coverage", "minimap", "interiors", "interior_review"],
+  "properties": {
+    "format": {"const": 39},
+    "profile": {"const": "ascend-ctf"},
+    "source_game": {"const": "Tribes: Ascend"},
+    "name": {"$ref": "intake-v23.schema.json#/properties/name"},
+    "reader": {"const": "legacy-unreal-intake-v1"},
+    "profile_sha256": {"$ref": "intake-v23.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v23.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v23.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v23.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v23.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v23.schema.json#/properties/interiors", "minProperties": 1},
+    "interior_review": {"$ref": "intake-v23.schema.json#/properties/interior_review"},
+    "files": {
+      "type": "object",
+      "maxProperties": 390,
+      "required": ["objects.json", "terrain.json", "height.png", "minimap.png", "source-scene.json", "model-textures.json"],
+      "propertyNames": {"anyOf": [
+        {"enum": ["objects.json", "terrain.json", "height.png", "minimap.png", "source-scene.json", "model-textures.json"]},
+        {"pattern": "^interior-[0-9]{4}\\.json$"},
+        {"pattern": "^texture_[a-f0-9]{32}\\.png$"}
+      ]},
+      "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    }
+  }
+}

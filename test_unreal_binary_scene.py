@@ -101,6 +101,11 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                        "RelayToggle", "RelayOn", "RelayOff", "DoorRelayOn", "DoorRelayOff", "DoorEnable", "DoorDisable",
                        "DoorToggleSpare")
     strings = (*STRINGS, *sector_names, *door_names)
+    if modern and mesh_artwork:
+        artwork_names = ("Texture2D", "MeshColor", "AscendColor", "ByteProperty", "EPixelFormat", "PF_A8R8G8B8",
+                         "TextureParameterValues", "ParameterName", "ParameterValue", "NameProperty", "ArrayProperty",
+                         "Base_Color", "Normal")
+        strings = tuple(dict.fromkeys((*strings, *artwork_names)))
 
     def pack(form, *values):
         return struct.pack("<" + form, *values)
@@ -111,7 +116,7 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
 
     def prop(key, kind, data, structure=None, slot=0):
         if modern:
-            extension = name(structure) if structure else b""
+            extension = name(structure or "None") if kind == "ByteProperty" else name(structure) if structure else b""
             if kind == "BoolProperty":
                 return name(key) + name(kind) + pack("iiB", 0, 0, data[0])
             return name(key) + name(kind) + pack("ii", len(data), slot) + extension + data
@@ -490,7 +495,41 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
             exports[7] = (brush_class, 0, "Unmapped", 0, object_bytes(*fields), 3)
     if static_mesh and modern:
         materials = [("Fixture", "MaterialInstanceConstant", -1, name) for name in ("FixtureStone", "FixtureGlass")]
-        if static_mesh == "embedded":
+        if mesh_artwork:
+            # The map already points at Fixture. Its two slots are separate material exports.
+            assert static_mesh == "companion"
+            color = source.with_name("MeshColor.upk")
+            color_types = [("Core", "Package", 0, "MeshColor"), ("Core", "Class", -1, "Texture2D")]
+            texture = object_bytes(prop("Format", "ByteProperty", name("PF_A8R8G8B8"), "EPixelFormat"))
+            mip_header = len(texture) + 16 + 4 + 24
+            # A large cache-backed mip followed by a small, valid inline mip.
+            texture += bytes(16) + pack("i", 2) + pack("6i", 1, 256, 256, 4096, 8, 8)
+            texture += pack("4i", 0, 16, 16, 0) + bytes((70, 110, 205, 255)) * 4 + pack("2i", 2, 2)
+            color.write_bytes(build_package(game, strings, color_types, [(-2, 0, "AscendColor", 0, texture, 3)]))
+            image = inspect_package(color, "ascend")["exports"][0]
+            data = bytearray(color.read_bytes())
+            offset = image["serial_offset"] + mip_header
+            struct.pack_into("<i", data, offset + 12, offset + 16)
+            color.write_bytes(data)
+
+            types = [("Core", "Package", 0, "Fixture"), ("Core", "Class", -1, "StaticMesh"),
+                     ("Core", "Class", -1, "MaterialInstanceConstant"), ("Core", "Package", 0, "MeshColor"),
+                     ("MeshColor", "Texture2D", -4, "AscendColor")]
+
+            def parameters(key):
+                entry = (prop("ParameterName", "NameProperty", name(key)) + reference("ParameterValue", -5)
+                         + name("None"))
+                return object_bytes(prop("TextureParameterValues", "ArrayProperty", pack("i", 1) + entry))
+
+            mesh = object_bytes() + ascend_mesh_lod((1, 2))
+            companion = source.with_name("Fixture.upk")
+            companion.write_bytes(build_package(game, strings, types,
+                                                 [(-3, 0, "FixtureStone", 0, parameters("Base_Color"), 3),
+                                                  (-3, 0, "FixtureGlass", 0, parameters("Normal"), 3),
+                                                  (-2, 0, "OriginalMesh", 0, mesh, 3)]))
+            settings["asset_packages"] = [companion.name, color.name]
+            source.with_suffix(".import.json").write_text(json.dumps(settings), encoding="utf-8")
+        elif static_mesh == "embedded":
             imports.extend(materials)
             mesh = object_bytes() + ascend_mesh_lod((-len(imports) + 1, -len(imports)))
             exports.append((-7, 0, "OriginalMesh", 0, mesh, 3))
@@ -1196,6 +1235,40 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 manifest.write_text(json.dumps(dict(header, format=22)), encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "Invalid intake interiors"):
                     load_intake(manifest)
+
+    def test_ascend_mesh_artwork_binds_exact_companion_and_reports_unmapped_slots(self):
+        from PIL import Image
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "ascend", native_terrain=True, static_mesh="companion", mesh_artwork=True)
+            manifest = convert_unreal(source, root / "Intakes")
+            header, _, rows = load_intake(manifest)
+            self.assertEqual(header["format"], 39)
+            model, = header["interiors"].values()
+            texture_index = json.loads(manifest.with_name("model-textures.json").read_bytes())
+            binding = texture_index[model]["0"]
+            self.assertEqual((binding["source"], binding["size"], binding["mode"]), ("MeshColor.upk", [2, 2], "opaque"))
+            self.assertIn("Larger mips were unavailable", binding["warning"])
+            self.assertIn("no unambiguous base-color", texture_index[model]["1"]["reason"])
+            self.assertTrue(any("base-color" in row["reason"] and row["source_class"] == "Material" for row in rows))
+            with Image.open(manifest.with_name(binding["file"])) as image:
+                self.assertEqual(image.getpixel((0, 0)), (205, 110, 70, 255))
+            self.assertEqual(header["sources"][-1]["sha256"], sha256(source.with_name("MeshColor.upk").read_bytes()).hexdigest())
+
+            public, _, _ = load_intake(unpack_intake(export_public_layout(manifest, root / "Share.zip"), root / "Public"))
+            self.assertEqual(public["format"], 22)
+            self.assertNotIn(binding["file"], public["files"])
+            self.assertNotIn("model-textures.json", public["files"])
+
+            settings_file = source.with_suffix(".import.json")
+            settings = json.loads(settings_file.read_bytes())
+            settings["asset_packages"].remove("MeshColor.upk")
+            settings_file.write_text(json.dumps(settings), encoding="utf-8")
+            plain, _, pending = load_intake(convert_unreal(source, root / "Intakes"))
+            self.assertEqual(plain["format"], 23)
+            self.assertEqual(plain["interiors"], header["interiors"])
+            self.assertTrue(any("List the Ascend artwork package MeshColor.upk" in row["reason"] for row in pending))
 
     def test_world_bsp_exports_distinct_visual_and_collision_sections(self):
         with TemporaryDirectory() as directory:

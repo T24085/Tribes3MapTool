@@ -9,13 +9,14 @@ import math
 from pathlib import Path
 import re
 
+from ascend_materials import resolve_material as resolve_ascend_material
 from ascend_static_mesh import read_placed_meshes as read_ascend_meshes
 from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, PLAYABLE_BOUNDS, UNREAL_READER, UNREAL_SCENE,
                              bounded, finite, validate_minimap)
 from interior_geometry import MAX_GEOMETRY_BYTES
-from model_textures import SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
+from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
-from source_profiles import (ASCEND_MESH_INTAKE_VERSION, UNREAL_INTAKE_VERSIONS, UNREAL_PROFILES,
+from source_profiles import (ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION, UNREAL_INTAKE_VERSIONS, UNREAL_PROFILES,
                              VENGEANCE_ART_INTAKE_VERSION, VENGEANCE_BSP_MATERIALS_VERSION,
                              VENGEANCE_DOOR_VERSION, VENGEANCE_ELEVATOR_LINK_VERSION, VENGEANCE_ELEVATOR_VERSION,
                              VENGEANCE_MESH_MATERIALS_VERSION,
@@ -33,7 +34,7 @@ from unreal_native_terrain import decode_terrain
 from unreal_package_reader import GAMES as NATIVE_PACKAGE_TYPES, open_package
 from vengeance_bsp import read_bsp_models
 from vengeance_brushes import read_native_brushes
-from vengeance_materials import VengeanceMaterials
+from vengeance_materials import resolve_material as resolve_vengeance_material
 from vengeance_static_mesh import read_placed_meshes as read_vengeance_meshes
 from vengeance_terrain_layers import TerrainPaint
 from vengeance_triggers import ACTIVATION_LABELS
@@ -269,9 +270,14 @@ def convert_unreal(source, output, metadata=None):
     if names and not binary:
         raise ValueError("Companion packages require a binary map source.")
     companions = companion_paths(source, names) if names else {}
-    artwork = VengeanceMaterials(companions) if binary and game == "vengeance" else None
+    artwork = None
     if binary:
-        read_meshes = partial(read_vengeance_meshes, artwork=artwork) if artwork else read_ascend_meshes
+        if game == "vengeance":
+            artwork = PackageMaterials(companions, resolve_vengeance_material, "Vengeance")
+            read_meshes = partial(read_vengeance_meshes, artwork=artwork)
+        else:
+            artwork = PackageMaterials(companions, resolve_ascend_material, "Ascend")
+            read_meshes = partial(read_ascend_meshes, artwork=artwork)
         with open_package(source, game) as (report, stream):
             scene = actor_scene(report, stream, units)
             assignments = project_markers(scene, settings["teams"])
@@ -306,24 +312,23 @@ def convert_unreal(source, output, metadata=None):
                     scene["trigger_chains"] = trigger_chains
         for namespace, path in companions.items():
             pending = references - mesh_docs.keys() - mesh_issues.keys()
-            if game == "vengeance":
-                pending = {ref for ref in pending if imported_meshes.get(ref, "").casefold() == namespace}
-                if not pending:
-                    continue
+            pending = {ref for ref in pending if imported_meshes.get(ref, "").casefold() == namespace}
+            if not pending:
+                continue
             with open_package(path, game) as (report, stream):
                 resolved, issues = read_meshes(report, stream, units, pending, companion=True)
                 mesh_docs.update(resolved)
                 mesh_issues.update(issues)
                 companion_receipts.append(dict(name=report["source"]["name"], origin=path.name,
                                                sha256=report["source"]["sha256"]))
-        if game == "vengeance":
-            companion_receipts.extend(dict(receipt, origin=name) for name, receipt in sorted(artwork.packages.items()))
-            unresolved = references - mesh_docs.keys() - mesh_issues.keys()
-            for ref in unresolved & imported_meshes.keys():
-                namespace = imported_meshes[ref]
-                mesh_issues[ref] = (f"List the Vengeance mesh package {namespace}.pkg in asset_packages."
-                                    if namespace.casefold() not in companions else
-                                    f"No exact static mesh export matched {ref.removeprefix('unrealmesh:')}.")
+        companion_receipts.extend(dict(receipt, origin=name) for name, receipt in sorted(artwork.packages.items()))
+        unresolved = references - mesh_docs.keys() - mesh_issues.keys()
+        suffix = "pkg" if game == "vengeance" else "upk"
+        for ref in unresolved & imported_meshes.keys():
+            namespace = imported_meshes[ref]
+            mesh_issues[ref] = (f"List the {artwork.profile} mesh package {namespace}.{suffix} in asset_packages."
+                                if namespace.casefold() not in companions else
+                                f"No exact static mesh export matched {ref.removeprefix('unrealmesh:')}.")
     else:
         scene = read_unreal_export(source, game, units)
     if native:
@@ -379,7 +384,10 @@ def convert_unreal(source, output, metadata=None):
     for row in rows:
         reference = row.get("model_reference")
         if reference in mesh_docs:
-            row["reason"] = "Imported static mesh geometry and collision. Assign destination materials as needed."
+            if any("file" in record for record in artwork.bindings[reference].values()):
+                row["reason"] = "Imported static mesh geometry, collision and available source artwork."
+            else:
+                row["reason"] = "Imported static mesh geometry and collision. Assign destination materials as needed."
         elif reference in mesh_issues:
             row["reason"] += " · " + mesh_issues[reference]
     bsp_references = []
@@ -429,24 +437,25 @@ def convert_unreal(source, output, metadata=None):
                   "minimap.png": terrain_png(terrain, bounds)})
     scripts = [Path(__file__), Path(__file__).with_name("unreal_legacy_reader.py")]
     if binary:
-        scripts.extend(Path(__file__).with_name(name) for name in ("unreal_binary_scene.py", "unreal_package_reader.py"))
+        scripts.extend(Path(__file__).with_name(name) for name in ("unreal_binary_scene.py", "unreal_package_reader.py",
+                                                                  "model_textures.py"))
         if game == "vengeance":
             scripts.extend(Path(__file__).with_name(name) for name in (
                 "vengeance_bsp.py", "vengeance_materials.py", "vengeance_normal_maps.py", "vengeance_static_mesh.py", "vengeance_terrain.py",
                 "vengeance_terrain_layers.py", "vengeance_brushes.py", "vengeance_mover_plan.py", "vengeance_triggers.py"))
         else:
-            scripts.append(Path(__file__).with_name("ascend_static_mesh.py"))
+            scripts.extend(Path(__file__).with_name(name) for name in ("ascend_static_mesh.py", "ascend_materials.py"))
     if native:
         scripts.append(Path(__file__).with_name("unreal_native_terrain.py"))
     version = UNREAL_INTAKE_VERSIONS[0]
     if mesh_docs and game == "ascend":
-        version = ASCEND_MESH_INTAKE_VERSION
+        version = ASCEND_MODEL_ART_VERSION if mesh_artwork else ASCEND_MESH_INTAKE_VERSION
     if paint.masks:
         version = VENGEANCE_PAINT_INTAKE_VERSION
     terrain_art = any("file" in item for item in paint.artwork.values())
     if terrain_art:
         version = VENGEANCE_ART_INTAKE_VERSION
-    if TEXTURE_INDEX in files:
+    if TEXTURE_INDEX in files and game == "vengeance":
         version = VENGEANCE_BSP_MATERIALS_VERSION
     if mesh_docs and game == "vengeance":
         version = VENGEANCE_MESH_MATERIALS_VERSION if mesh_artwork else VENGEANCE_STATIC_MESH_VERSION

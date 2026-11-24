@@ -4,8 +4,6 @@ from contextlib import nullcontext
 from hashlib import sha256
 from math import cos, isfinite, sin, tau
 
-from interior_geometry import material_slots
-from model_textures import MAX_BINDINGS, MAX_TEXTURE_BYTES, MAX_TEXTURES
 from unreal_binary_scene import read_properties
 from unreal_package_reader import Cursor
 from vengeance_bsp import MASKED, MODULATED, TRANSLUCENT
@@ -177,59 +175,3 @@ def resolve_material(asset, report, stream, objects, companions, flags):
         if effects:
             binding["warning"] = ("Source material inputs needing review: " + ", ".join(effects))[:240]
     return binding, images, receipts
-
-
-class VengeanceMaterials:
-    def __init__(self, companions):
-        self.companions = companions
-        self.bindings = {}
-        self.textures = {}
-        self.packages = {}
-        self.review = {}
-        self.texture_bytes = 0
-        self.slot_count = 0
-
-    def read_slot(self, index, flags, report, stream, objects):
-        if not index:
-            raise ValueError("Source surface has no assigned material.")
-        record, images, receipts = resolve_material(objects[index], report, stream, objects, self.companions, flags)
-        new_images = {name: data for name, data in images.items() if name not in self.textures}
-        new_size = sum(map(len, new_images.values()))
-        if (len(self.textures) + len(new_images) > MAX_TEXTURES or self.texture_bytes + new_size > MAX_TEXTURE_BYTES
-                or any(len(data) > 16 * 1024 * 1024 for data in new_images.values())):
-            raise ValueError("Vengeance surface artwork exceeds the intake size limit.")
-        self.textures.update(new_images)
-        self.texture_bytes += new_size
-        return record, receipts
-
-    def read_package(self, models, report, stream):
-        objects = {row["index"]: row for row in report["imports"] + report["exports"]}
-        cache = {}
-        for reference, (label, geometry, slots) in models.items():
-            if not geometry["render"]:
-                continue
-            by_slot = {}
-            for slot in material_slots(geometry):
-                self.slot_count += 1
-                if self.slot_count > MAX_BINDINGS:
-                    raise ValueError("Too many Vengeance model material slots.")
-                key = slots[slot]
-                if key not in cache:
-                    try:
-                        record, receipts = self.read_slot(*key, report, stream, objects)
-                    except (ValueError, OSError, ImportError) as error:
-                        cache[key] = {"reason": str(error)[:240]}
-                    else:
-                        for receipt in receipts:
-                            name = receipt["name"]
-                            if name in self.packages and self.packages[name] != receipt:
-                                raise ValueError(f"Vengeance material package changed during import: {name}")
-                            self.packages[name] = receipt
-                        cache[key] = record
-                record = cache[key]
-                by_slot[str(slot)] = record
-                concern = record.get("reason", record.get("warning"))
-                if concern:
-                    self.review.setdefault(reference, []).append(dict(model=label, material=geometry["materials"][slot],
-                                                                       slot=slot, reason=concern))
-            self.bindings[reference] = by_slot
