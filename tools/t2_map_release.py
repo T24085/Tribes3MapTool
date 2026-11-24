@@ -1,7 +1,7 @@
 """Build a separate verified Direct Host bundle from an editor release or its rollback."""
 
 import argparse
-from hashlib import file_digest
+from hashlib import file_digest, sha256
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -23,6 +23,10 @@ PLAN = 'map-release.json'
 CENTRAL = 'package-manifest.json'
 SHA = re.compile(r'[0-9a-f]{64}')
 DRAFT = re.compile(r'DraftT[12VA][0-9]{3}')
+FLAG_HEIGHT_RUNTIME = {
+    'match_roster.py': b'# T3_EDITOR_FLAG_HEIGHT_LIMITS_V1',
+    'runtime-fixes/mission_flag_limit.lua': b'-- T3_EDITOR_FLAG_HEIGHT_LIMITS_V1',
+}
 
 
 def regular_row(root, name):
@@ -36,6 +40,41 @@ def regular_row(root, name):
     if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
         raise ValueError(f'File changed during verification: {name}')
     return {'bytes': after.st_size, 'sha256': digest}
+
+
+def flag_height_limits(level):
+    # UE 5.3 stores TargetPoint tag names as length-prefixed FStrings in the cooked .umap.
+    markers = {}
+    for kind in ('Floor', 'Ceiling'):
+        name = f'T3MissionFlagNeeds{kind}\0'
+        markers[kind.lower()] = (
+            len(name).to_bytes(4, 'little') + name.encode('ascii'),
+            (-len(name)).to_bytes(4, 'little', signed=True) + name.encode('utf-16-le'),
+        )
+    overlap = max(len(marker) for encodings in markers.values() for marker in encodings) - 1
+    pending = set(markers)
+    tail = b''
+    with level.open('rb') as stream:
+        while pending and (chunk := stream.read(65536)):
+            data = tail + chunk
+            pending.difference_update(kind for kind, encodings in markers.items() if any(value in data for value in encodings))
+            tail = data[-overlap:]
+    return tuple(kind for kind in markers if kind not in pending)
+
+
+def verify_flag_height_runtime(host, files):
+    message = 'Choose a verified Direct Host baseline that supports flag-only height limits.'
+    maximum = 2*1024*1024
+    for name, marker in FLAG_HEIGHT_RUNTIME.items():
+        row = files.get(name)
+        path = host/name
+        if row is None or row['bytes'] > maximum or path.resolve() != path or not path.is_file():
+            raise ValueError(message)
+        with path.open('rb') as stream:
+            data = stream.read(maximum + 1)
+        if (len(data) != row['bytes'] or sha256(data).hexdigest() != row['sha256']
+                or marker not in {line.strip() for line in data.splitlines()}):
+            raise ValueError(message)
 
 
 def sha(value):
@@ -203,6 +242,11 @@ def stage_release(package, source, destination, *, rollback=False, link_content=
                 raise ValueError(f'An untracked file already occupies the release path: {name}')
         elif name not in members or regular_row(source, name) != expected:
             raise ValueError(f'The current map file changed after the release was prepared: {name}')
+    if map_id in plan[f'{new}_catalog']:
+        level = f'content/Maps/Community/{map_id}/Arena_{map_id}_P.umap'
+        selected = package/replacement/level if level in changes else source/level
+        if flag_height_limits(selected):
+            verify_flag_height_runtime(source, {row['path']: row for row in initial['files']})
 
     with TemporaryDirectory(dir=destination.parent) as temp:
         candidate = Path(temp) / 'host'

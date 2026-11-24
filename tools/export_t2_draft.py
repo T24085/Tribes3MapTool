@@ -14,7 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from community_maps import MapDefinition, valid_label
 from map_sync_contract import MINIMAP_MAX_IMAGE, map_catalog, minimap_payload, png_dimensions
 from portable_maps import host_definitions, load_json, merge_map_manifests, owned_path
-from tools.t2_map_release import DRAFT, create_plan, descriptor_paths, publish_directory, regular_row
+from tools.t2_map_release import (DRAFT, create_plan, descriptor_paths, flag_height_limits, publish_directory,
+                                  regular_row, verify_flag_height_runtime)
 from verified_file_cache import MAX_PACKAGE_MANIFEST_BYTES
 
 
@@ -205,7 +206,7 @@ def write_objectives(ctf, target, run, host, existing, preview_manifest, map_id,
     return inputs[1]['sha256'], placements, groups
 
 
-def playtest_checklist(metadata, starts, flags, equipment, groups):
+def playtest_checklist(metadata, starts, flags, equipment, groups, *, flag_heights=()):
     def position(point):
         return ', '.join(f'{value:g}' for value in point)
 
@@ -220,6 +221,8 @@ def playtest_checklist(metadata, starts, flags, equipment, groups):
                   '[ ] Capture once per team with its home flag present. Verify the score and flag reset.'])
     for team, x, y, z in flags:
         lines.append(f'    {team} flag stand at {position((x, y, z))}')
+    for limit in flag_heights:
+        lines.append(f'[ ] Cross the flag-only {limit} with the enemy flag. Check the drop at the last legal position and notice.')
     if equipment:
         lines.extend(['', '[ ] Check each approved equipment placement for floor contact and obstruction.'])
         for entry, approved in equipment:
@@ -336,6 +339,10 @@ def export_draft(run, host, destination, *, label, minimap=None, equipment_adapt
             if group is not None:
                 dependencies.add(group)
 
+        level = payload/f'content/Maps/Community/{map_id}/{definition.level}.umap'
+        flag_heights = flag_height_limits(level)
+        if flag_heights:
+            verify_flag_height_runtime(host, existing)
         metadata = {'format': 1, 'id': map_id, 'label': label, 'asset_group': map_id,
                     'level': definition.level, 'native': False, 'adapter': 'scripted_ctf'}
         if dependencies:
@@ -388,7 +395,8 @@ def export_draft(run, host, destination, *, label, minimap=None, equipment_adapt
             receipt['equipment_review_sha256'] = equipment_review
         write_json(result / 'export-receipt.json', receipt)
         (result / 'playtest-checklist.txt').write_text(
-            playtest_checklist(metadata, starts, flags, equipment, groups), encoding='utf-8', newline='\n')
+            playtest_checklist(metadata, starts, flags, equipment, groups, flag_heights=flag_heights),
+            encoding='utf-8', newline='\n')
         publish_directory(result, destination)
     return destination
 

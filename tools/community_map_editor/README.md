@@ -926,7 +926,7 @@ The generated actors appear under **TRIBES CTF → Mission perimeter** in the Wo
 
 Enter a **Flag-only inset** to set a second boundary inside the mission area. The flag-only boundary also works independently of the solid walls. The minimap previews it in pink. Players can cross this boundary. The game uses its native drop action and places a carried flag at the carrier's last recorded in-bounds position. When there is no valid position for that carrier, the native return brings the flag home. Both original flag stands must be inside the limit.
 
-Either flag outline can have an optional floor below the lowest terrain and a ceiling above the highest terrain. Leave a height blank to keep that direction open. The flag-only height limits use the same drop rule as the sides and require an updated Direct Host runtime. Both flag stands must also clear the height limits.
+Either flag outline can have an optional floor below the lowest terrain and a ceiling above the highest terrain. Leave a height blank to keep that direction open. The flag-only height limits use the same drop rule as the sides. Both flag stands must also clear the height limits. Direct Host export and staging check the selected host's verified runtime for support, and the export checklist lists each height to test.
 
 The carrier receives a private message after the host processes a boundary drop or return. When the character is attached to a vehicle pawn, the boundary follows the vehicle's position. A verified switch between the carrier and the vehicle preserves the same player's last in-bounds sample.
 

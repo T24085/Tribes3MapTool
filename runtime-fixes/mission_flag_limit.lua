@@ -1,4 +1,5 @@
 -- A cooked community map opts in with rectangle or indexed polygon TargetPoints.
+-- T3_EDITOR_FLAG_HEIGHT_LIMITS_V1
 local MAX_VERTICES=32
 local function cross(ax,ay,bx,by)return ax*by-ay*bx end
 local function turn(a,b,p)return cross(b.X-a.X,b.Y-a.Y,p.X-a.X,p.Y-a.Y)end
