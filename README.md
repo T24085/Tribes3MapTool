@@ -18,6 +18,10 @@ To reopen the workspace, run
 
 See the [editor guide](tools/community_map_editor/README.md) for conversion, cooking, offline playtests and host export requirements. The source snapshot contains no installed game, Unreal Editor binaries or cooked maps.
 
+The docked Object Review panel can be built and installed for the
+workspace's exact UE 5.3 build. See the
+[Object Review installation guide](tools/community_map_editor/README.md#dock-object-review-inside-unreal).
+
 The stock Unreal workspace can use **Build for Direct Host** after importing a draft. Select a verified Direct Host bundle that supports standard Unreal World Settings. Offline playtesting uses the separate game-compatible setup described in the editor guide.
 
 From a fresh UE 5.3 workspace, authored Tribes 1, Tribes 2, Vengeance, and Ascend fixtures passed import, batch rebuild, Windows cooking, isolated Direct Host staging, and rollback.

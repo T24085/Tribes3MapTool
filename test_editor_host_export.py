@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
 
-from tools.community_map_editor import bootstrap, launch
+from tools.community_map_editor import bootstrap, install_review, launch
 
 
 DRAFT = 'DraftT2001'
@@ -101,6 +101,40 @@ class EditorHostExportTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'requires Unreal Engine 5.3'):
                 bootstrap.create_workspace(root, wrong_engine)
             self.assertFalse((root / 'CommunityMapEditor').exists())
+
+    def test_review_install_checks_engine_build_and_retains_the_previous_plugin(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            engine = unreal_installation(root / 'Unreal', 3)
+            (engine / 'UnrealEditor.modules').write_text('{"BuildId":"installed-engine"}', encoding='utf-8')
+            project = root / 'Map Project' / 'Map.uproject'
+            project.parent.mkdir()
+            project.touch()
+            package = root / 'BuildPlugin'
+            binaries = package / 'Binaries/Win64'
+            binaries.mkdir(parents=True)
+            name = install_review.NAME
+            dll = f'UnrealEditor-{name}.dll'
+            (binaries / dll).write_bytes(b'compiled review module')
+            (package / f'{name}.uplugin').write_text(json.dumps({'Modules': [
+                {'Name': name, 'Type': 'Editor'},
+            ]}), encoding='utf-8')
+            modules = binaries / 'UnrealEditor.modules'
+            modules.write_text(json.dumps({'BuildId': 'another-engine', 'Modules': {name: dll}}), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'exact Unreal Editor build'):
+                install_review.install(package, project, engine)
+            self.assertFalse((project.parent / 'Plugins').exists())
+
+            modules.write_text(json.dumps({'BuildId': 'installed-engine', 'Modules': {name: dll}}), encoding='utf-8')
+            destination, backup = install_review.install(package, project, engine)
+            self.assertIsNone(backup)
+            self.assertIn(name, launch.editor_plugin_args(project, engine, smoke=False, authoring_only=True)[1])
+            self.assertEqual(install_review.install(package, project, engine), (destination, None))
+            (binaries / dll).write_bytes(b'new review binary')
+            self.assertEqual(install_review.install(package, project, engine)[0], destination)
+            old, = (project.parent / 'Saved/T3PluginBackups').iterdir()
+            self.assertEqual((old / 'Binaries/Win64' / dll).read_bytes(), b'compiled review module')
+            self.assertEqual((destination / 'Binaries/Win64' / dll).read_bytes(), b'new review binary')
 
     def test_authoring_host_capability_has_to_be_in_the_verified_inventory(self):
         with TemporaryDirectory() as folder:

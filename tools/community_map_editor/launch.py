@@ -243,6 +243,21 @@ PLUGINS = ['-NoEnginePlugins', '-EnablePlugins=PythonScriptPlugin,EditorScriptin
 EDITOR_PLUGINS = [PLUGINS[0], PLUGINS[1]+',ContentBrowserAssetDataSource,ContentBrowserClassDataSource']
 
 
+def editor_plugin_matches(folder, engine, name):
+    binaries = folder / 'Binaries/Win64'
+    dll = f'UnrealEditor-{name}.dll'
+    if not (binaries / dll).is_file():
+        return False
+    try:
+        plugin = read_json(binaries / 'UnrealEditor.modules')
+        engine_build = read_json(engine / 'UnrealEditor.modules')
+        build_id = engine_build['BuildId']
+        return (isinstance(build_id, str) and bool(build_id) and plugin['BuildId'] == build_id
+                and plugin['Modules'].get(name) == dll)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
 def editor_plugin_args(project, engine, *, smoke, authoring_only=False):
     args = PLUGINS if smoke else EDITOR_PLUGINS
     enabled = []
@@ -251,19 +266,11 @@ def editor_plugin_args(project, engine, *, smoke, authoring_only=False):
     if not smoke:
         extensions.append(('CommunityMapReview', 'dock the object review'))
     for name, purpose in extensions:
-        binaries = project.parent/'Plugins'/name/'Binaries/Win64'
-        dll = f'UnrealEditor-{name}.dll'
-        if not (binaries/dll).is_file():
-            continue
-        try:
-            plugin = read_json(binaries/'UnrealEditor.modules')
-            engine_build = read_json(engine/'UnrealEditor.modules')
-            if plugin['Modules'].get(name) == dll and plugin['BuildId'] == engine_build['BuildId']:
-                enabled.append(name)
-                continue
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            pass
-        print(f'Build {name} for this Unreal Editor version to {purpose}.', flush=True)
+        folder = project.parent / 'Plugins' / name
+        if editor_plugin_matches(folder, engine, name):
+            enabled.append(name)
+        elif (folder / f'Binaries/Win64/UnrealEditor-{name}.dll').is_file():
+            print(f'Build {name} for this Unreal Editor version to {purpose}.', flush=True)
     plugins = [*args[1].split(','), *enabled]
     if authoring_only:
         plugins.remove('CommunityNativeWorldSettings')

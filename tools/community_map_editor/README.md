@@ -701,10 +701,19 @@ drafts with a verified intake. The tab follows the active level and has
 a **Refresh** button.
 
 This panel uses the [Community Map Review editor plugin](Plugins/CommunityMapReview).
-Install its compiled folder under the authoring project's `Plugins`
-directory. The launcher enables only a binary that matches Unreal's
-build ID. The import window remains available for source inspection
-before creating a draft.
+Close the map editor, then run the installer once per workspace. Building
+the plugin uses the selected UE 5.3 installation, Windows C++ build tools,
+and the .NET Framework SDK required by UnrealBuildTool.
+
+```powershell
+py -3.13 tools/community_map_editor/install_review.py "D:\Maps\CommunityMapEditor\local-settings.json"
+```
+
+To install a trusted prebuilt package, extract it and pass
+`--package "D:\Downloads\CommunityMapReview"` after the settings path.
+The package must match the editor's exact build ID. The installer copies
+the runtime files into the project and keeps a replaced plugin under
+`Saved/T3PluginBackups`. Reopen the map editor to use the dock.
 
 ### Set conversion rules
 
