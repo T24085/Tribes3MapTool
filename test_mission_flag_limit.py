@@ -20,6 +20,8 @@ return function(factory)
  local function valid(v)return v~=nil and v.alive end
  local world,foreign=object('Owned World'),object('Other World')
  local gm=object('Mode',world);gm.GameState=object('Game State',world)
+ local clock=object('GameplayStatics');local time=0
+ clock.GetTimeSeconds=function(_,context)assert(context==gm);return time end
  gm.GetMatchState=function()return name('InProgress')end
  gm.GameState.r_GameplayPhaseInfo={Phase={TagName=name('GamePhase.GameplayStartPhase')}}
  FName=function(v)return v end
@@ -51,7 +53,7 @@ return function(factory)
   pc.IsA=function(_,kind)return kind==player_class end
   pc.messages={}
   pc.ClientMessage=function(self,text,kind,life)
-   assert(life==4 and text:find('Flag ',1,true)==1)
+   assert((life==4 or life==0) and #text>0)
    self.messages[#self.messages+1]=kind
   end
   return pc
@@ -87,6 +89,8 @@ return function(factory)
     {'SweepHitResult','StructProperty',32},{'bTeleport','BoolProperty',264},{'ReturnValue','BoolProperty',265}},
   ['/Script/Engine.Actor:GetAttachParentActor']={{'ReturnValue','ObjectProperty',0}},
   ['/Script/Engine.Pawn:GetController']={{'ReturnValue','ObjectProperty',0}},
+  ['/Script/Engine.GameplayStatics:GetTimeSeconds']={{'WorldContextObject','ObjectProperty',0},
+    {'ReturnValue','DoubleProperty',8}},
   ['/Script/Engine.PlayerController:ClientMessage']={{'S','StrProperty',0},{'Type','NameProperty',16},
     {'MsgLifeTime','FloatProperty',24}},
  }
@@ -94,6 +98,7 @@ return function(factory)
   if path=='/Script/Engine.Pawn'then return pawn_class end
   if path=='/Script/Valhalla.ValCharacter'then return character_class end
   if path=='/Script/Engine.PlayerController'then return player_class end
+  if path=='/Script/Engine.Default__GameplayStatics'then return clock end
   if path=='/Script/Topaz.ETopFlagState'then
    local e=object(path);e.ForEachName=function(_,cb)cb(name('ETopFlagState::Dropped'),4)end;return e
   end
@@ -113,7 +118,7 @@ return function(factory)
  local function move(p,x,y,z)p.at={X=x,Y=y,Z=z}end
  return {start=function()return service(gm)end,move=move,tick=tick,
   pawn=pawn,nextPawn=nextPawn,vehicle=vehicle,flags=flags,world=world,notices=notices,
-  pilot=pilot,other=other,
+  pilot=pilot,other=other,at_time=function(value)time=value end,
   enter_vehicle=function()
    pawn.parent,pawn.controller=vehicle,nil
    vehicle.controller,vehicle.PlayerState=pilot,pilot.PlayerState
@@ -121,6 +126,16 @@ return function(factory)
   end,
   fail_notice=function()pilot.ClientMessage=function()error('closed connection')end end,
   points=function(enabled)if not enabled then points={points[3]}end end,
+  return_timer=function(seconds,omit)
+   for _,entry in ipairs(points)do
+    if entry.world==world and not entry:ActorHasTag('T3MissionFlagFloor') and not entry:ActorHasTag('T3MissionFlagCeiling')then
+     table.insert(entry.tags,'T3MissionFlagNeedsReturnTimer')
+    end
+   end
+   if not omit then
+    points[#points+1]=marker({'T3MissionFlagReturnTimer','T3MissionFlagReturnSeconds'..seconds},0,0)
+   end
+  end,
   altitude=function(floor,ceiling,omit)
    for _,entry in ipairs(points)do
     if entry.world==world then
@@ -282,6 +297,73 @@ class MissionFlagLimitTest(unittest.TestCase):
         f = self.fixture()
         f.altitude(1, 300)
         with self.assertRaisesRegex(LuaError, "flag_outside_boundary"):
+            f.start()
+
+    def test_return_timer_clears_on_reentry_and_returns_the_flag_after_a_fresh_delay(self):
+        f = self.fixture()
+        f.return_timer(3)
+        flag = f.flags[1]
+        flag.owner = f.pawn
+        f.move(f.pawn, 900, 0, 100)
+        self.assertTrue(f.start())
+        f.move(f.pawn, 1100, 0, 100)
+        f.at_time(1)
+        f.tick()
+        f.at_time(3.9)
+        f.tick()
+        self.assertEqual(flag.drops, 0)
+        f.move(f.pawn, 900, 0, 100)
+        f.tick()
+        f.move(f.pawn, 1100, 0, 100)
+        f.at_time(4)
+        f.tick()
+        f.at_time(6.9)
+        f.tick()
+        self.assertEqual(flag.drops, 0)
+        f.at_time(7)
+        f.tick()
+        self.assertTrue(flag.forced)
+        self.assertEqual((flag.drops, flag.moves), (1, 0))
+        self.assertIn('reason=timer_elapsed|elapsed=3.000', f.notices[4])
+        self.assertEqual(list(f.pilot.messages.values()), ['T3FlagBoundaryGrace', 'T3FlagBoundaryGraceCleared',
+                                                           'T3FlagBoundaryGrace', 'T3FlagBoundaryReturn'])
+
+    def test_return_timer_survives_same_player_vehicle_transfer_and_ignores_old_carriers(self):
+        for changed_player in (False, True):
+            with self.subTest(changed_player=changed_player):
+                f = self.fixture()
+                f.return_timer(3)
+                flag = f.flags[1]
+                flag.owner = f.pawn
+                f.move(f.pawn, 1100, 0, 100)
+                self.assertTrue(f.start())
+                f.at_time(2)
+                if changed_player:
+                    flag.owner = f.nextPawn
+                    f.move(f.nextPawn, 1100, 0, 100)
+                else:
+                    f.enter_vehicle()
+                    flag.owner = f.vehicle
+                    f.move(f.vehicle, 1100, 0, 100)
+                f.tick()
+                f.at_time(3)
+                f.tick()
+                self.assertEqual(flag.drops, 0 if changed_player else 1)
+                if changed_player:
+                    self.assertEqual(list(f.pilot.messages.values()), ['T3FlagBoundaryGrace', 'T3FlagBoundaryGraceCleared'])
+                    f.at_time(5)
+                    f.tick()
+                    self.assertEqual(flag.drops, 1)
+                    self.assertEqual(list(f.other.messages.values()), ['T3FlagBoundaryGrace', 'T3FlagBoundaryReturn'])
+
+    def test_required_return_timer_must_have_a_valid_marker(self):
+        f = self.fixture()
+        f.return_timer(4, True)
+        with self.assertRaisesRegex(LuaError, 'incomplete_return_timer'):
+            f.start()
+        f = self.fixture()
+        f.return_timer(61)
+        with self.assertRaisesRegex(LuaError, 'missing_numbered_marker=T3MissionFlagReturnSeconds'):
             f.start()
 
     def test_polygon_marker_errors_fail_at_startup(self):

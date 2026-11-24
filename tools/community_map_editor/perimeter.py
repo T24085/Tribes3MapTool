@@ -22,6 +22,10 @@ FLAG_COUNT = "T3MissionFlagVertexCount"
 FLAG_FLOOR = "T3MissionFlagFloor"
 FLAG_CEILING = "T3MissionFlagCeiling"
 FLAG_CAPS = {FLAG_FLOOR: "T3MissionFlagNeedsFloor", FLAG_CEILING: "T3MissionFlagNeedsCeiling"}
+FLAG_RETURN_TIMER = "T3MissionFlagReturnTimer"
+FLAG_RETURN_SECONDS = "T3MissionFlagReturnSeconds"
+FLAG_REQUIREMENTS = {**FLAG_CAPS, FLAG_RETURN_TIMER: "T3MissionFlagNeedsReturnTimer"}
+MAX_FLAG_RETURN_SECONDS = 60
 MAX_VERTICES = 32
 SOLID_POLYGON = TAG + "Polygon"
 POLYGON_REQUIRED = TAG + "PolygonRequired"
@@ -43,6 +47,7 @@ class FlagBoundary(NamedTuple):
     points: tuple
     floor: Optional[float] = None
     ceiling: Optional[float] = None
+    return_delay_s: Optional[int] = None
 
 
 def mission_extents(bounds, terrain, *, depth_m=DEFAULT_DEPTH_M, height_m=DEFAULT_CEILING_M):
@@ -152,7 +157,8 @@ def warning_surface(bounds, terrain, walls, polygon, limits):
 
 def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limits=None, flag_polygon_m=None,
                     wall_polygon_m=None, wall_block_channels=None, wall_visual=None, warn_players=False,
-                    warning_polygon_m=None, warning_limits=None, warning_audience=None, flag_limits=None):
+                    warning_polygon_m=None, warning_limits=None, warning_audience=None, flag_limits=None,
+                    flag_return_delay_s=None):
     if type(warn_players) is not bool:
         raise ValueError("Choose whether to warn players outside the mission area.")
     if warning_audience is not None and (not isinstance(warning_audience, str) or warning_audience not in WARNING_AUDIENCES):
@@ -165,8 +171,11 @@ def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limi
         raise ValueError("Enable solid side walls before setting their shape, limits, collision channels or appearance.")
     if flag_inset_m is not None and flag_polygon_m is not None:
         raise ValueError("Choose either the flag-only inset or a flag-only polygon.")
-    if flag_limits is not None and flag_inset_m is None and flag_polygon_m is None:
-        raise ValueError("Set a flag-only inset or draw a polygon before setting its height limits.")
+    if (flag_limits is not None or flag_return_delay_s is not None) and flag_inset_m is None and flag_polygon_m is None:
+        raise ValueError("Set a flag-only inset or draw a polygon before setting its height limits or return timer.")
+    if flag_return_delay_s is not None and (type(flag_return_delay_s) is not int
+                                           or not 1 <= flag_return_delay_s <= MAX_FLAG_RETURN_SECONDS):
+        raise ValueError(f"Enter a flag return delay from 1 to {MAX_FLAG_RETURN_SECONDS} whole seconds.")
     if not perimeter and flag_inset_m is None and flag_polygon_m is None and not warn_players:
         return None, None, None
     if "minimap" not in header or not any(row["status"] == "boundary" for row in rows):
@@ -191,7 +200,7 @@ def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limi
                 low, high = mission_extents(bounds, terrain, depth_m=below or 0, height_m=above or 0)
                 floor, ceiling = (low[2] if below is not None else None, high[2] if above is not None else None)
                 check_flag_altitude(floor, ceiling, flags)
-        limit = FlagBoundary(limit, floor, ceiling)
+        limit = FlagBoundary(limit, floor, ceiling, flag_return_delay_s)
     warning = warning_surface(bounds, terrain, walls, warning_polygon_m, warning_limits) if warn_players else None
     return walls, limit, warning
 
@@ -371,7 +380,9 @@ def place_flag_bounds(actors, boundary):
         point.set_actor_hidden_in_game(True)
 
     altitudes = {FLAG_FLOOR: boundary.floor, FLAG_CEILING: boundary.ceiling}
-    required = [FLAG_CAPS[tag] for tag, height in altitudes.items() if height is not None]
+    required = [FLAG_REQUIREMENTS[tag] for tag, height in altitudes.items() if height is not None]
+    if boundary.return_delay_s is not None:
+        required.append(FLAG_REQUIREMENTS[FLAG_RETURN_TIMER])
     points = boundary.points
     for index, (x, y) in enumerate(points, 1):
         if len(points) == 2:
@@ -384,6 +395,9 @@ def place_flag_bounds(actors, boundary):
     for tag, height in altitudes.items():
         if height is not None:
             add_marker("floor" if tag == FLAG_FLOOR else "ceiling", (*points[0], height), [tag])
+    if boundary.return_delay_s is not None:
+        add_marker("return timer", (*points[0], 0),
+                   [FLAG_RETURN_TIMER, f"{FLAG_RETURN_SECONDS}{boundary.return_delay_s}"])
 
 
 def verify_flag_bounds(actors, flags, hard_perimeter=None):
@@ -394,11 +408,12 @@ def verify_flag_bounds(actors, flags, hard_perimeter=None):
     )):
         hard_perimeter = None
     corners, vertices, counts, caps, requirements = {}, {}, set(), {}, set()
-    roles = {*FLAG_CORNERS, FLAG_POLYGON, *FLAG_CAPS}
+    timer = None
+    roles = {*FLAG_CORNERS, FLAG_POLYGON, *FLAG_REQUIREMENTS}
     for actor in actors:
         tags = {str(tag) for tag in actor.tags}
         found = tags & roles
-        required = frozenset(tag for tag, requirement in FLAG_CAPS.items() if requirement in tags)
+        required = frozenset(tag for tag, requirement in FLAG_REQUIREMENTS.items() if requirement in tags)
         if not found and not required:
             continue
         if len(found) != 1 or not isinstance(actor, unreal.TargetPoint) or actor.get_actor_enable_collision():
@@ -409,6 +424,12 @@ def verify_flag_bounds(actors, flags, hard_perimeter=None):
             if required or tag in caps:
                 raise ValueError("Each flag-only height limit needs one cap marker.")
             caps[tag] = at.z
+            continue
+        if tag == FLAG_RETURN_TIMER:
+            values = [seconds for seconds in range(1, MAX_FLAG_RETURN_SECONDS + 1) if f"{FLAG_RETURN_SECONDS}{seconds}" in tags]
+            if required or timer is not None or len(values) != 1:
+                raise ValueError("The flag-only return timer needs one valid duration marker.")
+            timer = values[0]
             continue
         requirements.add(required)
         if tag == FLAG_POLYGON:
@@ -422,8 +443,11 @@ def verify_flag_bounds(actors, flags, hard_perimeter=None):
             if tag in corners:
                 raise ValueError("The flag-only limit needs two distinct, non-colliding TargetPoints.")
             corners[tag] = (at.x, at.y)
-    if (requirements or caps) and requirements != {frozenset(caps)}:
-        raise ValueError("The flag-only height markers are missing, unexpected or inconsistent.")
+    present = set(caps)
+    if timer is not None:
+        present.add(FLAG_RETURN_TIMER)
+    if (requirements or present) and requirements != {frozenset(present)}:
+        raise ValueError("The flag-only height markers or return timer are missing, unexpected or inconsistent.")
     check_flag_altitude(caps.get(FLAG_FLOOR), caps.get(FLAG_CEILING), flags)
     if vertices:
         if corners or len(counts) != 1 or vertices.keys() != set(range(1, next(iter(counts)) + 1)):

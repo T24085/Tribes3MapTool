@@ -172,6 +172,12 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
             field.insert(0, str(previous))
         field.grid(row=0, column=2 * column + 1, sticky="w", padx=(0, 8))
         flag_height_fields[key] = field
+    ttk.Label(body, text="Return flag after time outside (s)").grid(row=11, column=0, sticky="w", pady=(6, 0))
+    flag_timer = ttk.Entry(body, width=8)
+    if selection.get("flag_return_delay_s") is not None:
+        flag_timer.insert(0, str(selection["flag_return_delay_s"]))
+    flag_timer.grid(row=11, column=1, sticky="w", pady=(6, 0))
+    ttk.Label(body, text="Leave blank to drop the flag immediately.").grid(row=12, columnspan=2, sticky="w")
     def draw_warning():
         def keep(vertices):
             warning_polygon[:] = vertices
@@ -180,7 +186,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         show_polygon(window, header, terrain, rows, warning_polygon, keep, kind="warning")
 
     warning_group = ttk.LabelFrame(body, text="Player warning and sound", padding=(8, 4))
-    warning_group.grid(row=11, columnspan=2, sticky="ew", pady=(8, 0))
+    warning_group.grid(row=13, columnspan=2, sticky="ew", pady=(8, 0))
     ttk.Checkbutton(warning_group, text="Warn players on crossing", variable=warn, command=update_fields).grid(
         row=0, columnspan=2, sticky="w", pady=(0, 3),
     )
@@ -209,7 +215,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         entry.grid(row=index, column=1, sticky="w")
         warning_fields[key] = enabled, toggle, entry
     message = ttk.Label(body, wraplength=320)
-    message.grid(row=12, columnspan=2, sticky="w", pady=(6, 0))
+    message.grid(row=14, columnspan=2, sticky="w", pady=(6, 0))
 
     def distance(entry, label):
         try:
@@ -230,6 +236,11 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
                     key: distance(field, "the flag-only height limit") if field.get().strip() else None
                     for key, field in flag_height_fields.items()
                 }
+            if flag_timer.get().strip():
+                try:
+                    options["flag_return_delay_s"] = int(flag_timer.get())
+                except ValueError as exc:
+                    raise ValueError("Enter the flag return delay in whole seconds.") from exc
             if warn.get():
                 options["warn_players"] = True
                 if selected := next(key for key, label in WARNING_AUDIENCES.items() if label == audience.get()):
@@ -260,7 +271,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         window.destroy()
 
     buttons = ttk.Frame(body)
-    buttons.grid(row=13, columnspan=2, sticky="ew", pady=(8, 0))
+    buttons.grid(row=15, columnspan=2, sticky="ew", pady=(8, 0))
     ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side="left")
     ttk.Button(buttons, text="Apply", command=save).pack(side="right")
     window.bind("<Escape>", lambda _event: window.destroy())

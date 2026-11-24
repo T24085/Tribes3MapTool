@@ -1112,3 +1112,8 @@ class IntakeTests(unittest.TestCase):
                 rows[-1]["position_cm"][2] = 500
         with self.assertRaisesRegex(ValueError, "Set a flag-only inset or draw a polygon"):
             plan_boundaries(header, terrain, rows, perimeter=False, flag_inset_m=None, flag_limits=caps)
+        _, timed, _ = plan_boundaries(header, terrain, rows, perimeter=False, flag_return_delay_s=8, **rect)
+        self.assertEqual((timed.floor, timed.ceiling, timed.return_delay_s), (None, None, 8))
+        for delay in (0, 61, -1, 1.5, True, "8"):
+            with self.subTest(delay=delay), self.assertRaisesRegex(ValueError, "whole seconds"):
+                plan_boundaries(header, terrain, rows, perimeter=False, flag_return_delay_s=delay, **polygon)

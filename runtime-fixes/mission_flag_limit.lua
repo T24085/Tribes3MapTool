@@ -1,6 +1,8 @@
 -- A cooked community map opts in with rectangle or indexed polygon TargetPoints.
 -- T3_EDITOR_FLAG_HEIGHT_LIMITS_V1
+-- T3_EDITOR_FLAG_RETURN_TIMER_V1
 local MAX_VERTICES=32
+local MAX_RETURN_SECONDS=60
 local function cross(ax,ay,bx,by)return ax*by-ay*bx end
 local function turn(a,b,p)return cross(b.X-a.X,b.Y-a.Y,p.X-a.X,p.Y-a.Y)end
 local function between(a,b,p)
@@ -74,15 +76,15 @@ return function(env)
   assert(finite(v.X)and finite(v.Y)and finite(v.Z),'mission_flag_limit_invalid_location')
   return {X=v.X,Y=v.Y,Z=v.Z}
  end
- local function tagged_number(actor,prefix,first)
+ local function tagged_number(actor,prefix,first,last)
   local result
-  for n=first,MAX_VERTICES do
+  for n=first,last or MAX_VERTICES do
    if actor:ActorHasTag(FName(prefix..n))then
-    assert(not result,'mission_flag_limit_ambiguous_polygon_tag')
+    assert(not result,'mission_flag_limit_ambiguous_numbered_marker='..prefix)
     result=n
    end
   end
-  return assert(result,'mission_flag_limit_missing_polygon_tag')
+  return assert(result,'mission_flag_limit_missing_numbered_marker='..prefix)
  end
  local function native(path,fields)
   local fn=StaticFindObject(path)
@@ -102,7 +104,7 @@ return function(env)
   local world=gm:GetWorld()
   assert(valid(world),'mission_flag_limit_world_required')
   local function in_world(actor)return valid(actor)and same(actor:GetWorld(),world)end
-  local lower,upper,floor,ceiling,required_caps
+  local lower,upper,floor,ceiling,return_delay,requirements
   local vertices,vertex_count={},nil
   for _,actor in ipairs(FindAllOf('TargetPoint')or{})do
    if in_world(actor)then
@@ -111,16 +113,18 @@ return function(env)
     local vertex=actor:ActorHasTag(FName('T3MissionFlagPolygon'))
     local floor_marker=actor:ActorHasTag(FName('T3MissionFlagFloor'))
     local ceiling_marker=actor:ActorHasTag(FName('T3MissionFlagCeiling'))
+    local return_marker=actor:ActorHasTag(FName('T3MissionFlagReturnTimer'))
     local needed=(actor:ActorHasTag(FName('T3MissionFlagNeedsFloor')) and 1 or 0)
                  +(actor:ActorHasTag(FName('T3MissionFlagNeedsCeiling')) and 2 or 0)
+                 +(actor:ActorHasTag(FName('T3MissionFlagNeedsReturnTimer')) and 4 or 0)
     local roles=(minimum and 1 or 0)+(maximum and 1 or 0)+(vertex and 1 or 0)
-               +(floor_marker and 1 or 0)+(ceiling_marker and 1 or 0)
+               +(floor_marker and 1 or 0)+(ceiling_marker and 1 or 0)+(return_marker and 1 or 0)
     assert(roles<=1,'mission_flag_limit_ambiguous_marker')
     if minimum or maximum or vertex then
-     assert(required_caps==nil or required_caps==needed,'mission_flag_limit_inconsistent_height_markers')
-     required_caps=needed
+     assert(requirements==nil or requirements==needed,'mission_flag_limit_inconsistent_rule_markers')
+     requirements=needed
     else
-     assert(needed==0,'mission_flag_limit_height_requires_outline_marker')
+     assert(needed==0,'mission_flag_limit_rule_requires_outline_marker')
     end
     if minimum then
      assert(not lower,'mission_flag_limit_duplicate_lower_marker');lower=point(actor)
@@ -137,11 +141,15 @@ return function(env)
      assert(floor==nil,'mission_flag_limit_duplicate_floor');floor=point(actor).Z
     elseif ceiling_marker then
      assert(ceiling==nil,'mission_flag_limit_duplicate_ceiling');ceiling=point(actor).Z
+    elseif return_marker then
+     assert(return_delay==nil,'mission_flag_limit_duplicate_return_timer')
+     return_delay=tagged_number(actor,'T3MissionFlagReturnSeconds',1,MAX_RETURN_SECONDS)
     end
    end
   end
   local actual_caps=(floor and 1 or 0)+(ceiling and 2 or 0)
-  assert((required_caps or 0)==actual_caps,'mission_flag_limit_incomplete_height_markers')
+  assert((requirements or 0)%4==actual_caps,'mission_flag_limit_incomplete_height_markers')
+  assert(((requirements or 0)>=4)==(return_delay~=nil),'mission_flag_limit_incomplete_return_timer')
   assert(not floor or not ceiling or floor<ceiling,'mission_flag_limit_invalid_height_range')
   if not lower and not upper and not vertex_count then return false end
   local inside_xy,crossed
@@ -163,6 +171,14 @@ return function(env)
    {'SweepHitResult','StructProperty',32},{'bTeleport','BoolProperty',264},{'ReturnValue','BoolProperty',265}})
   native('/Script/Engine.Actor:GetAttachParentActor',{{'ReturnValue','ObjectProperty',0}})
   native('/Script/Engine.Pawn:GetController',{{'ReturnValue','ObjectProperty',0}})
+  local clock
+  if return_delay then
+   local path='/Script/Engine.GameplayStatics:GetTimeSeconds'
+   local checked=pcall(native,path,{{'WorldContextObject','ObjectProperty',0},{'ReturnValue','DoubleProperty',8}})
+   if not checked then native(path,{{'WorldContextObject','ObjectProperty',0},{'ReturnValue','FloatProperty',8}}) end
+   clock=StaticFindObject('/Script/Engine.Default__GameplayStatics')
+   assert(valid(clock),'mission_flag_limit_native_clock_required')
+  end
   local pawn_class=StaticFindObject('/Script/Engine.Pawn')
   local character_class=StaticFindObject('/Script/Valhalla.ValCharacter')
   local player_class=StaticFindObject('/Script/Engine.PlayerController')
@@ -189,8 +205,14 @@ return function(env)
    end
   end
   local notice_ready
-  local function send_notice(pc,has_previous)
-   if not pc or notice_ready==false then return end
+  local messages={
+   Drop={'Flag dropped at the mission boundary.',4.0},
+   Return={'Flag returned home because you were out of bounds.',4.0},
+   Grace={'Return to the flag area before the flag returns home.',4.0},
+   GraceCleared={'Flag boundary timer cleared.',0.0},
+  }
+  local function send_notice(pc,kind)
+   if not in_world(pc) or not pc:HasAuthority() or not pc:IsA(player_class) or notice_ready==false then return end
    if not notice_ready then
     local checked,why=pcall(native,'/Script/Engine.PlayerController:ClientMessage',
                            {{'S','StrProperty',0},{'Type','NameProperty',16},{'MsgLifeTime','FloatProperty',24}})
@@ -201,11 +223,8 @@ return function(env)
     end
    end
    local ok,why=pcall(function()
-    if has_previous then
-     pc:ClientMessage('Flag dropped at the mission boundary.',FName('T3FlagBoundaryDrop'),4.0)
-    else
-     pc:ClientMessage('Flag returned home because you were out of bounds.',FName('T3FlagBoundaryReturn'),4.0)
-    end
+    local message=messages[kind]
+    pc:ClientMessage(message[1],FName('T3FlagBoundary'..kind),message[2])
    end)
    if not ok then
     report('MISSION_FLAG_LIMIT_NOTICE_UNAVAILABLE|'..tostring(why):sub(1,260))
@@ -225,21 +244,57 @@ return function(env)
    end
   end
   assert(flags[1]and flags[2],'mission_flag_limit_two_flags_required')
-  if vertex_count or actual_caps~=0 then
+  if vertex_count or actual_caps~=0 or return_delay then
    for _,flag in ipairs(flags)do assert(inside(point(flag)),'mission_flag_limit_flag_outside_boundary')end
+  end
+  local function clear_grace(sample)
+   if sample and sample.outside_since then send_notice(sample.pc,'GraceCleared') end
+  end
+  local function reset_samples()
+   for _,sample in pairs(samples)do clear_grace(sample)end
+   samples={}
+  end
+  local function update_return_timer(team,flag,current,last,continued,legal,now)
+   if not continued then clear_grace(last);last=nil end
+   local started=last and last.outside_since
+   if legal then
+    clear_grace(last)
+    samples[team]=current
+    return
+   end
+   if started then
+    assert(now>=started,'mission_flag_limit_clock_reversed')
+    if now-started>=return_delay then
+     samples[team]=nil
+     flag:Drop(false,false,true)
+     assert(not valid(flag:GetOwner()),'mission_flag_limit_native_return_failed')
+     report(('MISSION_FLAG_LIMIT_RETURN|team=%d|reason=timer_elapsed|elapsed=%.3f'):format(team,now-started))
+     send_notice(current.pc,'Return')
+     return
+    end
+   else
+    started=now
+    report(('MISSION_FLAG_LIMIT_GRACE|team=%d|seconds=%d'):format(team,return_delay))
+    send_notice(current.pc,'Grace')
+   end
+   current.outside_since=started
+   samples[team]=current
   end
   local function tick()
    if not in_world(gm)or not gm:HasAuthority()then return false end
    scope()
-   if gm:GetMatchState():ToString()~='InProgress' then samples={};return true end
+   if gm:GetMatchState():ToString()~='InProgress' then reset_samples();return true end
    local gs=gm.GameState
    if not in_world(gs)or gs.r_GameplayPhaseInfo.Phase.TagName:ToString()~='GamePhase.GameplayStartPhase' then
-    samples={};return true
+    reset_samples();return true
    end
+   local now=clock and clock:GetTimeSeconds(gm)
+   assert(not clock or finite(now) and now>=0,'mission_flag_limit_invalid_clock')
    for team,flag in ipairs(flags)do
     if not in_world(flag)or not flag:HasAuthority()then return false end
     local carrier=flag:GetOwner()
     if not carrying_pawn(carrier)then
+     clear_grace(samples[team])
      samples[team]=nil
     else
      local support=support_pawn(carrier)
@@ -254,7 +309,10 @@ return function(env)
       (same(last.support,carrier) or same(last.carrier,support)
        or (carrying_pawn(last.carrier) and same(support_pawn(last.carrier),support)))
      local previous=(same_carrier or seat_transfer) and last.location or nil
-     if inside(here)and not(crossed and previous and crossed(previous,here))then
+     if return_delay then
+      update_return_timer(team,flag,{carrier=carrier,support=support,pc=pc},last,
+                          same_carrier or seat_transfer,inside(here),now)
+     elseif inside(here)and not(crossed and previous and crossed(previous,here))then
       samples[team]={carrier=carrier,support=support,pc=pc,location=here}
      else
       samples[team]=nil
@@ -270,7 +328,7 @@ return function(env)
       else
        report('MISSION_FLAG_LIMIT_RETURN|team='..team..'|reason=no_legal_carrier_sample')
       end
-      send_notice(pc,previous~=nil)
+      send_notice(pc,previous and 'Drop' or 'Return')
      end
     end
    end

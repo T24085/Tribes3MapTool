@@ -161,6 +161,15 @@ class MissionBoundaryWarningTest(unittest.TestCase):
          stamp=19
          at(0,0,0)
          assert(not current and plays==3)
+         notice(pc,'T3FlagBoundaryGrace')
+         at(0,0,0)
+         assert(not current)
+         notice(nextPC,'T3FlagBoundaryGrace')
+         at(0,0,0)
+         assert(current and current:find('FLAG RETURN TIMER ACTIVE',1,true))
+         notice(nextPC,'T3FlagBoundaryGraceCleared')
+         at(0,0,0)
+         assert(not current and plays==3)
 
          local vehicle, spectator=object('Vehicle',world),object('Spectator',world)
          vehicle.IsA=function(_,cls)return cls==pawnClass end

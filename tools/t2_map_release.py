@@ -23,9 +23,9 @@ PLAN = 'map-release.json'
 CENTRAL = 'package-manifest.json'
 SHA = re.compile(r'[0-9a-f]{64}')
 DRAFT = re.compile(r'DraftT[12VA][0-9]{3}')
-FLAG_HEIGHT_RUNTIME = {
-    'match_roster.py': b'# T3_EDITOR_FLAG_HEIGHT_LIMITS_V1',
-    'runtime-fixes/mission_flag_limit.lua': b'-- T3_EDITOR_FLAG_HEIGHT_LIMITS_V1',
+FLAG_RUNTIME = {
+    'match_roster.py': b'# ',
+    'runtime-fixes/mission_flag_limit.lua': b'-- ',
 }
 
 
@@ -42,12 +42,12 @@ def regular_row(root, name):
     return {'bytes': after.st_size, 'sha256': digest}
 
 
-def flag_height_limits(level):
+def flag_boundary_features(level):
     # UE 5.3 stores TargetPoint tag names as length-prefixed FStrings in the cooked .umap.
     markers = {}
-    for kind in ('Floor', 'Ceiling'):
-        name = f'T3MissionFlagNeeds{kind}\0'
-        markers[kind.lower()] = (
+    for feature, suffix in (('floor', 'Floor'), ('ceiling', 'Ceiling'), ('return timer', 'ReturnTimer')):
+        name = f'T3MissionFlagNeeds{suffix}\0'
+        markers[feature] = (
             len(name).to_bytes(4, 'little') + name.encode('ascii'),
             (-len(name)).to_bytes(4, 'little', signed=True) + name.encode('utf-16-le'),
         )
@@ -62,18 +62,25 @@ def flag_height_limits(level):
     return tuple(kind for kind in markers if kind not in pending)
 
 
-def verify_flag_height_runtime(host, files):
-    message = 'Choose a verified Direct Host baseline that supports flag-only height limits.'
+def verify_flag_boundary_runtime(host, files, features):
+    capabilities = {}
+    if 'floor' in features or 'ceiling' in features:
+        capabilities['height limits'] = b'T3_EDITOR_FLAG_HEIGHT_LIMITS_V1'
+    if 'return timer' in features:
+        capabilities['return timer'] = b'T3_EDITOR_FLAG_RETURN_TIMER_V1'
+    needed = ' and '.join(capabilities)
+    message = f'Choose a verified Direct Host baseline that supports flag-only {needed}.'
     maximum = 2*1024*1024
-    for name, marker in FLAG_HEIGHT_RUNTIME.items():
+    for name, prefix in FLAG_RUNTIME.items():
         row = files.get(name)
         path = host/name
         if row is None or row['bytes'] > maximum or path.resolve() != path or not path.is_file():
             raise ValueError(message)
         with path.open('rb') as stream:
             data = stream.read(maximum + 1)
+        markers = {prefix + marker for marker in capabilities.values()}
         if (len(data) != row['bytes'] or sha256(data).hexdigest() != row['sha256']
-                or marker not in {line.strip() for line in data.splitlines()}):
+                or not markers <= {line.strip() for line in data.splitlines()}):
             raise ValueError(message)
 
 
@@ -245,8 +252,8 @@ def stage_release(package, source, destination, *, rollback=False, link_content=
     if map_id in plan[f'{new}_catalog']:
         level = f'content/Maps/Community/{map_id}/Arena_{map_id}_P.umap'
         selected = package/replacement/level if level in changes else source/level
-        if flag_height_limits(selected):
-            verify_flag_height_runtime(source, {row['path']: row for row in initial['files']})
+        if features := flag_boundary_features(selected):
+            verify_flag_boundary_runtime(source, {row['path']: row for row in initial['files']}, features)
 
     with TemporaryDirectory(dir=destination.parent) as temp:
         candidate = Path(temp) / 'host'

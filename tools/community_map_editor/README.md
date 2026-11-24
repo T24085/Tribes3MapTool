@@ -928,6 +928,8 @@ Enter a **Flag-only inset** to set a second boundary inside the mission area. Th
 
 Either flag outline can have an optional floor below the lowest terrain and a ceiling above the highest terrain. Leave a height blank to keep that direction open. The flag-only height limits use the same drop rule as the sides. Both flag stands must also clear the height limits. Direct Host export and staging check the selected host's verified runtime for support, and the export checklist lists each height to test.
 
+Set **Return flag after time outside** to give a carrier 1–60 seconds to reenter the flag area. The updated client shows a private HUD warning while the timer is active. Reentry clears it, and the flag returns home if the carrier stays outside. Leaving the field blank uses the immediate drop rule. Export and staging check for timer support in the host bundle.
+
 The carrier receives a private message after the host processes a boundary drop or return. When the character is attached to a vehicle pawn, the boundary follows the vehicle's position. A verified switch between the carrier and the vehicle preserves the same player's last in-bounds sample.
 
 For an irregular flag limit, choose **Flag-only polygon → Draw on minimap…**. Click 3–32 corners in order, then choose **Use polygon** and **Apply**. Keep the outline inside the gold mission area and each flag stand at least a metre from its edges. Concave outlines work. Use **Undo corner** or **Clear** to revise the shape.
