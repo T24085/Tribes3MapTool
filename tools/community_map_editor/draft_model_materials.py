@@ -6,7 +6,7 @@ import json
 import unreal
 
 from intake_contract import bounded
-from interior_geometry import ASCEND_STATIC_MESH, VENGEANCE_BSP, VENGEANCE_STATIC_MESH, material_slots, triangle_groups
+from interior_geometry import ASCEND_STATIC_MESH, VENGEANCE_BSP, VENGEANCE_STATIC_MESH, material_sections
 from mesh_mappings import source_reference
 from model_textures import has_shader_inputs, load_texture_index, placement_key, shader_signature
 from source_profiles import BRUSH_PREVIEW_FOLDER, BRUSH_PREVIEW_REFERENCE
@@ -253,8 +253,7 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
         lighting = lighting_index.get(filename)
         if not authored and not lighting:
             continue
-        sections = ([key for key, _ in triangle_groups(geometry, lighting)] if lighting and lighting['surfaces']
-                    else [(slot, -1, -1) for slot in material_slots(geometry)])
+        sections = material_sections(geometry, lighting)
         vengeance_destination = VENGEANCE_DESTINATIONS.get(geometry['format'])
         if reference.startswith(BRUSH_PREVIEW_REFERENCE) and reference not in moving_references:
             vengeance_destination = BRUSH_PREVIEW_FOLDER + '/Materials'

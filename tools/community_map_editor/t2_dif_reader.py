@@ -15,7 +15,31 @@ from interior_geometry import MAX_GEOMETRY_BYTES, validate_geometry
 def decode_geometry(dif, source, surface_ranges=None):
     if dif.difVersion != 44 or not dif.interiors:
         raise ValueError('Expected a Tribes 2 DIF with a primary interior.')
-    interior = dif.interiors[0]
+    primary, *secondary = dif.interiors
+    geometry = {'format': 1, 'source': source, **interior_mesh(primary, surface_ranges)}
+    if secondary:
+        materials = geometry['materials']
+        slots = {}
+        for slot, material in enumerate(materials):
+            slots.setdefault(material, slot)
+        levels = []
+        for interior in secondary:
+            mesh = interior_mesh(interior)
+            remap = []
+            for material in mesh.pop('materials'):
+                if material not in slots:
+                    slots[material] = len(materials)
+                    materials.append(material)
+                remap.append(slots[material])
+            for triangle in mesh['triangles']:
+                triangle[0] = remap[triangle[0]]
+            levels.append({'source_detail': interior.detailLevel, 'min_pixels': interior.minPixels, **mesh})
+        geometry['lods'] = {'primary': {'source_detail': primary.detailLevel, 'min_pixels': primary.minPixels},
+                            'secondary': levels}
+    return validate_geometry(geometry)
+
+
+def interior_mesh(interior, surface_ranges=None):
     vertices = [[point.x, point.y, point.z] for point in interior.points]
     materials = list(interior.materialList)
     triangles = []
@@ -62,8 +86,7 @@ def decode_geometry(dif, source, surface_ranges=None):
             triangles.append(row)
         if surface_ranges is not None and first < len(triangles):
             surface_ranges.append((surface_id, first, len(triangles) - first))
-    return validate_geometry({'format': 1, 'source': source, 'materials': materials,
-                              'vertices_m': vertices, 'triangles': triangles})
+    return {'materials': materials, 'vertices_m': vertices, 'triangles': triangles}
 
 
 def load_decoder(decoder):

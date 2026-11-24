@@ -24,6 +24,8 @@ def validate_geometry(data):
         raise ValueError('Unsupported Tribes geometry.')
     native = data['format'] in UNREAL_GEOMETRY
     fields = {'format', 'source', 'materials', 'vertices_m', 'triangles'}
+    if data['format'] == 1 and 'lods' in data:
+        fields.add('lods')
     if data['format'] == 5 or data['format'] >= 6 and 'collision' in data:
         fields.add('collision')
     if native:
@@ -80,11 +82,9 @@ def validate_geometry(data):
             or not valid_vertices(vertices, point_limit)
             or not isinstance(triangles, list) or not 1 <= len(triangles) <= 250_000):
         raise ValueError('Invalid interior mesh dimensions or materials.')
-    for row in triangles:
-        if (not isinstance(row, list) or len(row) != 10 or type(row[0]) is not int
-                or not 0 <= row[0] < len(materials) or
-                not valid_face(row[1:4], len(vertices)) or not all(finite(value, 1e6) for value in row[4:])):
-            raise ValueError('Invalid interior triangle, material, or UV.')
+    validate_mesh_triangles(triangles, len(vertices), len(materials))
+    if 'lods' in data:
+        validate_dif_lods(data['lods'], len(materials))
     if 'collision' in data:
         collision = data['collision']
         standard_fields = {'detail', 'vertices_m', 'triangles'}
@@ -102,6 +102,32 @@ def validate_geometry(data):
         if data['format'] == 7 and not animated_only_slots(data):
             raise ValueError('A version 7 DTS shape needs at least one animated-only material slot.')
     return data
+
+
+def validate_mesh_triangles(triangles, vertex_count, material_count):
+    for row in triangles:
+        if (not isinstance(row, list) or len(row) != 10 or type(row[0]) is not int
+                or not 0 <= row[0] < material_count or not valid_face(row[1:4], vertex_count)
+                or not all(finite(value, 1e6) for value in row[4:])):
+            raise ValueError('Invalid interior triangle, material, or UV.')
+
+
+def validate_dif_lods(lods, material_count):
+    def detail_value(value):
+        return type(value) is int and -(2**31) <= value < 2**31
+
+    if (not isinstance(lods, dict) or set(lods) != {'primary', 'secondary'}
+            or not isinstance(lods['primary'], dict) or set(lods['primary']) != {'source_detail', 'min_pixels'}
+            or not all(detail_value(value) for value in lods['primary'].values())
+            or not isinstance(lods['secondary'], list) or not 1 <= len(lods['secondary']) <= 63):
+        raise ValueError('Invalid DIF detail level inventory.')
+    for level in lods['secondary']:
+        if (not isinstance(level, dict) or set(level) != {'source_detail', 'min_pixels', 'vertices_m', 'triangles'}
+                or not all(detail_value(level[key]) for key in ('source_detail', 'min_pixels'))
+                or not valid_vertices(level['vertices_m'], 150_000)
+                or not isinstance(level['triangles'], list) or not 1 <= len(level['triangles']) <= 250_000):
+            raise ValueError('Invalid DIF detail level geometry.')
+        validate_mesh_triangles(level['triangles'], len(level['vertices_m']), material_count)
 
 
 def validate_simple_collision(simple, triangles):
@@ -180,7 +206,8 @@ def visible_material(data, slot):
 
 
 def material_slots(data):
-    resting = sorted({row[0] for row in data['triangles'] if visible_material(data, row[0])})
+    meshes = [data, *data.get('lods', {}).get('secondary', ())]
+    resting = sorted({row[0] for mesh in meshes for row in mesh['triangles'] if visible_material(data, row[0])})
     if data['format'] == 7:
         return resting + animated_only_slots(data)
     return resting
@@ -217,6 +244,17 @@ def triangle_groups(data, lighting=None):
         key = slot, -1 if normal is None else normal, -1 if alarm is None else alarm
         grouped.setdefault(key, []).append((row, binding[5] if binding else None))
     return sorted(grouped.items())
+
+
+def material_sections(data, lighting=None):
+    if 'lods' not in data:
+        if lighting and lighting['surfaces']:
+            return [key for key, _ in triangle_groups(data, lighting)]
+        return [(slot, -1, -1) for slot in material_slots(data)]
+    sections = [key for key, _ in triangle_groups(data, lighting)]
+    secondary = sorted({(row[0], -1, -1) for level in data['lods']['secondary'] for row in level['triangles']
+                        if visible_material(data, row[0])})
+    return sections + [key for key in secondary if key not in sections]
 
 
 def render_groups(data):

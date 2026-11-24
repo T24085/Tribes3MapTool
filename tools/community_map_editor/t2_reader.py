@@ -22,6 +22,7 @@ from mission_weather import WEATHER_FILE, mission_weather
 from model_textures import MAX_TEXTURE_BYTES, TEXTURE_FILE, TEXTURE_INDEX
 from native_terrain_paint import MAX_PAINT_PNG_BYTES, PAINT_FILE
 from sky_intake import MAX_SKY_BYTES, SKY_PNG
+from source_profiles import T2_DIF_LOD_VERSION
 from interior_lighting import LIGHTING_INDEX, LIGHTMAP_FILE, MAX_LIGHTMAP_BYTES
 from terrain_art import ART_FILE, MAX_ART_BYTES
 
@@ -521,6 +522,8 @@ def convert(source, output, mission=None, terrain=None, *, dif_decoder=None, dif
             header.update(format=9, reader="t2-mission-v9.0")
     if LIGHTING_INDEX in files:
         header.update(format=10, reader="t2-mission-v10.0")
+    if any('lods' in json.loads(files[name]) for name in header.get("interiors", {}).values()):
+        header.update(format=T2_DIF_LOD_VERSION, reader="t2-mission-v43.0")
     return publish_intake(header, files, output)
 
 

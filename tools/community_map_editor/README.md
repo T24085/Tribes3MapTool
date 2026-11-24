@@ -849,7 +849,7 @@ To bring in a source building, choose **TRIBES Map Editor → Import Tribes 2
 Interior…** and open its loose `.dif` file. Select an installed `hxDif.py`
 reader when prompted, or set `dif_decoder` to that local path in the launcher
 configuration. The import creates a reusable mesh in **Community/T2Interiors**
-with the primary interior's UVs, named material slots, and triangle collision.
+with source UVs, named material slots, and primary-detail triangle collision.
 Assign the material instances you want in Unreal. Use **Map source object to
 mesh** and filter by the source filename stem to place the asset at the
 mission's authored positions. [Compatible hxDif reader](https://github.com/RandomityGuy/io_dif)
@@ -863,6 +863,14 @@ Each decoded interior is reused across its authored placements. Existing
 manual mesh mappings take priority. Missing or ambiguous sources stay in
 the review list. Version 4 intakes carry the decoded meshes and their hashes
 so they can be reopened without the original DIFs or decoder.
+
+Version 43 intakes preserve secondary DIF geometry, UVs, material references,
+and the source's pixel thresholds. Unreal uses up to eight visible detail
+levels per mesh, including the primary one, and keeps triangle collision on
+the primary model. The importer converts the source pixel thresholds to
+Unreal screen fractions using a 720-pixel reference height. Secondary
+geometry and base-color textures are preserved. Baked normal and alarm
+lighting currently applies to the primary detail.
 
 For mission entries that explicitly name a static `.dts`, choose **DTS assets…**
 and select an installed `io_scene_dts` checkout or its `dtslib` folder. The
@@ -887,9 +895,8 @@ and DDS sources are supported. Missing and ambiguous matches stay in the
 review list. The portable v6 intake records the source and converted hashes.
 Manual project mesh mappings keep their project materials.
 
-Automatic normal maps, transparency rules, datablock-only shapes, secondary
-DIF LODs, doors, and some gameplay equipment wiring still need
-conversion.
+Automatic normal maps, transparency rules, datablock-only shapes, DIF doors,
+and some gameplay equipment wiring still need conversion.
 Confirm collision and objective clearance before cooking a mapped draft.
 
 ### Inspect imported models

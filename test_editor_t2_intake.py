@@ -732,6 +732,26 @@ class IntakeTests(unittest.TestCase):
             for item in manifest.parent.iterdir():
                 output.write(item, item.name)
         self.assertEqual(load_intake(unpack_intake(archive, self.library)), (header, terrain, rows))
+        primary = Record(**vars(interior), detailLevel=0, minPixels=144)
+        distant = Record(**{**vars(interior), "materialList": ["distant"], "surfaces": [second]},
+                         detailLevel=2, minPixels=0)
+        (self.folder / "distant.png").write_bytes(normal)
+        decoder = (lambda _raw: Record(difVersion=44, interiors=[primary, distant]), "b" * 64)
+        with patch("mission_interiors.load_decoder", return_value=decoder):
+            lod_manifest = convert(self.mission, self.library, dif_decoder=self.folder / "decoder.py")
+        lod_header, _, _ = load_intake(lod_manifest)
+        self.assertEqual(lod_header["format"], 43)
+        lod_model, _ = load_intake_geometry(lod_manifest.parent, "interior-0001.json",
+                                           lod_header["files"]["interior-0001.json"])
+        self.assertEqual(lod_model["lods"]["primary"], {"source_detail": 0, "min_pixels": 144})
+        self.assertEqual(lod_model["lods"]["secondary"][0]["source_detail"], 2)
+        self.assertEqual(lod_model["lods"]["secondary"][0]["triangles"][0][0], 1)
+        self.assertEqual(lod_model["materials"], ["floor", "distant"])
+        self.assertEqual(load_lighting_index(lod_manifest.parent, lod_header["files"]), index)
+        lod_header["format"] = 10
+        lod_manifest.write_text(json.dumps(lod_header), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "version does not match its DIF detail levels"):
+            load_intake(lod_manifest)
         record["surfaces"][0][2] = 500
         data = json.dumps(index).encode()
         (manifest.parent / LIGHTING_INDEX).write_bytes(data)

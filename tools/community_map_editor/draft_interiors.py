@@ -9,7 +9,8 @@ from tempfile import TemporaryDirectory
 import unreal
 
 from interior_geometry import (ASCEND_STATIC_MESH, UNREAL_GEOMETRY, UNREAL_STATIC_MESHES, VENGEANCE_BSP,
-                               VENGEANCE_STATIC_MESH, animated_only_slots, load_geometry, render_sections)
+                               VENGEANCE_STATIC_MESH, animated_only_slots, load_geometry, material_sections,
+                               render_sections, visible_material)
 from source_profiles import BRUSH_PREVIEW_FOLDER
 
 
@@ -17,6 +18,8 @@ FOLDERS = {1: '/Game/Community/T2Interiors', 2: '/Game/Community/T2Shapes', 3: '
            VENGEANCE_BSP: '/Game/Community/VengeanceBSP', ASCEND_STATIC_MESH: '/Game/Community/AscendMeshes',
            VENGEANCE_STATIC_MESH: '/Game/Community/VengeanceMeshes'}
 HASH_TAG = 'T3InteriorGeometryHash'
+MAX_UNREAL_LODS = 8
+DIF_REFERENCE_HEIGHT = 720
 
 
 def mesh_package(data, digest, *, brush_preview=False):
@@ -104,6 +107,58 @@ def install_simple_collision(asset, simple):
     return bool(hulls)
 
 
+def dynamic_mesh(data, lighting, texture_sizes):
+    mesh = unreal.DynamicMesh()
+    sections = []
+    for source_slot, material, vertices, uv, triangles, light_uv, normal, alarm, *extra_uv in render_sections(
+            data, lighting, texture_sizes):
+        alarm_uv = extra_uv[0] if extra_uv else ()
+        mesh.append_buffers_to_mesh(
+            unreal.GeometryScriptSimpleMeshBuffers(
+                vertices=[unreal.Vector(*value) for value in vertices],
+                uv0=[unreal.Vector2D(*value) for value in uv],
+                uv1=[unreal.Vector2D(*value) for value in light_uv],
+                uv2=[unreal.Vector2D(*value) for value in alarm_uv],
+                triangles=[unreal.IntVector(*value) for value in triangles]),
+            material_id=len(sections))
+        sections.append((source_slot, normal, alarm))
+    return mesh, sections
+
+
+def install_dif_lods(asset, data, slots, texture_sizes):
+    unreal.load_module('StaticMeshEditor')
+    editor = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
+    detail = data['lods']
+    levels = [level for level in detail['secondary'] if any(visible_material(data, row[0])
+                                                            for row in level['triangles'])]
+    if len(levels) != len(detail['secondary']) or len(levels) >= MAX_UNREAL_LODS:
+        unreal.log_warning(f"{data['source']['name']}: Some DIF levels are intake-only because they have no "
+                           "renderable surfaces or exceed Unreal's eight-level limit.")
+    indices = {key: slot for slot, key in enumerate(slots)}
+    options = unreal.GeometryScriptCopyMeshToAssetOptions(enable_recompute_normals=True,
+                                                           enable_recompute_tangents=True)
+    sizes = [1.0]
+    previous = detail['primary']
+    for index, level in enumerate(levels[:MAX_UNREAL_LODS - 1], 1):
+        model = {**data, 'vertices_m': level['vertices_m'], 'triangles': level['triangles']}
+        mesh, sections = dynamic_mesh(model, None, texture_sizes)
+        _, outcome = unreal.GeometryScript_AssetUtils.copy_mesh_to_static_mesh(
+            mesh, asset, options, unreal.GeometryScriptMeshWriteLOD(lod_index=index))
+        if outcome != unreal.GeometryScriptOutcomePins.SUCCESS or asset.get_num_sections(index) != len(sections):
+            raise ValueError(f'Unreal could not build DIF detail level {index}.')
+        source_slots = [editor.get_lod_material_slot(asset, index, section) for section in range(len(sections))]
+        if sorted(source_slots) != list(range(len(sections))):
+            raise ValueError(f'Unreal did not preserve the source material sections for DIF detail level {index}.')
+        for section, local_slot in enumerate(source_slots):
+            editor.set_lod_material_slot(asset, indices[sections[local_slot]], index, section)
+        threshold = previous['min_pixels'] / DIF_REFERENCE_HEIGHT
+        sizes.append(min(sizes[-1] - 0.0001, max(0.001, threshold)))
+        previous = level
+    if (editor.get_lod_count(asset) != len(sizes)
+            or len(sizes) > 1 and not editor.set_lod_screen_sizes(asset, sizes)):
+        raise ValueError('Unreal could not set the DIF detail transitions.')
+
+
 def build_asset(data, digest, package, lighting=None, texture_sizes=None, proxy=None, surface_materials=None,
                 *, convex_hull=None):
     assets = unreal.EditorAssetLibrary
@@ -118,21 +173,7 @@ def build_asset(data, digest, package, lighting=None, texture_sizes=None, proxy=
             raise ValueError(f'The draft model asset path is already in use: {path}')
         return asset
 
-    mesh = unreal.DynamicMesh()
-    slots = []
-    for source_slot, material, vertices, uv, triangles, light_uv, normal, alarm, *extra_uv in render_sections(
-            data, lighting, texture_sizes):
-        alarm_uv = extra_uv[0] if extra_uv else ()
-        mesh.append_buffers_to_mesh(
-            unreal.GeometryScriptSimpleMeshBuffers(
-                vertices=[unreal.Vector(*value) for value in vertices],
-                uv0=[unreal.Vector2D(*value) for value in uv],
-                uv1=[unreal.Vector2D(*value) for value in light_uv],
-                uv2=[unreal.Vector2D(*value) for value in alarm_uv],
-                triangles=[unreal.IntVector(*value) for value in triangles]),
-            material_id=len(slots))
-        suffix = f'_N{normal}_A{alarm}' if light_uv else ''
-        slots.append(material_slot_label(source_slot, material) + suffix)
+    mesh, primary = dynamic_mesh(data, lighting, texture_sizes)
     collision = data.get('collision')
     simple = collision.get('simple') if collision else None
     has_collision = collision is None or bool(collision['triangles'] or simple)
@@ -149,16 +190,21 @@ def build_asset(data, digest, package, lighting=None, texture_sizes=None, proxy=
 
     try:
         material_slots = list(asset.get_editor_property('static_materials'))
-        if len(material_slots) != len(slots):
+        if len(material_slots) != len(primary):
             raise ValueError('Unreal did not preserve the interior material slots.')
-        for slot, label in zip(material_slots, slots):
-            slot.set_editor_property('material_slot_name', label)
+        slots = material_sections(data, lighting) if 'lods' in data else primary
         if data['format'] == 7:
-            for index in animated_only_slots(data):
-                slot = unreal.StaticMaterial()
-                slot.set_editor_property('material_slot_name', material_slot_label(index, data['materials'][index]))
-                material_slots.append(slot)
+            slots += [(slot, -1, -1) for slot in animated_only_slots(data)]
+        for index, (source_slot, normal, alarm) in enumerate(slots):
+            if index == len(material_slots):
+                material_slots.append(unreal.StaticMaterial())
+            label = material_slot_label(source_slot, data['materials'][source_slot])
+            if normal >= 0 or alarm >= 0:
+                label += f'_N{normal}_A{alarm}'
+            material_slots[index].set_editor_property('material_slot_name', label)
         asset.set_editor_property('static_materials', material_slots)
+        if 'lods' in data:
+            install_dif_lods(asset, data, slots, texture_sizes)
         for index, surface in (surface_materials or {}).items():
             asset.set_material(index, surface)
         convex = simple and install_simple_collision(asset, simple)
