@@ -8,7 +8,7 @@ from zipfile import BadZipFile, ZipFile
 
 from intake_contract import MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, bounded
 from interior_geometry import MAX_GEOMETRY_BYTES
-from interior_lighting import LIGHTING_INDEX, MAX_LIGHTING_INDEX, MAX_LIGHTMAP_BYTES, MAX_LIGHTMAPS
+from interior_lighting import LIGHTING_INDEX, MAX_LIGHTING_INDEX, MAX_LIGHTMAP_BYTES, MAX_LIGHTMAPS, dif_lighting_key
 from mesh_mappings import source_reference
 from t2_dif_reader import decode_bytes, geometry_bytes, load_decoder
 
@@ -131,7 +131,7 @@ def collect_shapes(rows, source, decoder_folder, asset_root):
         return {}, {}, {}
     decoder = load_dts(decoder_folder)
     return collect_geometry(references, source, asset_root, '.dts', 'shape',
-                            lambda raw, name: (decode_dts(raw, name, decoder), None, {}))
+                            lambda raw, name: (decode_dts(raw, name, decoder), ()))
 
 
 def collect_geometry(references, source, asset_root, extension, prefix, decode):
@@ -148,7 +148,7 @@ def collect_geometry(references, source, asset_root, extension, prefix, decode):
                 if asset is None:
                     raise ValueError(f'Referenced {extension[1:].upper()} was not found.')
                 raw, basename = read_asset(asset)
-                mesh, lighting, images = decode(raw, basename)
+                mesh, records = decode(raw, basename)
                 geometry = geometry_bytes(mesh)
                 if total + len(geometry) > MAX_INTAKE_INTERIOR_BYTES:
                     raise ValueError('The intake has reached the decoded model size limit.')
@@ -159,11 +159,12 @@ def collect_geometry(references, source, asset_root, extension, prefix, decode):
             data[filename] = geometry
             found[reference] = filename
             total += len(geometry)
-            if lighting is not None:
+            for position, lighting, images in records:
                 new_images = {name: png for name, png in images.items() if name not in atlases}
                 new_bytes = sum(map(len, new_images.values()))
                 encoded = json.dumps(lighting, separators=(',', ':'), allow_nan=False).encode()
-                key = json.dumps(filename).encode() + b':'
+                binding = dif_lighting_key(filename, position)
+                key = json.dumps(binding).encode() + b':'
                 if (len(atlases) + len(new_images) > MAX_LIGHTMAPS
                         or atlas_bytes + new_bytes > MAX_LIGHTMAP_BYTES
                         or lighting_bytes + len(key) + len(encoded) + 1 > MAX_LIGHTING_INDEX - 64 * 1024):
@@ -172,7 +173,9 @@ def collect_geometry(references, source, asset_root, extension, prefix, decode):
                     lighting.pop('animation', None)
                     encoded = json.dumps(lighting, separators=(',', ':')).encode()
                     new_images, new_bytes = {}, 0
-                illumination[filename] = key + encoded
+                if lighting_bytes + len(key) + len(encoded) + 1 > MAX_LIGHTING_INDEX:
+                    raise ValueError('The intake exceeds the lighting review size limit.')
+                illumination[binding] = key + encoded
                 atlases.update(new_images)
                 atlas_bytes += new_bytes
                 lighting_bytes += len(key) + len(encoded) + 1

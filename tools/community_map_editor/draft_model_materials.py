@@ -7,6 +7,7 @@ import unreal
 
 from intake_contract import bounded
 from interior_geometry import ASCEND_STATIC_MESH, VENGEANCE_BSP, VENGEANCE_STATIC_MESH, material_sections
+from interior_lighting import model_lighting
 from mesh_mappings import source_reference
 from model_textures import has_shader_inputs, load_texture_index, placement_key, shader_signature
 from source_profiles import BRUSH_PREVIEW_FOLDER, BRUSH_PREVIEW_REFERENCE
@@ -250,7 +251,7 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
         authored = index.get(filename, {})
         if reference in variants:
             authored = {**authored, **index[reference]}
-        lighting = lighting_index.get(filename)
+        lighting = model_lighting(lighting_index, filename, geometry)
         if not authored and not lighting:
             continue
         sections = material_sections(geometry, lighting)

@@ -16,7 +16,15 @@ def decode_geometry(dif, source, surface_ranges=None):
     if dif.difVersion != 44 or not dif.interiors:
         raise ValueError('Expected a Tribes 2 DIF with a primary interior.')
     primary, *secondary = dif.interiors
-    geometry = {'format': 1, 'source': source, **interior_mesh(primary, surface_ranges)}
+
+    def read_level(interior):
+        ranges = [] if surface_ranges is not None else None
+        mesh = interior_mesh(interior, ranges)
+        if surface_ranges is not None:
+            surface_ranges.append(ranges)
+        return mesh
+
+    geometry = {'format': 1, 'source': source, **read_level(primary)}
     if secondary:
         materials = geometry['materials']
         slots = {}
@@ -24,7 +32,7 @@ def decode_geometry(dif, source, surface_ranges=None):
             slots.setdefault(material, slot)
         levels = []
         for interior in secondary:
-            mesh = interior_mesh(interior)
+            mesh = read_level(interior)
             remap = []
             for material in mesh.pop('materials'):
                 if material not in slots:
@@ -118,12 +126,18 @@ def decode_bytes(raw, name, decoder, *, include_lighting=False):
         geometry = decode_geometry(dif, source, ranges)
         if not include_lighting:
             return geometry
-        from interior_lighting import archive_lighting
-
-        lighting, images = archive_lighting(dif.interiors[0], source['sha256'], ranges)
-        return geometry, lighting, images
+        return geometry, level_lighting(dif.interiors, source['sha256'], ranges)
     except Exception as error:
         raise ValueError(f'{name} could not be decoded: {error}') from error
+
+
+def level_lighting(interiors, source_hash, ranges):
+    from interior_lighting import archive_lighting
+
+    for position, (interior, surface_ranges) in enumerate(zip(interiors, ranges, strict=True)):
+        record, images = archive_lighting(interior, source_hash, surface_ranges)
+        if record is not None:
+            yield position, record, images
 
 
 def decode(source, decoder):

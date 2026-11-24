@@ -582,7 +582,7 @@ class DraftImport:
         models = {**header.get("interiors", {}), **header.get("shapes", {})}
         if models:
             from draft_interiors import mesh_package
-            from interior_lighting import load_lighting_index
+            from interior_lighting import load_lighting_index, model_lighting
             from model_textures import has_shader_inputs, load_texture_index, shader_signature
 
             folder = self.folder
@@ -593,8 +593,8 @@ class DraftImport:
                     continue
                 digest = header["files"][filename]
                 geometry, _ = load_intake_geometry(folder, filename, digest)
-                lighting = lighting_index.get(filename)
-                if lighting and lighting["surfaces"]:
+                lighting = model_lighting(lighting_index, filename, geometry)
+                if lighting and (lighting["surfaces"] or lighting.get("lod_surfaces")):
                     version = json.dumps(lighting, separators=(",", ":"), sort_keys=True).encode()
                     digest = sha256(digest.encode() + version).hexdigest()
                 texture_sizes = {}
@@ -779,6 +779,7 @@ class DraftImport:
         source_hash = None
         if lighting_index:
             from equipment_unreal import store_source
+            from interior_lighting import alarm_switches_material, model_lighting
 
             source_hash = store_source(equipment) if equipment['equipment'] else None
             _, scopes, _ = power_context(rows)
@@ -787,8 +788,8 @@ class DraftImport:
                 ref = source_reference(row)
                 if ref not in generated_models:
                     continue
-                record = lighting_index.get(generated_models[ref][0])
-                if record and any(alarm is not None and alarm != normal for _, _, _, normal, alarm, _ in record['surfaces']):
+                filename, geometry = generated_models[ref]
+                if alarm_switches_material(model_lighting(lighting_index, filename, geometry)):
                     group = scopes.get(row['id'])
                     lighting[row['id']] = (source_hash, group if group in generator_groups else None)
         native_modes = {path: (geometry["render"], bool(geometry["collision"]["triangles"]

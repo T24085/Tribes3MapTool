@@ -19,8 +19,9 @@ from conversion_window import coverage_status
 from batch_rebuild import compare_drafts, create_batch, load_batch, save_batch
 from conversion_rules import checksum, create_snapshot, draft_rules_path, edit_scope, history, profile_config, selectors, write
 from intake_contract import BOUNDARY_RECIPE, PLAYABLE_BOUNDS, load_intake, load_intake_geometry, playable_bounds
-from interior_geometry import render_sections
-from interior_lighting import LIGHTING_INDEX, lighting_summary, load_lighting_index
+from interior_geometry import dif_detail_lighting, dif_detail_mesh, material_sections, render_sections
+from interior_lighting import (LIGHTING_INDEX, alarm_switches_material, lighting_coverage, lighting_summary,
+                               load_lighting_index, model_lighting)
 from map_pipeline import PipelineRun, pipeline_config, validate_pipeline
 from mesh_mappings import placements, source_reference, source_transform
 from mission_weather import cloud_layers, precipitation_emitters
@@ -654,7 +655,7 @@ class IntakeTests(unittest.TestCase):
                                         "dif_version": 44, "lod": 0},
                 "materials": ["floor"], "vertices_m": [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
                 "triangles": [[0, 0, 1, 2, 0, 0, 1, 0, 0, 1]],
-            }, None, {}
+            }, ()
 
         with patch("mission_interiors.load_decoder", return_value="fixture reader"), \
                 patch("mission_interiors.decode_bytes", side_effect=decode) as reader:
@@ -733,7 +734,9 @@ class IntakeTests(unittest.TestCase):
                 output.write(item, item.name)
         self.assertEqual(load_intake(unpack_intake(archive, self.library)), (header, terrain, rows))
         primary = Record(**vars(interior), detailLevel=0, minPixels=144)
-        distant = Record(**{**vars(interior), "materialList": ["distant"], "surfaces": [second]},
+        distant = Record(**{**vars(interior), "materialList": ["distant"], "surfaces": [second],
+                            "lightMaps": [], "hasAlarmState": 0, "animatedLights": [],
+                            "normalLMapIndices": [], "alarmLMapIndices": []},
                          detailLevel=2, minPixels=0)
         (self.folder / "distant.png").write_bytes(normal)
         decoder = (lambda _raw: Record(difVersion=44, interiors=[primary, distant]), "b" * 64)
@@ -752,6 +755,38 @@ class IntakeTests(unittest.TestCase):
         lod_manifest.write_text(json.dumps(lod_header), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "version does not match its DIF detail levels"):
             load_intake(lod_manifest)
+
+        distant.hasAlarmState = 1
+        distant.lightMaps = [Record(lightmap=direction), Record(lightmap=alarm)]
+        distant.normalLMapIndices, distant.alarmLMapIndices = [0], [1]
+        with patch("mission_interiors.load_decoder", return_value=decoder):
+            multi = convert(self.mission, self.library, dif_decoder=self.folder / "decoder.py")
+        multi_header, _, _ = load_intake(multi)
+        self.assertEqual(multi_header["format"], 44)
+        name = "interior-0001.json"
+        multi_index = load_lighting_index(multi.parent, multi_header["files"])
+        self.assertEqual(set(multi_index), {name, f"{name}#1"})
+        self.assertEqual(multi_index[f"{name}#1"]["surfaces"], [[0, 0, 1, 0, 1, [0, 2, .25, .125, .25, .5]]])
+        detail_only = model_lighting({f"{name}#1": multi_index[f"{name}#1"]}, name, lod_model)
+        self.assertTrue(alarm_switches_material(detail_only))
+        self.assertEqual(lighting_coverage(multi_index)[name], {"normal_surfaces": 2, "alarm_surfaces": 2, "levels": 2})
+        complete = model_lighting(multi_index, name, lod_model)
+        self.assertEqual(material_sections(lod_model, complete), [(0, -1, -1), (0, 0, 1), (1, 2, 1)])
+        level = dif_detail_mesh(lod_model, lod_model["lods"]["secondary"][0])
+        section, = render_sections(level, dif_detail_lighting(complete, 1))
+        self.assertEqual(section[-3:], ([(.25, .5), (.5, .5), (.25, .5)], 2, 1))
+        with zipfile.ZipFile(archive, "w") as output:
+            for item in multi.parent.iterdir():
+                output.write(item, item.name)
+        self.assertEqual(load_intake(unpack_intake(archive, self.library))[0], multi_header)
+        multi_index[f"{name}#1"]["surfaces"][0][2] = 2
+        data = json.dumps(multi_index).encode()
+        (multi.parent / LIGHTING_INDEX).write_bytes(data)
+        multi_header["files"][LIGHTING_INDEX] = hashlib.sha256(data).hexdigest()
+        multi.write_text(json.dumps(multi_header), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Invalid interior lightmap surface binding"):
+            load_intake(multi)
+
         record["surfaces"][0][2] = 500
         data = json.dumps(index).encode()
         (manifest.parent / LIGHTING_INDEX).write_bytes(data)

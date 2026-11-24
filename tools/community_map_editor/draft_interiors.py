@@ -9,8 +9,8 @@ from tempfile import TemporaryDirectory
 import unreal
 
 from interior_geometry import (ASCEND_STATIC_MESH, UNREAL_GEOMETRY, UNREAL_STATIC_MESHES, VENGEANCE_BSP,
-                               VENGEANCE_STATIC_MESH, animated_only_slots, load_geometry, material_sections,
-                               render_sections, visible_material)
+                               VENGEANCE_STATIC_MESH, animated_only_slots, dif_detail_lighting, dif_detail_mesh,
+                               load_geometry, material_sections, render_sections, visible_material)
 from source_profiles import BRUSH_PREVIEW_FOLDER
 
 
@@ -125,12 +125,12 @@ def dynamic_mesh(data, lighting, texture_sizes):
     return mesh, sections
 
 
-def install_dif_lods(asset, data, slots, texture_sizes):
+def install_dif_lods(asset, data, slots, lighting, texture_sizes):
     unreal.load_module('StaticMeshEditor')
     editor = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
     detail = data['lods']
-    levels = [level for level in detail['secondary'] if any(visible_material(data, row[0])
-                                                            for row in level['triangles'])]
+    levels = [(position, level) for position, level in enumerate(detail['secondary'], 1)
+              if any(visible_material(data, row[0]) for row in level['triangles'])]
     if len(levels) != len(detail['secondary']) or len(levels) >= MAX_UNREAL_LODS:
         unreal.log_warning(f"{data['source']['name']}: Some DIF levels are intake-only because they have no "
                            "renderable surfaces or exceed Unreal's eight-level limit.")
@@ -139,9 +139,9 @@ def install_dif_lods(asset, data, slots, texture_sizes):
                                                            enable_recompute_tangents=True)
     sizes = [1.0]
     previous = detail['primary']
-    for index, level in enumerate(levels[:MAX_UNREAL_LODS - 1], 1):
-        model = {**data, 'vertices_m': level['vertices_m'], 'triangles': level['triangles']}
-        mesh, sections = dynamic_mesh(model, None, texture_sizes)
+    for index, (position, level) in enumerate(levels[:MAX_UNREAL_LODS - 1], 1):
+        model = dif_detail_mesh(data, level)
+        mesh, sections = dynamic_mesh(model, dif_detail_lighting(lighting, position), texture_sizes)
         _, outcome = unreal.GeometryScript_AssetUtils.copy_mesh_to_static_mesh(
             mesh, asset, options, unreal.GeometryScriptMeshWriteLOD(lod_index=index))
         if outcome != unreal.GeometryScriptOutcomePins.SUCCESS or asset.get_num_sections(index) != len(sections):
@@ -204,7 +204,7 @@ def build_asset(data, digest, package, lighting=None, texture_sizes=None, proxy=
             material_slots[index].set_editor_property('material_slot_name', label)
         asset.set_editor_property('static_materials', material_slots)
         if 'lods' in data:
-            install_dif_lods(asset, data, slots, texture_sizes)
+            install_dif_lods(asset, data, slots, lighting, texture_sizes)
         for index, surface in (surface_materials or {}).items():
             asset.set_material(index, surface)
         convex = simple and install_simple_collision(asset, simple)

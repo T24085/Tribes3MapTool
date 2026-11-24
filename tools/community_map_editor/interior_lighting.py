@@ -36,6 +36,10 @@ def number(value):
     return type(value) in (float, int) and abs(value) <= 1e6
 
 
+def dif_lighting_key(filename, level):
+    return f"{filename}#{level}" if level else filename
+
+
 def archive_lighting(interior, source_hash, ranges):
     from mission_textures import rgba_png
 
@@ -43,7 +47,7 @@ def archive_lighting(interior, source_hash, ranges):
     atlas_bytes = 0
     source_atlases = getattr(interior, "lightMaps", ()) or ()
     if len(source_atlases) > MAX_LIGHTMAPS:
-        review.append("The primary interior exceeds the number of supported lightmap atlases.")
+        review.append("This detail level exceeds the number of supported lightmap atlases.")
     for index, atlas in enumerate(source_atlases[:MAX_LIGHTMAPS]):
         record = {}
         for field, attr in (("color", "lightmap"), ("direction", "lightdirmap")):
@@ -59,7 +63,7 @@ def archive_lighting(interior, source_hash, ranges):
                 name = f"lightmap_{digest[:32]}.png"
                 if name not in images:
                     if atlas_bytes + len(png) > MAX_LIGHTMAP_BYTES:
-                        raise ValueError("The primary interior reached the lightmap size limit.")
+                        raise ValueError("This detail level reached the lightmap size limit.")
                     atlas_bytes += len(png)
                 record[field] = {"file": name, "source_sha256": sha256(raw).hexdigest()}
                 images[name] = png
@@ -262,6 +266,49 @@ def load_lighting_index(folder, inventory):
     if sha256(data).hexdigest() != inventory[LIGHTING_INDEX]:
         raise ValueError("Intake checksum mismatch: " + LIGHTING_INDEX)
     return json.loads(data)
+
+
+def model_lighting(index, filename, geometry):
+    primary = index.get(filename)
+    levels = geometry.get("lods", {}).get("secondary", ())
+    secondary = {position: index[key] for position in range(1, len(levels) + 1)
+                 if (key := dif_lighting_key(filename, position)) in index}
+    if not secondary:
+        return primary
+    atlases = list(primary["atlases"]) if primary else []
+    known = {json.dumps(atlas, sort_keys=True): slot for slot, atlas in enumerate(atlases)}
+    lod_surfaces = {}
+    for position, record in secondary.items():
+        slots = {}
+        for slot, atlas in enumerate(record["atlases"]):
+            key = json.dumps(atlas, sort_keys=True)
+            if key not in known:
+                known[key] = len(atlases)
+                atlases.append(atlas)
+            slots[slot] = known[key]
+        lod_surfaces[position] = [
+            [surface, first, count, slots.get(normal), slots.get(alarm), uv]
+            for surface, first, count, normal, alarm, uv in record["surfaces"]
+        ]
+    return {**(primary or {}), "atlases": atlases, "surfaces": primary["surfaces"] if primary else [],
+            "lod_surfaces": lod_surfaces}
+
+
+def alarm_switches_material(lighting):
+    return bool(lighting and any(alarm is not None and alarm != normal
+                                for surfaces in (lighting["surfaces"], *lighting.get("lod_surfaces", {}).values())
+                                for _, _, _, normal, alarm, _ in surfaces))
+
+
+def lighting_coverage(index):
+    models = {}
+    for key, record in index.items():
+        filename, _, _ = key.partition("#")
+        values = models.setdefault(filename, {"normal_surfaces": 0, "alarm_surfaces": 0, "levels": 0})
+        values["normal_surfaces"] += sum(row[3] is not None for row in record["surfaces"])
+        values["alarm_surfaces"] += sum(row[4] is not None for row in record["surfaces"])
+        values["levels"] += bool(record["surfaces"])
+    return models
 
 
 def lighting_summary(record):

@@ -11,6 +11,7 @@ from t1_dts_motion import validate_motion
 
 MAX_GEOMETRY_BYTES = 16 * 1024 * 1024
 MAX_CONVEX_POINTS = 256
+MAX_DIF_LEVELS = 64
 TOOL_MATERIALS = {'null', 'origin', 'trigger', 'forcefield'}
 VENGEANCE_BSP = 8
 ASCEND_STATIC_MESH = 9
@@ -119,7 +120,7 @@ def validate_dif_lods(lods, material_count):
     if (not isinstance(lods, dict) or set(lods) != {'primary', 'secondary'}
             or not isinstance(lods['primary'], dict) or set(lods['primary']) != {'source_detail', 'min_pixels'}
             or not all(detail_value(value) for value in lods['primary'].values())
-            or not isinstance(lods['secondary'], list) or not 1 <= len(lods['secondary']) <= 63):
+            or not isinstance(lods['secondary'], list) or not 1 <= len(lods['secondary']) < MAX_DIF_LEVELS):
         raise ValueError('Invalid DIF detail level inventory.')
     for level in lods['secondary']:
         if (not isinstance(level, dict) or set(level) != {'source_detail', 'min_pixels', 'vertices_m', 'triangles'}
@@ -252,9 +253,22 @@ def material_sections(data, lighting=None):
             return [key for key, _ in triangle_groups(data, lighting)]
         return [(slot, -1, -1) for slot in material_slots(data)]
     sections = [key for key, _ in triangle_groups(data, lighting)]
-    secondary = sorted({(row[0], -1, -1) for level in data['lods']['secondary'] for row in level['triangles']
-                        if visible_material(data, row[0])})
+    secondary = set()
+    for position, level in enumerate(data['lods']['secondary'], 1):
+        model = dif_detail_mesh(data, level)
+        secondary.update(key for key, _ in triangle_groups(model, dif_detail_lighting(lighting, position)))
+    secondary = sorted(secondary)
     return sections + [key for key in secondary if key not in sections]
+
+
+def dif_detail_mesh(data, level):
+    return {'format': data['format'], 'materials': data['materials'],
+            'vertices_m': level['vertices_m'], 'triangles': level['triangles']}
+
+
+def dif_detail_lighting(lighting, position):
+    surfaces = lighting.get('lod_surfaces', {}).get(position) if lighting else None
+    return {'surfaces': surfaces} if surfaces else None
 
 
 def render_groups(data):

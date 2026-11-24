@@ -13,7 +13,7 @@ from conversion_rules import checksum, sha256_file, write
 from boundary_polygon_window import show_polygon
 from intake_contract import load_intake, playable_bounds
 from map_pipeline import PipelineRun, pipeline_config
-from interior_lighting import lighting_summary, load_lighting_index
+from interior_lighting import lighting_coverage, load_lighting_index
 from mesh_mappings import placements, source_reference
 from minimap import export_host_minimap, framing, terrain_pixels, view_transform
 from mission_equipment import mission_equipment, power_context
@@ -689,8 +689,10 @@ def run(library, meshes=(), drafts=()):
                 if texture_issue:
                     reason += " " + texture_issue
                 if lighting:
+                    level_label = "level" if lighting["levels"] == 1 else "levels"
                     reason += (f" Baked lighting for {lighting['normal_surfaces']:,} normal and "
-                               f"{lighting['alarm_surfaces']:,} alarm surfaces. Power and animation need review.")
+                               f"{lighting['alarm_surfaces']:,} alarm surfaces across "
+                               f"{lighting['levels']} detail {level_label}. Power and animation need review.")
             elif reference in state.get("model_review", {}):
                 reason = state["model_review"][reference]
             elif weather:
@@ -800,8 +802,7 @@ def run(library, meshes=(), drafts=()):
         state["rule_source"] = (header, rows)
         state["models"] = {**header.get("interiors", {}), **header.get("shapes", {})}
         state["model_review"] = {**header.get("interior_review", {}), **header.get("shape_review", {})}
-        state["lighting"] = {name: lighting_summary(record) for name, record in
-                             load_lighting_index(path.resolve().parent, header["files"]).items()}
+        state["lighting"] = lighting_coverage(load_lighting_index(path.resolve().parent, header["files"]))
         state["textures"] = load_texture_index(path.resolve().parent, header["files"])
         equipment = mission_equipment(rows, terrain)
         state["equipment"] = {row["source_id"]: row for row in equipment["equipment"]}

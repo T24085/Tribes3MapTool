@@ -869,8 +869,15 @@ and the source's pixel thresholds. Unreal uses up to eight visible detail
 levels per mesh, including the primary one, and keeps triangle collision on
 the primary model. The importer converts the source pixel thresholds to
 Unreal screen fractions using a 720-pixel reference height. Secondary
-geometry and base-color textures are preserved. Baked normal and alarm
-lighting currently applies to the primary detail.
+geometry and base-color textures are preserved.
+
+Version 44 intakes also carry secondary normal and alarm lightmaps. In
+`interior-lighting.json`, the primary detail uses its model filename
+and later records append the one-based secondary position, such as
+`interior-0001.json#1`. Each record keeps its own surface indices,
+projection, atlases, and decoder-exposed animation tables. Unreal uses the
+corresponding material and lightmap UVs at each visible detail level.
+An authored generator circuit switches every material on that building.
 
 For mission entries that explicitly name a static `.dts`, choose **DTS assets…**
 and select an installed `io_scene_dts` checkout or its `dtslib` folder. The

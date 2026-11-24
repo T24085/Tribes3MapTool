@@ -30,7 +30,9 @@ the property inspector, and the feature coverage view.
 The Tribes 2 DIF importer preserves secondary detail meshes in version 43
 intakes. A three-level authored DIF passed import, draft reopen, and Windows
 cook in UE 5.3.1, with the original material assignments and primary-detail
-collision.
+collision. Version 44 intakes also retain baked normal and alarm lightmaps
+for each detail level. Unreal rendered both states at all three levels and
+cooked the map, materials, and color atlases for Windows.
 
 The stock Unreal workspace can use **Build for Direct Host** after importing a draft. Select a verified Direct Host bundle that supports standard Unreal World Settings. Offline playtesting uses the separate game-compatible setup described in the editor guide.
 
