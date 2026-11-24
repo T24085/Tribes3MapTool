@@ -31,6 +31,12 @@ Minimap-bearing drafts require a Direct Host bundle whose game launcher
 supports portable minimaps. Export and staging check the inventoried
 launcher and reader before publishing the bundle.
 
+A connected headless client joined the Tribes 2 fixture from its cached
+map. After the test moved the player's pawn to the flag and capture
+zones, the host recorded the pickup, advanced the score from zero to
+one, and reset the flag at home. The host and client both shut down
+under their original process owners.
+
 ## Flag boundary verification
 
 An Unreal Engine 5.3 draft with a three-second flag return timer passed a Windows cook, Direct Host export, staging and rollback checks. In an offline match, reentry cleared the warning and kept the flag with the carrier. A second exit returned the flag home after 3.034 seconds and displayed the HUD notice. A later windowed capture confirmed that the warning sits below the match-start announcement.
