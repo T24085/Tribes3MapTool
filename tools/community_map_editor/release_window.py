@@ -59,6 +59,7 @@ def show_releases(library, draft=None, release_tool=None):
     entries, live = {}, {}
     busy = False
     service = None
+    batch_tool = release_tool.with_name("t2_map_batch_release.py") if release_tool is not None else None
 
     def chosen(table):
         selection = table.selection()
@@ -84,8 +85,11 @@ def show_releases(library, draft=None, release_tool=None):
         connect_button.configure(state="disabled" if busy else "normal")
         release_ready = (local_ready and release_tool is not None and release_tool.is_file()
                          and (Path(entry["folder"]) / "map-release.json").is_file())
-        for control in (stage_button, rollback_button, links_control):
+        for control in (stage_button, rollback_button):
             control.configure(state="normal" if release_ready else "disabled")
+        batch_ready = not busy and batch_tool is not None and batch_tool.is_file()
+        batch_button.configure(state="normal" if batch_ready else "disabled")
+        links_control.configure(state="normal" if release_ready or batch_ready else "disabled")
 
     def refresh_staged(select_id=None):
         staged.delete(*staged.get_children())
@@ -207,12 +211,33 @@ def show_releases(library, draft=None, release_tool=None):
         if not output:
             return
         destination = Path(output) / f"{entry['draft']}-{action}-{entry['files_sha256'][:10]}"
-        argv = [sys.executable, "-E", "-X", "utf8", str(release_tool), action, entry["folder"], source, str(destination)]
+        stage_copy(release_tool, (action, entry["folder"], source), destination,
+                   preflight=lambda: verify_release(entry))
+
+    def prepare_batch_bundle():
+        folder = filedialog.askdirectory(parent=window, mustexist=True,
+                                          title="Choose the completed batch export folder")
+        if not folder:
+            return
+        folder = Path(folder)
+        if not (folder / "results.json").is_file():
+            status.set("Choose the batch export folder containing results.json.")
+            return
+        source = filedialog.askdirectory(parent=window, mustexist=True, title="Choose the original Direct Host baseline")
+        if not source:
+            return
+        output = filedialog.askdirectory(parent=window, mustexist=True, title="Choose a folder for the separate staging copy")
+        if output:
+            stage_copy(batch_tool, (str(folder), source), Path(output) / f"{folder.name}-host")
+
+    def stage_copy(tool, inputs, destination, *, preflight=None):
+        argv = [sys.executable, "-E", "-X", "utf8", str(tool), *inputs, str(destination)]
         if links.get():
             argv.append("--link-content")
 
         def build():
-            verify_release(entry)
+            if preflight is not None:
+                preflight()
             result = subprocess.run(argv, capture_output=True, encoding="utf-8", errors="replace", check=False)
             if result.returncode:
                 raise ValueError(result.stderr.strip()[-700:] or "The staging copy could not be verified.")
@@ -231,9 +256,10 @@ def show_releases(library, draft=None, release_tool=None):
     for button in (add_button, verify_button, compare_button, copy_button):
         button.pack(side="left", padx=(0, 8))
     stage_button = ttk.Button(staging, text="Stage release…", command=lambda: prepare_bundle("stage"))
+    batch_button = ttk.Button(staging, text="Stage batch bundle…", command=prepare_batch_bundle)
     rollback_button = ttk.Button(staging, text="Stage rollback…", command=lambda: prepare_bundle("rollback"))
     links_control = ttk.Checkbutton(staging, text="Hardlink unchanged cooked files on the same drive", variable=links)
-    for control in (stage_button, rollback_button, links_control):
+    for control in (stage_button, batch_button, rollback_button, links_control):
         control.pack(side="left", padx=(0, 8))
     for widget in (staged, current):
         widget.bind("<<TreeviewSelect>>", selection_changed)

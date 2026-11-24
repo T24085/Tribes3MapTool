@@ -787,6 +787,19 @@ Direct Host compatibility checks on each. The output contains a portable
 folder for each map, with its receipt, minimap when available, and
 playtest checklist. The outer `results.json` lists the verified packages.
 
+To put the whole batch on one host, open **Map Releases… → Stage batch
+bundle…**. Select the completed export folder containing `results.json`,
+the same Direct Host baseline, and a parent folder for the new bundle.
+The tool keeps matching shared files once and rejects conflicting copies.
+It checks that the combined catalog contains the batch and preserves the
+existing maps. Keep the original baseline for rollback.
+
+The standalone checkout also provides a command-line entry point.
+
+```powershell
+py -3.13 -B tools/t2_map_batch_release.py "<completed batch folder>" "<baseline bundle>" "<new staging folder>"
+```
+
 **Resume cook & stage…** uses the same saved inputs and baseline. Already
 exported packages are verified and reused. Use **New staging run…** with
 a new output location if you changed a draft or the baseline. The earlier
