@@ -15,6 +15,9 @@ from intake_contract import bounded
 SOURCE_TAG = 'T3EquipmentSource_'
 INTAKE_TAG = 'T3EquipmentIntake_'
 APPROVED = 'T3EquipmentApproved'
+SHIELD_GROUP = 'T3ShieldCircuit_'
+SHIELD_LOSS = 'T3ShieldPowerLoss_'
+SHIELD_POLICIES = {'drop', 'weaken', 'stay'}
 ROLES = {'generator', 'sensor', 'base_turret', 'force_shield'}
 INTERIOR = 'T3BakedInterior'
 INTERIOR_INTAKE = 'T3InteriorPowerIntake_'
@@ -56,6 +59,71 @@ def marker_identity(actor):
             or not re.fullmatch(r'[1-9][0-9]{0,4}', source[0]) or not re.fullmatch('[a-f0-9]{64}', intake[0])):
         raise ValueError(f'{actor.get_actor_label()} has no bound equipment source. Import the T2 intake into a new draft to bind its markers.')
     return int(source[0]), intake[0]
+
+
+def read_source(sha):
+    raw = bounded(source_folder()/(sha+'.json'), 16*1024*1024)
+    if hashlib.sha256(raw).hexdigest() != sha:
+        raise ValueError('The saved equipment source no longer matches the draft markers.')
+    return raw, {row['source_id']: row for row in json.loads(raw)['equipment']}
+
+
+def shield_settings(actor):
+    tags = list(map(str, actor.tags))
+    groups = [tag[len(SHIELD_GROUP):] for tag in tags if tag.startswith(SHIELD_GROUP)]
+    policies = [tag[len(SHIELD_LOSS):] for tag in tags if tag.startswith(SHIELD_LOSS)]
+    if (len(groups) > 1 or len(policies) > 1
+            or groups and not re.fullmatch(r'(?:0|[1-9][0-9]{0,4})', groups[0])
+            or policies and policies[0] not in SHIELD_POLICIES):
+        raise ValueError(f'{actor.get_actor_label()} has invalid shield power settings.')
+    settings = {}
+    if groups:
+        settings['shield_power_group'] = int(groups[0])
+    if policies:
+        settings['on_power_loss'] = policies[0]
+    return settings
+
+
+def set_shield_settings(selected, setting):
+    if not selected:
+        raise ValueError('Select one or more shield opening boxes.')
+    records = [(actor, *marker_identity(actor)) for actor in selected]
+    sources = {sha: read_source(sha)[1] for sha in {sha for _, _, sha in records}}
+    shields, generators = [], []
+    for actor, ident, sha in records:
+        row = sources[sha].get(ident, {})
+        if row.get('role') == 'force_shield' and isinstance(actor, unreal.TriggerBox):
+            shields.append((actor, row, sha))
+        elif setting == 'link' and row.get('role') == 'generator' and isinstance(actor, unreal.TargetPoint):
+            generators.append((row, sha))
+        else:
+            raise ValueError('Use shield opening boxes and, when linking, one generator marker.')
+    if not shields:
+        raise ValueError('Select at least one shield opening box.')
+    if setting in SHIELD_POLICIES:
+        prefix, value = SHIELD_LOSS, setting
+    else:
+        prefix = SHIELD_GROUP
+        if setting == 'link':
+            if len(generators) != 1:
+                raise ValueError('Select exactly one generator with the shield opening boxes.')
+            generator, source = generators[0]
+            value = generator['power_group']
+            if value is None or not generator['team'] or any(
+                sha != source or shield['team'] != generator['team'] for _, shield, sha in shields
+            ):
+                raise ValueError('Link shields to a same-team generator circuit from the same intake.')
+        elif setting in ('unlink', 'source'):
+            value = 0 if setting == 'unlink' else None
+        else:
+            raise ValueError('Unknown shield power setting.')
+    with unreal.ScopedEditorTransaction('Set force shield power'):
+        for actor, _, _ in shields:
+            tags = [tag for tag in map(str, actor.tags) if not tag.startswith(prefix)]
+            if value is not None:
+                tags.append(prefix + str(value))
+            actor.modify()
+            actor.set_editor_property('tags', tags)
 
 
 def mark_interior_lighting(actor, source_hash, group):
@@ -155,16 +223,13 @@ def review(world, actors, map_id, *, interiors=()):
     if len(hashes) != 1:
         raise ValueError('Approved equipment must come from one T2 intake.')
     sha, = hashes
-    raw = bounded(source_folder()/(sha+'.json'), 16*1024*1024)
-    if hashlib.sha256(raw).hexdigest() != sha:
-        raise ValueError('The saved equipment source no longer matches the draft markers.')
-    source = {row['source_id']: row for row in json.loads(raw)['equipment']}
+    raw, source = read_source(sha)
     finish_support_compilation()
     placements = []
     for (ident, _), actor in sorted(identities.items()):
         record = source.get(ident)
-        if not record or record['role'] not in ROLES or not record['team'] or record['power_group'] is None:
-            raise ValueError(f'{actor.get_actor_label()} needs a supported native role and an authored team power group.')
+        if not record or record['role'] not in ROLES or not record['team']:
+            raise ValueError(f'{actor.get_actor_label()} needs a supported native role and an authored team.')
         point = actor.get_actor_location()
         rotation = actor.get_actor_rotation()
         placement = dict(source_id=ident, anchor_position_cm=list(point.to_tuple()), yaw_degrees=rotation.yaw)
@@ -178,9 +243,14 @@ def review(world, actors, map_id, *, interiors=()):
                     or any(abs(angle) > .1 for angle in (rotation.pitch, rotation.roll))):
                 raise ValueError(f'{actor.get_actor_label()} needs an upright opening box with positive width and height.')
             placement['half_size_cm'] = [extent.y, extent.z]
+            placement.update(shield_settings(actor))
+            if placement.get('shield_power_group', record['power_group']) is None:
+                raise ValueError(f'Link {actor.get_actor_label()} to a generator or set it to independent power.')
             foot = point - unreal.Vector(0, 0, extent.z)
         elif not isinstance(actor, unreal.TargetPoint):
             raise ValueError(f'{actor.get_actor_label()} needs a point marker for its native equipment role.')
+        elif record['power_group'] is None:
+            raise ValueError(f'{actor.get_actor_label()} needs an authored team power group.')
         result = unreal.SystemLibrary.line_trace_single(
             world, foot+unreal.Vector(0, 0, 30), foot-unreal.Vector(0, 0, 240),
             unreal.TraceTypeQuery.TRACE_TYPE_QUERY1, True, [actor], unreal.DrawDebugTrace.NONE, True,

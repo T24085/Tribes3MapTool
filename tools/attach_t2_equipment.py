@@ -87,10 +87,19 @@ def native_layout(equipment, review):
         source_role = source.get('role')
         role, native_class = CLASSES.get(source_role, (None, None)) if isinstance(source_role, str) else (None, None)
         team, group_id = source.get('team'), source.get('power_group')
-        group = power.get(group_id) if type(group_id) is int else None
         if (role is None or type(team) is not int or team not in (1, 2) or source.get('transform') is None
-                or group is None or group.get('team') != team):
-            raise ValueError(f'Source object {source_id} needs a native role, valid transform and team power group.')
+                or role != 'shield' and {'shield_power_group', 'on_power_loss'} & approved.keys()):
+            raise ValueError(f'Source object {source_id} needs a native role, valid transform and team.')
+        if role == 'shield':
+            group_id = approved.get('shield_power_group', group_id)
+            if 'shield_power_group' in approved and (type(group_id) is not int or not 0 <= group_id <= 50000):
+                raise ValueError(f'Source shield {source_id} has an invalid circuit link.')
+        independent = role == 'shield' and type(group_id) is int and group_id == 0 and 'shield_power_group' in approved
+        group_key = f'T2IndependentShieldTeam{team}' if independent else f'T2Group{group_id}'
+        group = (dict(team=team, declared_power=True, generators=[])
+                 if independent else power.get(group_id) if type(group_id) is int else None)
+        if group is None or group.get('team') != team:
+            raise ValueError(f'Source object {source_id} needs a team power group.')
         providers = group.get('generators')
         if (not isinstance(providers, list) or len(providers) > 3
                 or any(type(key) is not int or key not in sources for key in providers)
@@ -117,7 +126,6 @@ def native_layout(equipment, review):
         if actor in geometry and geometry[actor] != support:
             raise ValueError(f'Conflicting geometry for support actor {actor}.')
         ident = f'T2Object{source_id}'
-        group_key = f'T2Group{group_id}'
         geometry[actor] = support
         used_groups[group_key] = dict(team=team, mode=mode)
         if role == 'shield':
@@ -125,8 +133,14 @@ def native_layout(equipment, review):
             if (not isinstance(half_size, list) or len(half_size) != 2
                     or not all(bounded_number(n, 1000) and n > 0 for n in half_size)):
                 raise ValueError(f'Source shield {source_id} needs a reviewed doorway width and height.')
-            shields.append(dict(id=ident, team=team, position_cm=anchor, yaw_degrees=yaw,
-                                half_size_cm=half_size, power_group=group_key))
+            policy = approved.get('on_power_loss', 'drop')
+            if policy not in ('drop', 'weaken', 'stay'):
+                raise ValueError(f'Source shield {source_id} has an invalid power-loss setting.')
+            shield = dict(id=ident, team=team, position_cm=anchor, yaw_degrees=yaw,
+                          half_size_cm=half_size, power_group=group_key)
+            if policy != 'drop':
+                shield['on_power_loss'] = policy
+            shields.append(shield)
             continue
         if 'half_size_cm' in approved:
             raise ValueError(f'Source object {source_id} is not a shield opening.')

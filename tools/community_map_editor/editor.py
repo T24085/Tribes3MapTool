@@ -521,12 +521,20 @@ def set_equipment_approval(approved):
     set_approval(world(), ACTORS.get_selected_level_actors(), draft_id(), approved)
 
 
+def set_shield_power(setting):
+    from equipment_unreal import set_shield_settings
+
+    draft_id()
+    set_shield_settings(ACTORS.get_selected_level_actors(), setting)
+
+
 def action(name, argument=None):
     commands = {'blank': create_blank, 'copy': copy_damnation, 'build': request_build,
                 'validate': marker_snapshot, 'browse': browse, 'marker': add_marker, 'import_t2': import_t2,
                 'texture_batch': texture_batch, 'apply_sky': apply_sky, 'import_interior': import_t2_interior,
                 'approve_equipment': set_equipment_approval, 'capture_lighting': capture_interior_lighting,
-                'interior_circuit': set_interior_circuit, 'model_showcase': open_model_showcase,
+                'interior_circuit': set_interior_circuit, 'shield_power': set_shield_power,
+                'model_showcase': open_model_showcase,
                 'model_library': shared_model_library, 'contact_sheets': refresh_contact_sheets,
                 'dts_preview': dts_preview, 'dts_bake': dts_bake,
                 'lighting_camera': lighting_camera, 'rebuild_t2': rebuild_t2, 'batch_rebuild': batch_rebuild,
@@ -550,6 +558,7 @@ def register():
     if parent is None:
         raise RuntimeError('Unreal did not register the Level Editor main menu.')
     menu = parent.add_sub_menu('LevelEditor.MainMenu', '', 'TribesMapEditor', 'TRIBES Map Editor')
+    shields = menu.add_sub_menu('LevelEditor.MainMenu.TribesMapEditor', 'TribesTools', 'ForceShields', 'Force Shields')
     items = [
         ('NewBlank', 'New Blank CTF Map', 'blank', None),
         ('CopyMap', 'Copy Damnation (2026)', 'copy', None),
@@ -588,6 +597,12 @@ def register():
         ('Validate', 'Check CTF Markers', 'validate', None),
         ('ApproveEquipment', 'Approve Selected Equipment for Direct Host', 'approve_equipment', True),
         ('RemoveEquipmentApproval', 'Remove Selected Equipment Approval', 'approve_equipment', False),
+        ('LinkShields', 'Link Selected Shields to Generator', 'shield_power', 'link'),
+        ('UnlinkShields', 'Set Selected Shields to Independent Power', 'shield_power', 'unlink'),
+        ('SourceShieldCircuit', 'Restore Source Shield Circuit', 'shield_power', 'source'),
+        ('DropShields', 'Shield Power Loss · Drop', 'shield_power', 'drop'),
+        ('WeakenShields', 'Shield Power Loss · Weaken', 'shield_power', 'weaken'),
+        ('KeepShields', 'Shield Power Loss · Stay Up', 'shield_power', 'stay'),
         ('Build', 'Build & Playtest', 'build', 'playtest'),
         ('BuildForHost', 'Build for Direct Host…', 'build', 'host'),
     ]
@@ -603,7 +618,8 @@ def register():
         entry.set_label(label)
         entry.set_string_command(unreal.ToolMenuStringCommandType.PYTHON, '',
                                  f'import t3_map_editor; t3_map_editor.action({operation!r}, {argument!r})')
-        menu.add_menu_entry('TribesTools', entry)
+        target = shields if operation == 'shield_power' else menu
+        target.add_menu_entry('TribesTools', entry)
     if playtest:
         toolbar = menus.extend_menu('LevelEditor.LevelEditorToolBar.User')
         build = unreal.ToolMenuEntry(name='TribesBuildPlaytest', type=unreal.MultiBlockType.TOOL_BAR_BUTTON)

@@ -130,6 +130,7 @@ def add_minimap(payload, overlay, map_id):
 
 EQUIPMENT_RUNTIME = b'-- T3_EDITOR_GROUPED_EQUIPMENT_V1'
 SHIELD_RUNTIME = b'-- T3_EDITOR_GROUPED_SHIELDS_V1'
+SHIELD_POLICIES_RUNTIME = b'-- T3_EDITOR_SHIELD_POWER_POLICIES_V1'
 
 
 def write_objectives(ctf, target, run, host, existing, preview_manifest, map_id, adapter):
@@ -159,6 +160,11 @@ def write_objectives(ctf, target, run, host, existing, preview_manifest, map_id,
                 or any(SHIELD_RUNTIME not in (host/name).read_bytes().splitlines()
                        for name in ('lua/objective_layouts.lua', 'lua/network.lua'))):
             raise ValueError('Choose a verified Direct Host baseline with grouped draft shield support.')
+        if any(isinstance(row, dict) and row.get('on_power_loss', 'drop') != 'drop'
+               for row in approved['placements']):
+            if any(SHIELD_POLICIES_RUNTIME not in (host/name).read_bytes().splitlines()
+                   for name in ('lua/objective_layouts.lua', module)):
+                raise ValueError('Choose a Direct Host baseline that supports custom shield power-loss settings.')
     cooked = {row['path'] for row in preview_manifest['files']}
     for placement in approved['placements']:
         support = placement.get('support') if isinstance(placement, dict) else None
@@ -194,7 +200,7 @@ def write_objectives(ctf, target, run, host, existing, preview_manifest, map_id,
         raise ValueError('The approved equipment changed during export.')
     objects = {entry['source_id']: entry for entry in equipment['equipment']}
     placements = [(objects[row['source_id']], row) for row in approved['placements']]
-    used = {entry['power_group'] for entry, _ in placements}
+    used = {approved.get('shield_power_group', entry['power_group']) for entry, approved in placements}
     groups = [group for group in equipment['power_groups'] if group['source_id'] in used]
     return inputs[1]['sha256'], placements, groups
 
@@ -223,13 +229,19 @@ def playtest_checklist(metadata, starts, flags, equipment, groups):
             if 'half_size_cm' in approved:
                 width, height = approved['half_size_cm']
                 size = f' · {2*width:g} × {2*height:g} cm opening'
+            group = approved.get('shield_power_group', entry['power_group'])
+            circuit = 'independent power' if group == 0 else f'circuit #{group}'
+            if 'half_size_cm' in approved and group != 0 and 'on_power_loss' in approved:
+                size += ' · power loss: ' + {
+                    'drop': 'drops', 'weaken': 'keeps the lower half blocking', 'stay': 'stays up',
+                }[approved['on_power_loss']]
             lines.append(f"    Team {entry['team']} {role} #{entry['source_id']} at {point}"
-                         f" (circuit #{entry['power_group']}){size}")
+                         f" ({circuit}){size}")
         if any(entry['role']=='force_shield' for entry, _ in equipment):
             lines.append('[ ] Confirm powered shields pass friendly players and block enemies from both sides.')
     if groups:
-        lines.extend(['', '[ ] Disable every generator in each powered circuit. Verify that only its equipment shuts down.',
-                      '[ ] Restore one generator per circuit. Verify that its equipment comes back online.'])
+        lines.extend(['', '[ ] Disable every generator in each powered circuit. Check its equipment and the listed shield settings.',
+                      '[ ] Restore one generator per circuit. Verify equipment comes back online and shields are at full height.'])
         for group in groups:
             generators = ', '.join(f'#{ident}' for ident in group['generators']) or 'always on'
             lines.append(f"    Team {group['team']} circuit #{group['source_id']}: {generators}")
