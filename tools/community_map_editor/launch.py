@@ -289,6 +289,43 @@ def run_host_export(exporter, attempt, selection, *, equipment_adapter=None):
     return selection['destination']
 
 
+def authored_host_stamp(host):
+    """Check the inventoried capability of the exact bundle receiving a stock-editor draft."""
+    host = host.resolve(strict=True)
+    manifest = host/'package-manifest.json'
+    message = 'Choose a verified Direct Host bundle that supports drafts with standard Unreal World Settings.'
+    capabilities = {
+        'lua/network.lua': (b'native_settings_authored_draft_world_owner_required', b'EDITOR_DRAFT_WORLD_SETTINGS'),
+        'lib/host_catalog_runtime.py': (b'.editor_draft=true',),
+    }
+    if manifest.resolve() != manifest:
+        raise ValueError(message)
+    with manifest.open('rb') as stream:
+        raw = stream.read(8*1024*1024+1)
+    if len(raw) > 8*1024*1024:
+        raise ValueError(message)
+    before = hashlib.sha256(raw).hexdigest()
+    header = json.loads(raw)
+    rows = header.get('files') if isinstance(header, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError(message)
+    for name, tags in capabilities.items():
+        matching = [row for row in rows if isinstance(row, dict) and row.get('path') == name]
+        path = host/name
+        if len(matching) != 1 or path.resolve() != path or not path.is_file():
+            raise ValueError(message)
+        with path.open('rb') as stream:
+            data = stream.read(2*1024*1024+1)
+        row = matching[0]
+        if (len(data) > 2*1024*1024 or len(data) != row.get('bytes')
+                or hashlib.sha256(data).hexdigest() != row.get('sha256')
+                or not all(tag in data for tag in tags)):
+            raise ValueError(message)
+    if digest(manifest) != before:
+        raise ValueError('The Direct Host inventory changed while checking draft compatibility.')
+    return before
+
+
 def run_host_pipeline(project, engine, preview_base, attempt, env, exporter, adapter, draft, selection,
                       *, cancellation_path=None, record_export=True):
     from tools.community_map_editor.conversion_rules import verify_snapshot
@@ -301,6 +338,7 @@ def run_host_pipeline(project, engine, preview_base, attempt, env, exporter, ada
     profile = pipeline_config(library, snapshot=snapshot, recorded=True)
     run = PipelineRun(profile, 'host', library=library, draft=draft, title=selection['label'])
     markers = cooked = result = base_digest = None
+    authoring_only = env.get('T3_EDITOR_AUTHORING_ONLY') == '1'
 
     def preflight(_):
         nonlocal markers, base_digest
@@ -309,7 +347,8 @@ def run_host_pipeline(project, engine, preview_base, attempt, env, exporter, ada
             raise ValueError('The Direct Host build request does not match the draft or the exporter is unavailable.')
         if not (selection['host']/'package-manifest.json').is_file():
             raise ValueError('The Direct Host baseline is missing its package manifest.')
-        base_digest = digest(selection['host']/'package-manifest.json')
+        base_digest = (authored_host_stamp(selection['host']) if authoring_only
+                       else digest(selection['host']/'package-manifest.json'))
         if any((attempt/name).is_file() for name in ('equipment-review.json', 'equipment.json')):
             if adapter is None or not adapter.is_file():
                 raise ValueError('Direct Host equipment needs the configured native equipment adapter.')
@@ -317,6 +356,8 @@ def run_host_pipeline(project, engine, preview_base, attempt, env, exporter, ada
     def cook_draft(_):
         nonlocal cooked
         kwargs = {'cancellation_path': cancellation_path} if cancellation_path is not None else {}
+        if authoring_only:
+            kwargs['plugins'] = editor_plugin_args(project, engine, smoke=True, authoring_only=True)
         cooked = cook(project, engine, package_path(draft), attempt, env, **kwargs)
 
     def package(_):
@@ -324,6 +365,8 @@ def run_host_pipeline(project, engine, preview_base, attempt, env, exporter, ada
 
     def stage(_):
         nonlocal result
+        if authoring_only and authored_host_stamp(selection['host']) != base_digest:
+            raise ValueError('The Direct Host inventory changed during cooking. Prepare a new export.')
         result = run_host_export(exporter, attempt, selection, equipment_adapter=adapter)
         if library is not None and record_export:
             capture_export(library, result, expected_draft=draft, expected_label=selection['label'], expected_base=base_digest)
@@ -448,13 +491,13 @@ def run(config, *, smoke=False):
     exporter = Path(config.get('direct_host_exporter', REPO/'tools/export_t2_draft.py')).resolve()
     release_tool = exporter.with_name('t2_map_release.py')
     env.pop('T3_EDITOR_RELEASE_TOOL', None)
-    if release_tool.is_file() and not authoring_only:
+    if release_tool.is_file():
         env['T3_EDITOR_RELEASE_TOOL'] = str(release_tool)
     adapter = Path(config.get('direct_host_equipment_adapter', exporter.with_name('attach_t2_equipment.py'))).resolve()
     env['T3_EDITOR_AUTHORING_ONLY'] = '1' if authoring_only else '0'
     env['T3_EDITOR_PLAYTEST'] = '1' if preview else '0'
-    env['T3_EDITOR_HOST_EXPORT'] = '1' if exporter.is_file() and not smoke and not authoring_only else '0'
-    env['T3_EDITOR_EQUIPMENT_EXPORT'] = '1' if adapter.is_file() and not smoke and not authoring_only else '0'
+    env['T3_EDITOR_HOST_EXPORT'] = '1' if exporter.is_file() and not smoke else '0'
+    env['T3_EDITOR_EQUIPMENT_EXPORT'] = '1' if adapter.is_file() and not smoke else '0'
     install_editor_scripts(project, env)
     plugin_args = editor_plugin_args(project, engine, smoke=smoke, authoring_only=authoring_only)
     env['T3_EDITOR_MAP_REVIEW'] = '1' if 'CommunityMapReview' in plugin_args[1].split(',') else '0'

@@ -1,5 +1,6 @@
 """Check the owned editor-to-cook handoff with a stand-in exporter."""
 
+from hashlib import sha256
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -16,6 +17,20 @@ REQUEST = {'map': DRAFT, 'markers': {
     'T3Flag1': [[110, 125, 40, 0]],
     'T3Flag2': [[320, 130, 40, 180]],
 }}
+
+
+def write_authored_host(root):
+    sources = {
+        'lua/network.lua': b'native_settings_authored_draft_world_owner_required EDITOR_DRAFT_WORLD_SETTINGS',
+        'lib/host_catalog_runtime.py': b'.editor_draft=true',
+    }
+    rows = []
+    for name, data in sources.items():
+        path = root/name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        rows.append(dict(path=name, bytes=len(data), sha256=sha256(data).hexdigest()))
+    (root/'package-manifest.json').write_text(json.dumps({'files': rows}), encoding='utf-8')
 
 
 class EditorHostExportTests(unittest.TestCase):
@@ -41,6 +56,7 @@ class EditorHostExportTests(unittest.TestCase):
                 bootstrap.create_workspace(root, root)
             self.assertEqual(settings.read_bytes(), original)
             config = json.loads(original)
+            config['direct_host_exporter'] = str(root/'unavailable.py')
             self.assertEqual(len(list(Path(config['starter_palette']).glob('*.png'))), 9)
 
             def run_editor(args, cwd, env, _owner, _budget):
@@ -57,6 +73,20 @@ class EditorHostExportTests(unittest.TestCase):
             with patch.object(launch, 'run_owned_job', side_effect=run_editor) as owned:
                 launch.run(config)
             owned.assert_called_once()
+
+    def test_authoring_host_capability_has_to_be_in_the_verified_inventory(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            manifest = root/'package-manifest.json'
+            manifest.write_text('{"files":[]}', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'supports drafts with standard Unreal'):
+                launch.authored_host_stamp(root)
+            write_authored_host(root)
+            self.assertEqual(launch.authored_host_stamp(root), sha256(manifest.read_bytes()).hexdigest())
+            network = root/'lua/network.lua'
+            network.write_bytes(network.read_bytes() + b'\n')
+            with self.assertRaisesRegex(ValueError, 'supports drafts with standard Unreal'):
+                launch.authored_host_stamp(root)
 
     def test_batch_handoff_stages_only_after_owned_editor_closes(self):
         with TemporaryDirectory() as folder:
@@ -151,6 +181,11 @@ class EditorHostExportTests(unittest.TestCase):
             self.assertEqual(execute.call_args.args[0][-2:], ['--equipment-adapter', str(adapter)])
 
     def test_editor_cooks_and_exports_before_reopening_without_launching_a_game(self):
+        for stock in (False, True):
+            with self.subTest(stock=stock):
+                self.check_host_roundtrip(stock)
+
+    def check_host_roundtrip(self, stock):
         with TemporaryDirectory() as folder:
             root = Path(folder).resolve()
             project = root / 'CommunityMapEditor/project/Stonehenge53.uproject'
@@ -174,23 +209,31 @@ Path(destination, 'export-receipt.json').write_text(json.dumps(
             selection = dict(host=root / 'host', destination=output,
                              label='Test Ridge (T2 2026)', minimap=root / 'minimap')
             selection['host'].mkdir()
-            (selection['host']/'package-manifest.json').write_text('{}', encoding='utf-8')
+            if stock:
+                write_authored_host(selection['host'])
+            else:
+                (selection['host']/'package-manifest.json').write_text('{}', encoding='utf-8')
             config = {'project': str(project), 'engine_binaries': str(root), 'ddc': str(root),
-                      'direct_host_exporter': str(exporter)}
+                      'direct_host_exporter': str(exporter), 'authoring_only': stock}
             editor_calls = []
 
             def editor(args, _cwd, env, _owner, _timeout):
                 self.assertEqual(Path(args[0]).name, 'UnrealEditor.exe')
                 self.assertEqual(env['T3_EDITOR_HOST_EXPORT'], '1')
                 self.assertEqual(env['T3_EDITOR_PLAYTEST'], '0')
+                self.assertEqual('CommunityNativeWorldSettings' in args[-1].split(','), not stock)
                 editor_calls.append(args)
                 if len(editor_calls) == 1:
                     Path(env['T3_EDITOR_HOST_REQUEST']).write_text(json.dumps(REQUEST), encoding='utf-8')
                 return {'status': 'terminal', 'exit_code': 0, 'job_active_processes_after_cleanup': 0}
 
-            def cook(_project, _engine, level, attempt, env):
+            def cook(_project, _engine, level, attempt, env, *, plugins=None):
                 self.assertEqual(level, launch.package_path(DRAFT))
                 self.assertEqual(env['T3_EDITOR_INTERACTIVE'], '0')
+                if stock:
+                    self.assertNotIn('CommunityNativeWorldSettings', plugins[-1].split(','))
+                else:
+                    self.assertIsNone(plugins)
                 content = attempt / 'cook/Content'
                 stem = content / level.removeprefix('/Game/')
                 stem.parent.mkdir(parents=True)

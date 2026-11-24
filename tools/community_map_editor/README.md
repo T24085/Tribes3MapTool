@@ -25,13 +25,16 @@ The setup creates an isolated `CommunityMapEditor` folder and generates a
 starter Grass, Rock and Forest palette. It refuses to replace an existing
 workspace. You can create blank CTF drafts, import missions or intakes, and
 review assets without Steam or a host bundle.
+With the bundled Direct Host exporter, this workspace can also package
+and stage imported CTF drafts against a host bundle that supports standard
+Unreal World Settings.
 
 ### Game-compatible setup
 
-For cooking and staging, use the game-compatible UE 5.3 build and a private
+For offline playtesting, use the game-compatible UE 5.3 build and a private
 `CommunityMapEditor/project/Stonehenge53.uproject` with the native
 world-settings plugin. Leave `authoring_only` unset or set it to false.
-Use this setup before creating drafts that you intend to play in the game.
+Use this setup before creating drafts that you intend to play offline.
 Set `project`, `engine_binaries` and `ddc` in the private launcher JSON.
 
 To enable **Build & Playtest**, also set `preview_base` to an inventoried
@@ -43,8 +46,8 @@ export uses its own baseline and works without the offline playtest paths.
 
 ## Build for Direct Host
 
-Set `direct_host_exporter` in the launcher config to the full path to
-`tools/export_t2_draft.py` in the source distribution. With an imported
+The standalone checkout includes the exporter. To use a separate copy,
+set `direct_host_exporter` in the launcher config to its full path. With an imported
 draft open, choose **TRIBES Map Editor → Build for Direct Host…**. The editor
 checks the CTF markers, saves the draft, and closes for cooking.
 
