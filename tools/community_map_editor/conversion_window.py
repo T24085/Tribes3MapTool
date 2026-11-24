@@ -21,7 +21,8 @@ from mission_weather import cloud_layers, mission_weather, precipitation_emitter
 from model_textures import load_texture_index
 from object_catalog import applicable_mappings, build_rows, classify, load_catalog
 from object_review_window import ObjectReview
-from perimeter import DEFAULT_CEILING_M, DEFAULT_DEPTH_M, PolygonWalls, WARNING_AUDIENCES, plan_boundaries, rectangle_outline
+from perimeter import (DEFAULT_BOUNDARY_OPTIONS, DEFAULT_CEILING_M, DEFAULT_DEPTH_M, PolygonWalls, WARNING_AUDIENCES,
+                       plan_boundaries, read_boundary_recipe, rectangle_outline)
 from perimeter_collision import blocks_pawns, validate_channels
 from pipeline_window import show_pipeline
 from public_layout import READER as PUBLIC_LAYOUT_READER, export_public_layout
@@ -599,7 +600,7 @@ def run(library, meshes=(), drafts=()):
     object_review = ObjectReview(review_area, catalog)
     table = object_review.table
     choices = ttk.Combobox(bar, state="disabled", width=38)
-    boundary_options = {"perimeter": False, "flag_inset_m": None}
+    boundary_options = DEFAULT_BOUNDARY_OPTIONS.copy()
     state = {}
     configured_decoder = os.environ.get("T3_DIF_DECODER")
     dif_decoder = Path(configured_decoder) if configured_decoder and Path(configured_decoder).is_file() else None
@@ -770,6 +771,10 @@ def run(library, meshes=(), drafts=()):
     def inspect(path):
         nonlocal catalog, object_review, table
         header, terrain, rows = load_intake(path)
+        if not state.get("manifest"):
+            boundary_options.clear()
+            recipe = read_boundary_recipe(rows)
+            boundary_options.update(recipe["options"] if recipe else DEFAULT_BOUNDARY_OPTIONS)
         new_catalog = load_catalog(library, source_profile=header["profile"])
         if new_catalog.document != catalog.document:
             for child in review_area.winfo_children():
@@ -908,7 +913,7 @@ def run(library, meshes=(), drafts=()):
     def clear():
         state.clear()
         boundary_options.clear()
-        boundary_options.update(perimeter=False, flag_inset_m=None)
+        boundary_options.update(DEFAULT_BOUNDARY_OPTIONS)
         notice.set("Choose a Tribes mission, Unreal map package or export, or existing intake.")
         table.delete(*table.get_children())
         update_mesh_button()
@@ -1008,10 +1013,9 @@ def run(library, meshes=(), drafts=()):
         state.pop("minimap", None)
         submit.configure(state="disabled")
         preview.configure(state="disabled")
-        add_perimeter.set(False)
-        perimeter.configure(state="disabled")
-        flag_inset.set("")
-        flag_entry.configure(state="disabled")
+        boundary_options.clear()
+        boundary_options.update(DEFAULT_BOUNDARY_OPTIONS)
+        boundary_button.configure(state="disabled")
         rule_button.configure(state="disabled")
         public_button.configure(state="disabled")
         notice.set("Select a mission from the archive.")
@@ -1195,7 +1199,7 @@ def run(library, meshes=(), drafts=()):
         if not path:
             return
         try:
-            export_public_layout(state["manifest"], path)
+            export_public_layout(state["manifest"], path, boundary_options=boundary_options)
         except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
             messagebox.showerror("Export public layout", str(exc), parent=root)
             return

@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "tools/community_map_ed
 from conversion_window import coverage_status
 from batch_rebuild import compare_drafts, create_batch, load_batch, save_batch
 from conversion_rules import checksum, create_snapshot, draft_rules_path, edit_scope, history, profile_config, selectors, write
-from intake_contract import PLAYABLE_BOUNDS, load_intake, load_intake_geometry, playable_bounds
+from intake_contract import BOUNDARY_RECIPE, PLAYABLE_BOUNDS, load_intake, load_intake_geometry, playable_bounds
 from interior_geometry import render_sections
 from interior_lighting import LIGHTING_INDEX, lighting_summary, load_lighting_index
 from map_pipeline import PipelineRun, pipeline_config, validate_pipeline
@@ -27,7 +27,7 @@ from mission_weather import cloud_layers, precipitation_emitters
 from object_catalog import build_rows, classify, load_catalog, source_fields
 from minimap import export_host_minimap, framing, terrain_pixels, view_transform
 from perimeter import (FlagBoundary, PolygonWalls, check_inside_perimeter, check_marker_clearance, flag_bounds, mission_extents,
-                       plan_boundaries, plan_walls, triangulate_polygon, turn, verified_extents, wall_appearance,
+                       plan_boundaries, plan_walls, read_boundary_recipe, triangulate_polygon, turn, verified_extents, wall_appearance,
                        wall_boxes, wall_surface)
 from perimeter_collision import probe_profiles, validate_channels
 from public_layout import export_public_layout
@@ -101,6 +101,47 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual(projected["equipment"][0]["power_group"], projected["power_groups"][0]["source_id"])
         self.assertEqual(len([row for row in build_rows(rows, classify(rows, terrain, load_catalog()))
                               if row["status"] == "marker"]), 4)
+
+    def test_public_layout_reopens_with_the_authored_boundary_recipe(self):
+        self.add_mission_area('new MissionArea(PlayArea) { area="-40 -45 100 110"; };')
+        source = convert(self.mission, self.library)
+        header, terrain, rows = load_intake(source)
+        options = {
+            "perimeter": True, "flag_inset_m": None,
+            "wall_limits": {"floor_m": 2, "ceiling_m": 10},
+            "wall_block_channels": ["pawn", "vehicle"],
+            "wall_polygon_m": [[-35, -60], [55, -60], [55, 40], [-35, 40]],
+            "wall_visual": {"style": "energy", "distance_m": 80},
+            "flag_polygon_m": [[-20, -20], [20, -20], [20, 10], [-20, 10]],
+            "flag_limits": {"floor_m": 3, "ceiling_m": 9}, "flag_return_delay_s": 8,
+            "warn_players": True, "warning_audience": "vehicle",
+            "warning_polygon_m": [[-25, -50], [50, -50], [50, 35], [-25, 35]],
+            "warning_limits": {"floor_m": None, "ceiling_m": 13},
+        }
+        original = plan_boundaries(header, terrain, rows, **options)
+        archive = export_public_layout(source, self.folder / "boundary.zip", boundary_options=options)
+        manifest = unpack_intake(archive, self.folder / "received")
+        layout, placeholder, shared_rows = load_intake(manifest)
+        self.assertEqual(set(placeholder["height_m"]), {0})
+        recipe = read_boundary_recipe(shared_rows)
+        self.assertEqual(recipe["options"], options)
+        self.assertEqual(plan_boundaries(layout, placeholder, shared_rows, **recipe["options"]), original)
+
+        second = export_public_layout(manifest, self.folder / "again.zip")
+        reopened = unpack_intake(second, self.folder / "reopened")
+        self.assertEqual(read_boundary_recipe(load_intake(reopened)[2]), recipe)
+        cleared = export_public_layout(manifest, self.folder / "cleared.zip", boundary_options={})
+        reopened = unpack_intake(cleared, self.folder / "reopened")
+        self.assertIsNone(read_boundary_recipe(load_intake(reopened)[2]))
+
+        objects = next(row["properties"] for row in shared_rows if row["status"] == "boundary")
+        objects[BOUNDARY_RECIPE]["options"]["flag_return_delay_s"] = 0
+        data = json.dumps(shared_rows).encode()
+        manifest.with_name("objects.json").write_bytes(data)
+        layout["files"]["objects.json"] = hashlib.sha256(data).hexdigest()
+        manifest.write_text(json.dumps(layout), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "flag return delay"):
+            load_intake(manifest)
 
     def test_source_library_tracks_drafts_and_preserves_portable_provenance(self):
         manifest = convert(self.mission, self.library)

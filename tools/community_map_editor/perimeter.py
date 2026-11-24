@@ -3,7 +3,7 @@
 import math
 from typing import NamedTuple, Optional
 
-from intake_contract import playable_bounds
+from intake_contract import BOUNDARY_RECIPE, finite, playable_bounds
 from perimeter_collision import TAG, blocks_pawns, configure_wall, filter_tags, has_wall_collision, probe_profiles, read_channels, validate_channels
 from terrain_grid import height_range
 
@@ -34,6 +34,11 @@ VISUAL_TAG = TAG + "Visual"
 VISUAL_REQUIRED = TAG + "VisualRequired"
 WALL_STYLES = {"energy": (0.08, 1.05, 1.35), "warning": (1.45, 0.44, 0.06)}
 WARNING_AUDIENCES = {None: "On foot and in vehicles", "foot": "On foot only", "vehicle": "Vehicles only"}
+DEFAULT_BOUNDARY_OPTIONS = {"perimeter": False, "flag_inset_m": None}
+BOUNDARY_OPTIONS = DEFAULT_BOUNDARY_OPTIONS.keys() | {
+    "wall_limits", "flag_polygon_m", "wall_polygon_m", "wall_block_channels", "wall_visual",
+    "warn_players", "warning_polygon_m", "warning_limits", "warning_audience", "flag_limits", "flag_return_delay_s",
+}
 
 
 class PolygonWalls(NamedTuple):
@@ -51,13 +56,34 @@ class FlagBoundary(NamedTuple):
     return_delay_s: Optional[int] = None
 
 
-def mission_extents(bounds, terrain, *, depth_m=DEFAULT_DEPTH_M, height_m=DEFAULT_CEILING_M):
-    lower, upper = bounds
+def terrain_elevations(terrain):
     z = terrain["origin_cm"][2]
     low, high = height_range(terrain)
     scale = terrain["cm_per_m"]
-    return ([*lower, z + low * scale - depth_m * 100],
-            [*upper, z + high * scale + height_m * 100])
+    return [z + low * scale, z + high * scale]
+
+
+def read_boundary_recipe(rows):
+    for row in rows:
+        properties = row.get("properties", {})
+        if row["status"] != "boundary" or BOUNDARY_RECIPE not in properties:
+            continue
+        recipe = properties[BOUNDARY_RECIPE]
+        if (not isinstance(recipe, dict) or recipe.keys() != {"format", "elevation_cm", "options"}
+                or type(recipe["format"]) is not int or recipe["format"] != 1):
+            raise ValueError("Invalid shared boundary recipe.")
+        elevation, options = recipe["elevation_cm"], recipe["options"]
+        if (not isinstance(elevation, list) or len(elevation) != 2
+                or not all(finite(value, 10_000_000) for value in elevation) or elevation[0] > elevation[1]
+                or not isinstance(options, dict) or not DEFAULT_BOUNDARY_OPTIONS.keys() <= options.keys() <= BOUNDARY_OPTIONS):
+            raise ValueError("Invalid shared boundary recipe.")
+        return recipe
+
+
+def mission_extents(bounds, terrain, *, depth_m=DEFAULT_DEPTH_M, height_m=DEFAULT_CEILING_M, elevation_cm=None):
+    lower, upper = bounds
+    low, high = terrain_elevations(terrain) if elevation_cm is None else elevation_cm
+    return ([*lower, low - depth_m * 100], [*upper, high + height_m * 100])
 
 
 def wall_boxes(lower, upper, *, ceiling=True, floor=False):
@@ -98,13 +124,14 @@ def height_limits(limits):
     return ceiling, floor
 
 
-def plan_walls(bounds, terrain, markers, limits, polygon=None):
+def plan_walls(bounds, terrain, markers, limits, polygon=None, *, elevation_cm=None):
     if limits is None:
         limits = {"ceiling_m": DEFAULT_CEILING_M, "floor_m": None}
     ceiling, floor = height_limits(limits)
     lower, upper = mission_extents(
         bounds, terrain, depth_m=DEFAULT_DEPTH_M if floor is None else floor,
         height_m=DEFAULT_CEILING_M if ceiling is None else ceiling,
+        elevation_cm=elevation_cm,
     )
     if polygon is not None:
         vertices = parse_polygon(polygon, "Solid perimeter")
@@ -137,7 +164,7 @@ def wall_surface(walls):
     return PolygonWalls(rectangle_outline((lower[:2], upper[:2])), lower[2], upper[2], ceiling, floor)
 
 
-def warning_surface(bounds, terrain, walls, polygon, limits):
+def warning_surface(bounds, terrain, walls, polygon, limits, *, elevation_cm=None):
     if walls and polygon is None and limits is None:
         return wall_surface(walls)
     if polygon is None:
@@ -150,7 +177,8 @@ def warning_surface(bounds, terrain, walls, polygon, limits):
     ceiling, floor = height_limits(limits)
     if ceiling is None and floor is None:
         return PolygonWalls(vertices, 0, 0, False, False)
-    lower, upper = mission_extents(bounds, terrain, depth_m=floor or 0, height_m=ceiling or 0)
+    lower, upper = mission_extents(bounds, terrain, depth_m=floor or 0, height_m=ceiling or 0,
+                                   elevation_cm=elevation_cm)
     if ceiling is not None and floor is not None and lower[2] >= upper[2]:
         raise ValueError("The warning ceiling must be above its floor.")
     return PolygonWalls(vertices, lower[2], upper[2], ceiling is not None, floor is not None)
@@ -160,6 +188,8 @@ def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limi
                     wall_polygon_m=None, wall_block_channels=None, wall_visual=None, warn_players=False,
                     warning_polygon_m=None, warning_limits=None, warning_audience=None, flag_limits=None,
                     flag_return_delay_s=None):
+    if type(perimeter) is not bool:
+        raise ValueError("Choose whether to add solid side walls.")
     if type(warn_players) is not bool:
         raise ValueError("Choose whether to warn players outside the mission area.")
     if warning_audience is not None and (not isinstance(warning_audience, str) or warning_audience not in WARNING_AUDIENCES):
@@ -180,11 +210,14 @@ def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limi
     if not perimeter and flag_inset_m is None and flag_polygon_m is None and not warn_players:
         return None, None, None
     bounds = playable_bounds(header, rows)
+    recipe = read_boundary_recipe(rows)
+    elevation_cm = recipe["elevation_cm"] if recipe else None
     markers = [(row["name"] or row["kind"], row["position_cm"])
                for row in rows if row["status"] == "marker"] if blocks_pawns(channels) else []
     flags = [(row["name"] or "Flag", row["position_cm"])
              for row in rows if row["status"] == "marker" and row["kind"] == "flag"]
-    walls = plan_walls(bounds, terrain, markers, wall_limits, wall_polygon_m) if perimeter else None
+    walls = plan_walls(bounds, terrain, markers, wall_limits, wall_polygon_m,
+                       elevation_cm=elevation_cm) if perimeter else None
     limit = flag_bounds(bounds, flag_inset_m, flags) if flag_inset_m is not None else None
     if flag_polygon_m is not None:
         limit = parse_polygon(flag_polygon_m, "Flag boundary")
@@ -196,11 +229,13 @@ def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limi
         if flag_limits is not None:
             above, below = height_limits(flag_limits)
             if above is not None or below is not None:
-                low, high = mission_extents(bounds, terrain, depth_m=below or 0, height_m=above or 0)
+                low, high = mission_extents(bounds, terrain, depth_m=below or 0, height_m=above or 0,
+                                            elevation_cm=elevation_cm)
                 floor, ceiling = (low[2] if below is not None else None, high[2] if above is not None else None)
                 check_flag_altitude(floor, ceiling, flags)
         limit = FlagBoundary(limit, floor, ceiling, flag_return_delay_s)
-    warning = warning_surface(bounds, terrain, walls, warning_polygon_m, warning_limits) if warn_players else None
+    warning = warning_surface(bounds, terrain, walls, warning_polygon_m, warning_limits,
+                              elevation_cm=elevation_cm) if warn_players else None
     return walls, limit, warning
 
 

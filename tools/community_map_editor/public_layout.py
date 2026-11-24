@@ -10,10 +10,11 @@ from pathlib import Path
 import tempfile
 import zipfile
 
-from intake_contract import EQUIPMENT_FILE, PLAYABLE_BOUNDS, PUBLIC_LAYOUT_READER, load_intake
+from intake_contract import BOUNDARY_RECIPE, EQUIPMENT_FILE, PLAYABLE_BOUNDS, PUBLIC_LAYOUT_READER, load_intake
 from mesh_mappings import REFERENCE_FIELDS, source_reference
 from minimap import grayscale_png, terrain_png
 from mission_equipment import EQUIPMENT_ROLES, mission_equipment, power_context
+from perimeter import BOUNDARY_OPTIONS, DEFAULT_BOUNDARY_OPTIONS, plan_boundaries, read_boundary_recipe, terrain_elevations
 from t2_reader import PROFILE, unpack_intake
 from source_profiles import NAMES, T1, T2, UNREAL_INTAKE_VERSIONS, UNREAL_PROFILES
 from terrain_grid import preview_size
@@ -116,11 +117,21 @@ def public_objects(rows, *, legacy=False):
     return result
 
 
-def public_files(header, terrain, rows):
+def public_files(header, terrain, rows, *, boundary_options=None):
     profile = header["profile"]
     legacy = profile == T1
     unreal = profile in UNREAL_PROFILES.values()
+    recipe = read_boundary_recipe(rows)
+    if boundary_options is not None:
+        if not isinstance(boundary_options, dict) or boundary_options.keys() - BOUNDARY_OPTIONS:
+            raise ValueError("Invalid boundary options for public layout export.")
+        options = {**DEFAULT_BOUNDARY_OPTIONS, **boundary_options}
+        active = any(value is not None for value in plan_boundaries(header, terrain, rows, **options))
+        recipe = ({"format": 1, "options": options,
+                   "elevation_cm": recipe["elevation_cm"] if recipe else terrain_elevations(terrain)} if active else None)
     rows = public_objects(rows, legacy=legacy)
+    if recipe:
+        next(row for row in rows if row["status"] == "boundary")["properties"][BOUNDARY_RECIPE] = recipe
     # Keep the layout's units and terrain footprint. Generate all image bytes anew.
     ground = {key: terrain[key] for key in ("step_cm", "cm_per_m", "origin_cm")}
     grid = 256 if profile == T2 else 257
@@ -155,11 +166,11 @@ def public_files(header, terrain, rows):
     return files
 
 
-def export_public_layout(manifest, destination):
+def export_public_layout(manifest, destination, *, boundary_options=None):
     destination = Path(destination)
     if destination.suffix.casefold() != ".zip":
         raise ValueError("Save the public layout as a ZIP file.")
-    files = public_files(*load_intake(manifest))
+    files = public_files(*load_intake(manifest), boundary_options=boundary_options)
     with tempfile.TemporaryDirectory(dir=destination.parent) as directory:
         temp = Path(directory)
         archive = temp / "layout.zip"

@@ -32,6 +32,7 @@ SHAPE_FILE = re.compile(r"shape-[0-9]{4}\.json")
 MAX_INTAKE_INTERIORS = 128
 MAX_INTAKE_INTERIOR_BYTES = 96 * 1024 * 1024
 PLAYABLE_BOUNDS = "playable_bounds_cm"
+BOUNDARY_RECIPE = "draft_boundary_recipe"
 LATEST_INTAKE_VERSION = UNREAL_INTAKE_VERSION
 T1_SHAPE_INTAKE_VERSION = {4: 18, 5: 19, 6: 20, 7: 21}
 EQUIPMENT_FILE = "equipment.json"
@@ -932,6 +933,11 @@ def load_intake(manifest):
     if header["coverage"].get("boundary", 0) != int("minimap" in header):
         raise ValueError("Intake minimap requires one playable boundary.")
     bounds = playable_bounds(header, rows) if "minimap" in header else None
+    if any(row["status"] == "boundary" and BOUNDARY_RECIPE in row["properties"] for row in rows):
+        from perimeter import plan_boundaries, read_boundary_recipe
+
+        recipe = read_boundary_recipe(rows)
+        plan_boundaries(header, terrain, rows, **recipe["options"])
     if unreal:
         ctf = [row for row in rows if row["status"] == "marker"]
         totals = Counter((row["team"], row["kind"]) for row in ctf)

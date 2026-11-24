@@ -610,6 +610,11 @@ and power relationships, minimap framing, and normalized sun and fog settings.
 Object names and model references use generated labels. The exporter generates
 flat placeholder terrain and fresh minimap artwork from the original footprint.
 
+The ZIP also carries the walls, player warning, and flag limit selected in
+**Boundaries…**. Opening the ZIP restores those settings. The floor and ceiling
+retain their original heights using the saved source elevation range. To share
+a layout without these settings, turn the boundaries off before exporting.
+
 The ZIP contains a layout from the intake. It omits original terrain, game and
 texture files, source names and locations, free-text properties, and edits made
 later in the Unreal draft. Use **Open source or intake…** to reopen the ZIP, then
