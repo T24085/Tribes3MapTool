@@ -376,6 +376,13 @@ The draft supplies an opaque base-color material for supported slots.
 Object Review reports unresolved assets, smaller fallback mips, and
 shader inputs requiring author review.
 
+[Intake version 40](intake-v40.schema.json) also reads saved material
+overrides on an unambiguously associated static mesh component. Copies of
+the same mesh share one geometry asset and keep their own materials in the
+draft and asset showcase. Empty override entries inherit the mesh's
+material for that slot. Unsupported overrides appear in Object Review and
+can be assigned a destination material in Unreal.
+
 To recover cached textures, place `texture.cache.hdr.rtc` and
 `texture.cache.data.rtc` beside the Ascend map. The importer matches the
 full texture object path and uses the cached zlib mip when it is at least

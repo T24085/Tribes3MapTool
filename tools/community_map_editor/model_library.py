@@ -11,7 +11,7 @@ from draft_model_materials import BAKED_MATERIAL_PREFIX
 from draft_showcase import ROOT, populate_stage
 from equipment_unreal import mark_interior_lighting
 from intake_contract import bounded, finite
-from mesh_mappings import source_reference
+from mesh_mappings import material_reference, source_reference
 from source_library import DRAFT_ID
 from texture_batches import save_json
 
@@ -92,12 +92,12 @@ def record_import(draft, planned, meshes, material_overrides):
     for row, path, _, rotation, scale in planned:
         reference = source_reference(row)
         kind, filename = reference.split(":", 1)
+        materials = material_overrides.get(material_reference(row, material_overrides), {})
         rows.append({
             "name": PurePosixPath(filename).stem[:240],
             "category": "Buildings" if kind == "interiorinstance" else "Props",
             "mesh": asset_path(meshes[path]),
-            "materials": {str(slot): asset_path(mat)
-                          for slot, mat in material_overrides.get(reference, {}).items()},
+            "materials": {str(slot): asset_path(mat) for slot, mat in materials.items()},
             "scale": list(scale), "rotation": list(rotation),
         })
     save_models(draft, rows)

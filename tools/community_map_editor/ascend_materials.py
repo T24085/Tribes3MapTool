@@ -4,7 +4,8 @@ from contextlib import ExitStack, contextmanager
 from hashlib import sha256
 import zlib
 
-from model_textures import MAX_SIDE
+from interior_geometry import material_slots
+from model_textures import MAX_SIDE, placement_key
 from unreal_binary_scene import property_tag, read_properties
 from unreal_package_reader import Cursor, open_package, table_name
 from vengeance_terrain_layers import COLOR_FORMATS, texture_png
@@ -75,6 +76,48 @@ def object_reference(tags, stream, name):
     if tag["size"] != 4:
         raise ValueError(f"Invalid Ascend object reference in {name}.")
     return tag_data(stream, tag).index(True)
+
+
+def placed_materials(placements, meshes, stream):
+    """Read overrides only for the component that owns the placed mesh."""
+    models, issues = {}, []
+    for actor, raw, row, components in placements:
+        reference = row.get("model_reference")
+        if reference not in meshes:
+            continue
+        geometry = meshes[reference]
+        source_line = actor["assets"][0]["line"]
+        try:
+            component_id = (object_reference(raw["tags"], stream, "staticmeshcomponent")
+                            if source_line == actor["line"] else source_line)
+            owners = [component for component in components if component["line"] == component_id]
+            if not component_id and len(components) == 1:
+                owners = components
+            if len(owners) != 1:
+                raise ValueError("Cannot associate Ascend component materials with a single placed mesh.")
+            if any(tag["name"].casefold() == "materials" for component in components
+                   if component is not owners[0] for tag in component["tags"]):
+                issues.append((row, "Additional Ascend component materials require a separate mesh placement."))
+            tag = typed_tag(owners[0]["tags"], "materials", "ArrayProperty")
+            if not tag:
+                continue
+            cursor = tag_data(stream, tag)
+            count = cursor.index(True)
+            if not 0 <= count <= 256 or tag["size"] != (count + 1) * 4:
+                raise ValueError("Invalid Ascend component Materials array length.")
+            drawn = set(material_slots(geometry))
+            slots = {}
+            for slot in range(count):
+                index = cursor.index(True)
+                if index and slot in drawn:
+                    slots[slot] = (index, 0)
+                elif index:
+                    issues.append((row, f"Ascend component material slot {slot} is absent from the imported mesh LOD."))
+            if slots:
+                models[placement_key(row["id"])] = (row["name"], geometry, slots)
+        except ValueError as error:
+            issues.append((row, str(error)))
+    return models, issues
 
 
 def texture_overrides(tags, report, stream):

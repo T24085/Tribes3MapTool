@@ -7,7 +7,8 @@ import unreal
 
 from intake_contract import bounded
 from interior_geometry import ASCEND_STATIC_MESH, VENGEANCE_BSP, VENGEANCE_STATIC_MESH, material_slots, triangle_groups
-from model_textures import has_shader_inputs, load_texture_index, shader_signature
+from mesh_mappings import source_reference
+from model_textures import has_shader_inputs, load_texture_index, placement_key, shader_signature
 from source_profiles import BRUSH_PREVIEW_FOLDER, BRUSH_PREVIEW_REFERENCE
 from texture_batches_unreal import import_texture
 
@@ -235,12 +236,20 @@ def lighted_material(folder, inventory, albedo, normal, alarm, *, legacy=False, 
     return material
 
 
-def generate_overrides(folder, inventory, models, lighting_index=None, *, moving_references=()):
+def generate_overrides(folder, inventory, models, lighting_index=None, *, moving_references=(), placements=()):
     index = load_texture_index(folder, inventory)
     lighting_index = lighting_index or {}
     materials, overrides = {}, {}
+    variants = {}
+    for row, *_ in placements:
+        key = placement_key(row['id'])
+        if key in index and source_reference(row) in models:
+            variants[key] = models[source_reference(row)]
+    models = {**models, **variants}
     for reference, (filename, geometry) in models.items():
         authored = index.get(filename, {})
+        if reference in variants:
+            authored = {**authored, **index[reference]}
         lighting = lighting_index.get(filename)
         if not authored and not lighting:
             continue
@@ -275,6 +284,6 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
                     materials[key] = source_material(folder, inventory, record, destination=destination,
                                                      mode=mode, two_sided=two_sided)
                 slots[component_slot] = materials[key]
-        if slots:
+        if slots or reference in variants:
             overrides[reference] = slots
     return overrides

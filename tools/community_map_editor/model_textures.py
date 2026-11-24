@@ -18,6 +18,10 @@ SOURCE_FIELDS = {'file', 'source', 'source_sha256', 'size'}
 SURFACE_DETAIL = ('normal', 'specular_mask')
 
 
+def placement_key(row_id):
+    return f'placement-{row_id}'
+
+
 def validate_png(raw):
     size = tuple(int.from_bytes(raw[i:i+4], 'big') for i in (16, 20))
     if (len(raw) < 33 or raw[:16] != bytes.fromhex('89504e470d0a1a0a0000000d49484452')
@@ -86,23 +90,28 @@ def validate_shader_inputs(record):
 
 
 def validate_bindings(bindings, models, inventory, *, legacy_sizes=None, receipts=(), native_bsp=False,
-                      shader_inputs=False, surface_detail=False, require_extended=True):
+                      shader_inputs=False, surface_detail=False, require_extended=True, placements=None):
+    placement_slots = placements or {}
     textures = {name for name in inventory if TEXTURE_FILE.fullmatch(name)}
     legacy = legacy_sizes is not None
-    if (not isinstance(bindings, dict) or not bindings or bindings.keys() - models.keys()
-            or legacy and bindings.keys() != models.keys()):
-        raise ValueError('Model texture index refers to an unknown model.')
+    if (not isinstance(bindings, dict) or not bindings
+            or bindings.keys() - models.keys() - placement_slots.keys()
+            or legacy and models.keys() - bindings.keys()
+            or placements is not None and not bindings.keys() & placement_slots.keys()):
+        raise ValueError('Model texture index refers to an unknown model or placement.')
     used = set()
     total = 0
     has_native_shader = has_detail = False
     for filename, slots in bindings.items():
-        if not isinstance(slots, dict) or not slots or legacy and slots.keys() != models[filename]:
+        allowed = placement_slots[filename] if filename in placement_slots else models[filename]
+        if (not isinstance(slots, dict) or not slots
+                or legacy and filename not in placement_slots and slots.keys() != allowed):
             raise ValueError('Invalid model texture slot index.')
         total += len(slots)
         if total > MAX_BINDINGS:
             raise ValueError('Too many model texture bindings.')
         for slot, record in slots.items():
-            if slot not in models[filename] or not isinstance(record, dict):
+            if slot not in allowed or not isinstance(record, dict):
                 raise ValueError('Model texture refers to an unknown material slot.')
             if record.keys() == {'reason'}:
                 reason = record['reason']
@@ -183,6 +192,8 @@ class PackageMaterials:
     def read_slot(self, index, flags, report, stream, objects):
         if not index:
             raise ValueError("Source surface has no assigned material.")
+        if index not in objects:
+            raise ValueError("Source material reference points outside the package object table.")
         record, images, receipts = self.resolve_material(objects[index], report, stream, objects, self.companions, flags)
         new_images = {name: data for name, data in images.items() if name not in self.textures}
         new_size = sum(map(len, new_images.values()))
@@ -193,7 +204,7 @@ class PackageMaterials:
         self.texture_bytes += new_size
         return record, receipts
 
-    def read_package(self, models, report, stream):
+    def read_package(self, models, report, stream, *, component_materials=False):
         from interior_geometry import material_slots
 
         objects = {row["index"]: row for row in report["imports"] + report["exports"]}
@@ -202,7 +213,7 @@ class PackageMaterials:
             if not geometry["render"]:
                 continue
             by_slot = {}
-            for slot in material_slots(geometry):
+            for slot in (slots if component_materials else material_slots(geometry)):
                 self.slot_count += 1
                 if self.slot_count > MAX_BINDINGS:
                     raise ValueError(f"Too many {self.profile} model material slots.")
@@ -223,6 +234,9 @@ class PackageMaterials:
                 by_slot[str(slot)] = record
                 concern = record.get("reason", record.get("warning"))
                 if concern:
-                    self.review.setdefault(reference, []).append(dict(model=label, material=geometry["materials"][slot],
-                                                                       slot=slot, reason=concern))
+                    source = objects.get(key[0])
+                    name = (source["object_path"] if source else f"Object {key[0]}")
+                    self.review.setdefault(reference, []).append(
+                        dict(model=label, material=name if component_materials else geometry["materials"][slot],
+                             slot=slot, reason=concern))
             self.bindings[reference] = by_slot

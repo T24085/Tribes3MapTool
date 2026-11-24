@@ -4,6 +4,7 @@ import math
 import re
 
 from intake_contract import finite
+from model_textures import placement_key
 
 
 REFERENCE_FIELDS = {
@@ -29,6 +30,11 @@ def source_reference(row):
     while path.startswith("./"):
         path = path[2:]
     return f"{kind}:{path}" if path and len(path) <= 512 and path.isprintable() else None
+
+
+def material_reference(row, overrides):
+    key = placement_key(row["id"])
+    return key if key in overrides else source_reference(row)
 
 
 def placements(rows, terrain, bindings):

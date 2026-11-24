@@ -7,12 +7,13 @@ from pathlib import Path
 import re
 
 from model_textures import (MAX_TEXTURE_BYTES, MAX_TEXTURE_INDEX, MAX_TEXTURES, TEXTURE_FILE, TEXTURE_INDEX,
-                            validate_bindings, validate_png)
+                            placement_key, validate_bindings, validate_png)
 from interior_lighting import LIGHTING_INDEX, LIGHTMAP_FILE, MAX_LIGHTMAP_BYTES, MAX_LIGHTMAPS, validate_lighting
 from mission_weather import WEATHER_FILE, mission_weather
 from native_terrain_paint import MAX_PAINT_BYTES, MAX_PAINT_LAYERS, MAX_PAINT_PNG_BYTES, PAINT_FILE, decode_mask
 from sky_intake import MAX_SKIES, MAX_SKY_BYTES, MAX_SKY_SLOTS, SKY_INDEX, SKY_PNG, validate_sky_artwork
-from source_profiles import (ASCEND, ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION, BRUSH_PREVIEW_REFERENCE, NAMES, T2,
+from source_profiles import (ASCEND, ASCEND_ART_VERSIONS, ASCEND_MESH_INTAKE_VERSION, ASCEND_PLACEMENT_ART_VERSION,
+                             BRUSH_PREVIEW_REFERENCE, NAMES, T2,
                              UNREAL_INTAKE_VERSION,
                              UNREAL_INTAKE_VERSIONS, VENGEANCE, VENGEANCE_ART_INTAKE_VERSION,
                              VENGEANCE_BSP_MATERIALS_VERSION, VENGEANCE_MESH_MATERIALS_VERSION,
@@ -49,7 +50,7 @@ def intake_filename(name, version):
                 or INTERIOR_FILE.fullmatch(name)
                 or version in (*VENGEANCE_TERRAIN_VERSIONS, *VENGEANCE_MODEL_VERSIONS) and PAINT_FILE.fullmatch(name)
                 or version in (VENGEANCE_ART_INTAKE_VERSION, *VENGEANCE_MODEL_VERSIONS) and ART_FILE.fullmatch(name)
-                or version in (*VENGEANCE_MODEL_VERSIONS, ASCEND_MODEL_ART_VERSION)
+                or version in (*VENGEANCE_MODEL_VERSIONS, *ASCEND_ART_VERSIONS)
                 and (name == TEXTURE_INDEX or TEXTURE_FILE.fullmatch(name)))
     if 11 <= version <= 21:
         return name in {"objects.json", "terrain.json", "height.png", "minimap.png"} or (
@@ -72,7 +73,7 @@ def max_intake_files(version):
     if version in UNREAL_INTAKE_VERSIONS:
         if version in VENGEANCE_MODEL_VERSIONS:
             return 6 + MAX_INTAKE_INTERIORS + 2 * MAX_PAINT_LAYERS + MAX_TEXTURES
-        if version == ASCEND_MODEL_ART_VERSION:
+        if version in ASCEND_ART_VERSIONS:
             return 6 + MAX_INTAKE_INTERIORS + MAX_TEXTURES
         return (5 + MAX_INTAKE_INTERIORS + (MAX_PAINT_LAYERS if version in VENGEANCE_TERRAIN_VERSIONS else 0)
                 + (MAX_PAINT_LAYERS if version == VENGEANCE_ART_INTAKE_VERSION else 0))
@@ -626,7 +627,8 @@ def load_intake(manifest):
     inventory = header["files"]
     unreal = header["format"] in UNREAL_INTAKE_VERSIONS
     native_models = header["format"] in VENGEANCE_MODEL_VERSIONS
-    ascend_art = header["format"] == ASCEND_MODEL_ART_VERSION
+    ascend_art = header["format"] in ASCEND_ART_VERSIONS
+    ascend_placement_art = header["format"] == ASCEND_PLACEMENT_ART_VERSION
     brush_intake = header["format"] in VENGEANCE_BRUSH_VERSIONS
     shader_inputs = header["format"] in VENGEANCE_EXTENDED_SHADER_VERSIONS
     surface_detail = header["format"] == VENGEANCE_SURFACE_DETAIL_VERSION
@@ -680,7 +682,7 @@ def load_intake(manifest):
     legacy_int = 15 <= header["format"] <= 21
     legacy_textures = 16 <= header["format"] <= 21
     vengeance_bsp = unreal and header["profile"] == VENGEANCE and header["reader"] == UNREAL_READER
-    ascend_mesh = (header["format"] in (ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION)
+    ascend_mesh = (header["format"] in (ASCEND_MESH_INTAKE_VERSION, *ASCEND_ART_VERSIONS)
                    and header["profile"] == ASCEND and header["reader"] == UNREAL_READER)
     if vengeance_bsp or ascend_mesh:
         interior_prefix = "unrealmesh:bsp." if vengeance_bsp and not vengeance_static else "unrealmesh:"
@@ -690,10 +692,10 @@ def load_intake(manifest):
     if vengeance_bsp:
         interior_versions += UNREAL_INTAKE_VERSIONS
     if ascend_mesh:
-        interior_versions += (ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION)
+        interior_versions += (ASCEND_MESH_INTAKE_VERSION, *ASCEND_ART_VERSIONS)
     model_files = validate_model_index(header, inventory, field="interiors", review_field="interior_review",
                                        pattern=INTERIOR_FILE, prefix=interior_prefix, supported=interior_versions,
-                                       required=(4, 15, 16, 17))
+                                       required=(4, 15, 16, 17, ASCEND_PLACEMENT_ART_VERSION))
     model_files.update(validate_model_index(header, inventory, field="shapes", review_field="shape_review",
                                            pattern=SHAPE_FILE, prefix=("tsstatic:", "staticshape:"),
                                            supported=(*range(5, 11), *range(18, 22)),
@@ -843,7 +845,7 @@ def load_intake(manifest):
         raise ValueError("Vengeance brush intake requires authored brush geometry.")
     if vengeance_static and not (shader_inputs or brush_intake or vengeance_mesh_files):
         raise ValueError("Vengeance static mesh intake requires placed mesh geometry.")
-    if has_textures:
+    if has_textures and not ascend_placement_art:
         validate_bindings(docs[TEXTURE_INDEX], slots, inventory,
                           legacy_sizes=texture_sizes if legacy_textures or native_models or ascend_art else None,
                           receipts=receipts, native_bsp=native_models or ascend_art, shader_inputs=shader_inputs or brush_intake,
@@ -935,6 +937,15 @@ def load_intake(manifest):
                 or not finite(row["yaw"], 360)
             ):
                 raise ValueError("Invalid objective marker.")
+    if ascend_placement_art:
+        placements = {}
+        for row in rows:
+            if row["status"] == "review" and row.get("conversion_class") == "unrealmeshactor":
+                filename = header["interiors"].get(row["model_reference"])
+                if filename in slots:
+                    placements[placement_key(row["id"])] = slots[filename]
+        validate_bindings(docs[TEXTURE_INDEX], slots, inventory, legacy_sizes=texture_sizes,
+                          receipts=receipts, native_bsp=True, placements=placements)
     if dict(Counter(r["status"] for r in rows)) != header.get("coverage"):
         raise ValueError("Object counts do not match the manifest.")
     if header["coverage"].get("boundary", 0) != int("minimap" in header):

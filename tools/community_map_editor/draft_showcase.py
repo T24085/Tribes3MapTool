@@ -3,7 +3,7 @@
 from pathlib import PurePosixPath
 import re
 
-from mesh_mappings import source_reference
+from mesh_mappings import material_reference, source_reference
 
 
 ROOT = "/Game/MapEditorShowcases"
@@ -22,15 +22,20 @@ def package(draft):
     return f"{ROOT}/{draft}/Showcase_{draft}"
 
 
-def exhibits(rows, planned, equipment):
+def exhibits(rows, planned, equipment, overrides=None):
     result = {category: {} for category in CATEGORIES}
     names = {row["id"]: row["name"] for row in rows}
+    overrides = overrides or {}
     for row, path, _, _, scale in planned:
         reference = source_reference(row)
         kind, filename = reference.split(":", 1)
         category = "Buildings" if kind == "interiorinstance" else "Props"
         title = PurePosixPath(filename).stem
-        result[category].setdefault(reference, (title, reference, path, scale, 0))
+        look = material_reference(row, overrides)
+        key = (reference, tuple((slot, mat.get_path_name()) for slot, mat in sorted(overrides.get(look, {}).items())))
+        if look != reference and overrides[look] != overrides.get(reference, {}):
+            title = row["name"] or title
+        result[category].setdefault(key, (title, look, path, scale, 0))
     for row in rows:
         if row["status"] != "marker":
             continue
@@ -102,7 +107,7 @@ def place_exhibit(editor, category, exhibit, meshes, overrides, shapes, palette,
     plinth.static_mesh_component.set_static_mesh(shapes["Cube"])
     plinth.static_mesh_component.set_material(0, palette["Display"])
     plinth.set_actor_scale3d(unreal.Vector(9.2, 9.2, PLINTH_HEIGHT / 100))
-    actor = spawn(editor, unreal.StaticMeshActor, f"{title} · {detail}", category, (x, y, 0))
+    actor = spawn(editor, unreal.StaticMeshActor, title if path else f"{title} · {detail}", category, (x, y, 0))
     component = actor.static_mesh_component
     if path:
         component.set_static_mesh(meshes[path])
@@ -127,7 +132,7 @@ def place_exhibit(editor, category, exhibit, meshes, overrides, shapes, palette,
     )
     actor.set_editor_property("tags", [kind, "T3ShowcaseExhibit"])
     team_name = {1: "Blue • ", 2: "Red • "}.get(team, "")
-    subtitle = ("Imported materials" if detail in overrides else "Model") if path else team_name + detail
+    subtitle = ("Imported materials" if overrides.get(detail) else "Model") if path else team_name + detail
     title = title.strip() or "Unnamed object"
     if len(title) > 29:
         title = title[:28] + "…"
@@ -182,7 +187,7 @@ def populate_stage(editor, groups, meshes, overrides):
 def build(editor, draft, draft_level, rows, planned, equipment, meshes, overrides):
     import unreal
 
-    groups = exhibits(rows, planned, equipment)
+    groups = exhibits(rows, planned, equipment, overrides)
     target = package(draft)
     if editor.ASSETS.does_asset_exist(target):
         raise ValueError("This draft already has a model showcase.")

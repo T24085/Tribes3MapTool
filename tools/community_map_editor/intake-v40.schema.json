@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 40",
+  "description": "Private Ascend intake with per-placement component materials. In model-textures.json, placement-<object ID> entries name the slots explicitly overridden for that object. Other slots inherit the bindings on the referenced interior file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "profile", "source_game", "name", "reader", "profile_sha256", "sources", "files", "coverage", "minimap", "interiors", "interior_review"],
+  "properties": {
+    "format": {"const": 40},
+    "profile": {"const": "ascend-ctf"},
+    "source_game": {"const": "Tribes: Ascend"},
+    "name": {"$ref": "intake-v39.schema.json#/properties/name"},
+    "reader": {"const": "legacy-unreal-intake-v1"},
+    "profile_sha256": {"$ref": "intake-v39.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v39.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v39.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v39.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v39.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v39.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v39.schema.json#/properties/interior_review"},
+    "files": {"$ref": "intake-v39.schema.json#/properties/files"}
+  }
+}

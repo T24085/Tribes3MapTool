@@ -9,7 +9,7 @@ import math
 from pathlib import Path
 import re
 
-from ascend_materials import resolve_material as resolve_ascend_material
+from ascend_materials import placed_materials as ascend_placed_materials, resolve_material as resolve_ascend_material
 from ascend_static_mesh import read_placed_meshes as read_ascend_meshes
 from ascend_texture_cache import AscendTextureCache
 from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, PLAYABLE_BOUNDS, UNREAL_READER, UNREAL_SCENE,
@@ -17,7 +17,8 @@ from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, PL
 from interior_geometry import MAX_GEOMETRY_BYTES
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
-from source_profiles import (ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION, UNREAL_INTAKE_VERSIONS, UNREAL_PROFILES,
+from source_profiles import (ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION, ASCEND_PLACEMENT_ART_VERSION,
+                             UNREAL_INTAKE_VERSIONS, UNREAL_PROFILES,
                              VENGEANCE_ART_INTAKE_VERSION, VENGEANCE_BSP_MATERIALS_VERSION,
                              VENGEANCE_DOOR_VERSION, VENGEANCE_ELEVATOR_LINK_VERSION, VENGEANCE_ELEVATOR_VERSION,
                              VENGEANCE_MESH_MATERIALS_VERSION,
@@ -30,7 +31,7 @@ from t1_reader import load_heightmap
 from t2_reader import publish_intake
 from terrain_grid import CELLS
 from unreal_binary_scene import actor_scene
-from unreal_legacy_reader import descendants, read_unreal_export
+from unreal_legacy_reader import attributes, descendants, read_unreal_export
 from unreal_native_terrain import decode_terrain
 from unreal_package_reader import GAMES as NATIVE_PACKAGE_TYPES, open_package
 from vengeance_bsp import read_bsp_models
@@ -93,7 +94,7 @@ def project_markers(scene, teams):
     return markers
 
 
-def project_rows(scene, markers, heightmap):
+def project_rows(scene, markers, heightmap, *, placement_components=None):
     root, = [item for item in scene["scene"] if item.get("block", "").casefold() == "map"]
     nodes = {item["line"]: item for item in descendants(root)}
     native = scene.get("native_terrain")
@@ -182,6 +183,13 @@ def project_rows(scene, markers, heightmap):
                 row.update(conversion_class="unrealmeshactor", model_reference="unrealmesh:" + model[0]["source"].casefold(),
                            transform=dict(position_cm=[v * 100 for v in transform["position_m"]],
                                           rotation_xyzw=transform["rotation_xyzw"], scale=transform["scale"]))
+                if placement_components is not None:
+                    components = [nodes[part["line"]] for part in actor["components"]
+                                  if attributes(part["declaration"]).get("class", "").rsplit(".", 1)[-1].casefold()
+                                  == "staticmeshcomponent"]
+                    if any(tag["name"].casefold() == "materials"
+                           for part in components for tag in part["tags"]):
+                        placement_components.append((actor, raw, row, components))
             else:
                 row["reason"] += " · Resolve model and component transforms before placement."
         if receivers := event_receivers.get(line):
@@ -323,7 +331,6 @@ def convert_unreal(source, output, metadata=None):
                 mesh_issues.update(issues)
                 companion_receipts.append(dict(name=report["source"]["name"], origin=path.name,
                                                sha256=report["source"]["sha256"]))
-        companion_receipts.extend(dict(receipt, origin=name) for name, receipt in sorted(artwork.packages.items()))
         unresolved = references - mesh_docs.keys() - mesh_issues.keys()
         suffix = "pkg" if game == "vengeance" else "upk"
         for ref in unresolved & imported_meshes.keys():
@@ -364,7 +371,8 @@ def convert_unreal(source, output, metadata=None):
         raise ValueError("Every CTF marker must be within the playable bounds.")
     if native and scene["native_terrain"]["export_index"] in markers:
         raise ValueError("A terrain actor cannot be assigned as a CTF marker.")
-    rows = project_rows(scene, markers, settings.get("heightmap"))
+    placement_components = [] if binary and game == "ascend" else None
+    rows = project_rows(scene, markers, settings.get("heightmap"), placement_components=placement_components)
     next(row for row in rows if row["status"] == "boundary")["properties"][PLAYABLE_BOUNDS] = bounds
     interiors, files = {}, dict(paint.files)
     placed = {row["model_reference"] for row in rows if "model_reference" in row}
@@ -392,6 +400,17 @@ def convert_unreal(source, output, metadata=None):
                 row["reason"] = "Imported static mesh geometry and collision. Assign destination materials as needed."
         elif reference in mesh_issues:
             row["reason"] += " · " + mesh_issues[reference]
+    placement_models = {}
+    if placement_components:
+        with open_package(source, game) as (report, stream):
+            if scene["source"]["sha256"] != report["source"]["sha256"]:
+                raise ValueError("Ascend map changed while resolving its component materials.")
+            placement_models, issues = ascend_placed_materials(placement_components, mesh_docs, stream)
+            artwork.read_package(placement_models, report, stream, component_materials=True)
+        for row, reason in issues:
+            row["reason"] = f'{row["reason"]} · {reason}'
+    if artwork:
+        companion_receipts.extend(dict(receipt, origin=name) for name, receipt in sorted(artwork.packages.items()))
     bsp_references = []
     for level, geometry, _ in models:
         reference = f"unrealmesh:bsp.{geometry['source']['export']}"
@@ -410,7 +429,7 @@ def convert_unreal(source, output, metadata=None):
                          status="review", reason=issue["reason"], properties={}))
     mesh_artwork = extended_materials = surface_detail = False
     if artwork:
-        mesh_artwork = any("file" in binding for reference in mesh_docs
+        mesh_artwork = any("file" in binding for reference in (*mesh_docs, *placement_models)
                            for binding in artwork.bindings[reference].values())
         extended_materials = any(has_shader_inputs(binding) for reference in interiors
                                  for binding in artwork.bindings.get(reference, {}).values())
@@ -419,12 +438,13 @@ def convert_unreal(source, output, metadata=None):
         texture_models = interiors if mesh_artwork or extended_materials or brush_models else bsp_references
         texture_index = {interiors[reference]: artwork.bindings[reference] for reference in texture_models
                          if reference in artwork.bindings}
+        texture_index.update((key, artwork.bindings[key]) for key in placement_models)
         texture_files = {texture["file"] for slots in texture_index.values() for binding in slots.values()
                          for texture in texture_records(binding)}
         if texture_files:
             files.update((name, artwork.textures[name]) for name in sorted(texture_files))
             files[TEXTURE_INDEX] = encoded(texture_index)
-        for reference in interiors:
+        for reference in (*interiors, *placement_models):
             for issue in artwork.review.get(reference, ()):
                 label = f"{issue['model']} material {issue['slot']} · {issue['material']}"
                 rows.append(dict(id=len(rows) + 1, parent=None, source_class="Material", name=label[:512],
@@ -453,6 +473,8 @@ def convert_unreal(source, output, metadata=None):
     version = UNREAL_INTAKE_VERSIONS[0]
     if mesh_docs and game == "ascend":
         version = ASCEND_MODEL_ART_VERSION if mesh_artwork else ASCEND_MESH_INTAKE_VERSION
+        if mesh_artwork and placement_models:
+            version = ASCEND_PLACEMENT_ART_VERSION
     if paint.masks:
         version = VENGEANCE_PAINT_INTAKE_VERSION
     terrain_art = any("file" in item for item in paint.artwork.values())

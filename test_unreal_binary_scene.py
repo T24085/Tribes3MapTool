@@ -86,7 +86,7 @@ def vengeance_mesh_buffers():
 def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_terrain=False, bad_terrain_flag=False,
                          bsp_world=False, static_mesh=None, external_height=False, painted=False, source_artwork=False,
                          bsp_artwork=False, mesh_artwork=False, shader_inputs=False, surface_detail=False, brush_mover=False,
-                         ascend_shader=None):
+                         ascend_shader=None, ascend_component_materials=None):
     exported, settings = unreal_draft_fixture(root, game)
     modern = game == "ascend"
     source = exported.with_suffix(".fmap" if modern else ".tvm")
@@ -112,6 +112,9 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
             strings += ("MaterialExpressionTextureSampleParameter2D", "ShaderParent", "ColorParent", "Parent",
                         "ColorNode", "RoofPaint", "DiffuseColor", "ColorMaterialInput", "Expression",
                         "Mask", "MaskR", "MaskG", "MaskB", "MaskA", "UseConstant")
+    if ascend_component_materials:
+        assert modern and ascend_shader == "direct"
+        strings = tuple(dict.fromkeys((*strings, "Materials")))
 
     def pack(form, *values):
         return struct.pack("<" + form, *values)
@@ -664,6 +667,25 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                                   prop("bCollideActors", "BoolProperty", b"\0"),
                                   prop("bHidden", "BoolProperty", b"\x01"))
         exports[7] = (-5, 0, "Unmapped", 0, decorative, 3)
+    if ascend_component_materials:
+        imports.append(("Fixture", "Material", -1, "ColorParent"))
+        material = -len(imports) if ascend_component_materials != "unknown-reference" else -50000
+        fields = pack("3i", 2, material, 0)
+        if ascend_component_materials == "truncated":
+            fields = fields[:-4]
+        materials_prop = prop("Materials", "ArrayProperty", fields)
+        mesh_prop = reference("StaticMesh", mesh_index)
+        exports[6] = (-6, 6, "DeckMesh", 0, object_bytes(mesh_prop, materials_prop, component=True), 3)
+        exports[7] = (-5, outer, "Unmapped", 0, object_bytes(vector("Location", 80, 160, 200)), 3)
+        exports.append((-6, 8, "DeckMesh", 0, object_bytes(mesh_prop, component=True), 3))
+        if ascend_component_materials in ("explicit-owner", "ambiguous"):
+            actor_props = [*decks, mesh_prop]
+            if ascend_component_materials == "explicit-owner":
+                actor_props.append(reference("StaticMeshComponent", 7))
+            exports[5] = (-5, outer, "Deck", 0, object_bytes(*actor_props), 3)
+            exports[6] = (-6, 6, "DeckMesh", 0, object_bytes(materials_prop, component=True), 3)
+            sibling = prop("Materials", "ArrayProperty", pack("2i", 1, -50000))
+            exports.append((-6, 6, "Unmapped", 0, object_bytes(sibling, component=True), 3))
     package = build_package(game, strings, imports, exports, compressed=modern, licensee=27, version=130)
     source.write_bytes(package)
     if legacy_ground and not external_height:
@@ -1372,6 +1394,56 @@ class UnrealBinarySceneTests(unittest.TestCase):
             for slot, pixel in (("0", (241, 80, 12, 255)), ("1", (36, 140, 9, 255))):
                 with Image.open(manifest.with_name(index[slot]["file"])) as image:
                     self.assertEqual(image.getpixel((0, 0)), pixel)
+
+    def test_ascend_component_materials_use_one_mesh_and_override_only_the_owning_placement(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "ascend", static_mesh="companion", mesh_artwork=True,
+                                         ascend_shader="direct", ascend_component_materials="valid")
+            write_ascend_rtc(root)
+            manifest = convert_unreal(source, root / "Intakes")
+            header, _, rows = load_intake(manifest)
+            self.assertEqual(header["format"], 40)
+            model, = header["interiors"].values()
+            placements = [row for row in rows if row.get("model_reference") in header["interiors"]]
+            self.assertEqual([row["name"] for row in placements], ["Deck", "Unmapped"])
+            index_path = manifest.with_name(TEXTURE_INDEX)
+            index = json.loads(index_path.read_bytes())
+            key = f"placement-{placements[0]['id']}"
+            self.assertEqual(set(index), {model, key})
+            self.assertEqual(index[key], {"0": index[model]["1"]})
+            self.assertNotEqual(index[key]["0"], index[model]["0"])
+            public, _, _ = load_intake(unpack_intake(export_public_layout(manifest, root / "Share.zip"), root / "Public"))
+            self.assertEqual(public["format"], 22)
+            self.assertNotIn(TEXTURE_INDEX, public["files"])
+
+            for bad_key, bad_slot, error in (("placement-9999", "0", "unknown model or placement"),
+                                             (key, "9", "unknown material slot")):
+                data = json.dumps({model: index[model], bad_key: {bad_slot: index[key]["0"]}}).encode()
+                index_path.write_bytes(data)
+                header["files"][TEXTURE_INDEX] = sha256(data).hexdigest()
+                manifest.write_text(json.dumps(header), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, error):
+                    load_intake(manifest)
+
+    def test_ascend_bad_component_materials_appear_in_review(self):
+        for case, version, reason in (("truncated", 39, "component Materials array length"),
+                                      ("unknown-reference", 40, "outside the package object table"),
+                                      ("ambiguous", 39, "Cannot associate Ascend component materials"),
+                                      ("explicit-owner", 40, "Additional Ascend component materials")):
+            with self.subTest(case=case), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = binary_draft_fixture(root, "ascend", static_mesh="companion", mesh_artwork=True,
+                                             ascend_shader="direct", ascend_component_materials=case)
+                manifest = convert_unreal(source, root / "Intakes")
+                header, _, rows = load_intake(manifest)
+                self.assertEqual(header["format"], version)
+                self.assertTrue(any(reason in row["reason"] for row in rows))
+                if case == "explicit-owner":
+                    deck = next(row for row in rows if row["name"] == "Deck")
+                    index = json.loads(manifest.with_name(TEXTURE_INDEX).read_bytes())
+                    model, = header["interiors"].values()
+                    self.assertEqual(index[f"placement-{deck['id']}"], {"0": index[model]["1"]})
 
     def test_ascend_reports_cycles_and_nondirect_diffuse(self):
         for mode, reason in (("cycle", "parent chain contains a cycle"), ("masked-output", "not a direct RGB texture sample")):

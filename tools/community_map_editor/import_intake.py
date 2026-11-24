@@ -15,7 +15,7 @@ from profile_exchange import active_profile
 from intake_contract import UNREAL_SCENE, bounded, intake_file_limit, intake_header, load_intake, load_intake_geometry
 from interior_geometry import VENGEANCE_BSP, VENGEANCE_STATIC_MESH
 from map_pipeline import Outcome, PipelineRun, pipeline_config
-from mesh_mappings import placements, source_reference
+from mesh_mappings import material_reference, placements, source_reference
 from mission_equipment import mission_equipment, power_context
 from mission_weather import cloud_layers, mission_weather, precipitation_emitters
 from native_terrain_paint import NativeTerrainPaint
@@ -317,7 +317,7 @@ def place_static_objects(actors, planned, meshes, material_overrides=None, light
             else:
                 actor.set_editor_property('is_editor_only_actor', True)
                 actor.static_mesh_component.set_collision_profile_name('NoCollision')
-        for slot, material in material_overrides.get(source_reference(row), {}).items():
+        for slot, material in material_overrides.get(material_reference(row, material_overrides), {}).items():
             actor.static_mesh_component.set_material(slot, material)
         if lighting_links and row['id'] in lighting_links:
             from equipment_unreal import mark_interior_lighting
@@ -667,7 +667,8 @@ class DraftImport:
         from draft_model_materials import generate_overrides
 
         self.material_overrides = generate_overrides(self.folder, self.header["files"], self.generated_models,
-                                                     self.lighting_index, moving_references=self.moving_references)
+                                                     self.lighting_index, moving_references=self.moving_references,
+                                                     placements=self.planned)
         for path, (geometry, digest, lighting, texture_sizes, reference) in self.generated.items():
             surfaces = (self.material_overrides.get(reference)
                         if geometry["format"] in (VENGEANCE_BSP, VENGEANCE_STATIC_MESH) else None)
