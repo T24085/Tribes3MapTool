@@ -15,7 +15,7 @@ from map_sync_contract import map_catalog
 from portable_maps import load_json, merge_map_manifests
 from tools.t2_map_release import (
     CENTRAL, DRAFT, bundle_members, descriptor_paths, flag_boundary_features, publish_directory, regular_row,
-    release_plan, verify_descriptors, verify_draft_world_settings, verify_flag_boundary_runtime,
+    release_plan, verify_descriptors, verify_draft_world_settings, verify_flag_boundary_runtime, verify_minimap_runtime,
 )
 from verified_file_cache import MAX_PACKAGE_MANIFEST_BYTES, verify_package
 
@@ -78,6 +78,8 @@ def release_additions(package, plan, source, central, initial, old_catalog, base
     shared = shared_rows(payload, central, changes)
     original_rows = initial['files']
     declared = merge_map_manifests(payload, dict(initial, files=[*original_rows, *shared]))
+    if draft in declared.get('_portable_minimaps', {}):
+        verify_minimap_runtime(source, inventory)
     rows = {row['path']: row for row in declared['files']}
     if (map_catalog(declared) != plan['after_catalog']
             or any(rows.get(row['path']) != row for row in original_rows)):

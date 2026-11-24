@@ -20,6 +20,17 @@ From a fresh UE 5.3 workspace, authored Tribes 1, Tribes 2, Vengeance, and Ascen
 
 Direct Host export and staging check the target bundle's support for editor draft World Settings. Rolling back the last custom map preserves the content directory required by the original native-map catalog.
 
+The combined bundle also loaded all four authored fixtures in separate
+native Direct Host matches. Each host reached ready with two flags and
+two flag stands linked. These checks covered host startup and objective
+setup. The Starter downloaded the same four maps through a loopback
+test distributor, verified their minimap PNGs, and reopened them from
+its map cache.
+
+Minimap-bearing drafts require a Direct Host bundle whose game launcher
+supports portable minimaps. Export and staging check the inventoried
+launcher and reader before publishing the bundle.
+
 ## Flag boundary verification
 
 An Unreal Engine 5.3 draft with a three-second flag return timer passed a Windows cook, Direct Host export, staging and rollback checks. In an offline match, reentry cleared the warning and kept the flag with the carrier. A second exit returned the flag home after 3.034 seconds and displayed the HUD notice. A later windowed capture confirmed that the warning sits below the match-start announcement.

@@ -92,6 +92,22 @@ def verify_draft_world_settings(host, files):
         raise ValueError(message)
 
 
+def verify_minimap_runtime(host, files):
+    launcher = 'playtest.py'
+    if launcher not in files and not ((host/launcher).exists() or (host/launcher).is_symlink()):
+        # Inventory-only bundles are also used for editor staging rehearsals.
+        return
+    message = 'Choose a verified Direct Host bundle with a minimap-compatible game launcher.'
+    components = (
+        (launcher, b'merge_map_manifests'),
+        ('lib/portable_maps.py', b'_portable_minimaps'),
+        ('lib/map_sync_contract.py', b'def minimap_settings('),
+    )
+    for name, required in components:
+        if required not in verified_host_source(host, files, name, message):
+            raise ValueError(message)
+
+
 def verify_flag_boundary_runtime(host, files, features):
     capabilities = {}
     if 'floor' in features or 'ceiling' in features:
@@ -275,6 +291,10 @@ def stage_release(package, source, destination, *, rollback=False, link_content=
     if map_id in plan[f'{new}_catalog']:
         inventory = {row['path']: row for row in initial['files']}
         verify_draft_world_settings(source, inventory)
+        descriptor = f'lua/{map_id}/map.json'
+        target_descriptor = package/replacement/descriptor if descriptor in changes else source/descriptor
+        if 'minimap' in load_json(target_descriptor, 16384):
+            verify_minimap_runtime(source, inventory)
         level = f'content/Maps/Community/{map_id}/Arena_{map_id}_P.umap'
         selected = package/replacement/level if level in changes else source/level
         if features := flag_boundary_features(selected):
