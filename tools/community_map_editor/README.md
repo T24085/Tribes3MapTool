@@ -958,6 +958,14 @@ the surfaces in each lighting state, missing bindings, and animation
 data. The intake keeps the animation tables and buffers exposed by the
 configured decoder.
 
+Reimport the original mission to create a [version 45 intake](intake-v45.schema.json)
+with [animated mask placements](intake-v45.lighting.schema.json). The
+editor uses the source rectangles, intensity masks, and keyframe colors
+to play ambient loops on the authored detail levels. Alarm tracks appear
+only in the alarm state. Triggered and flickering tracks remain in the
+intake and appear in the review when unsupported. Older intakes still
+open with their baked lighting.
+
 The imported material multiplies the source base color by the baked
 color atlas on a second UV channel. The draft starts in its normal
 state. When an import has baked interiors, the tool saves inspection
@@ -975,9 +983,9 @@ Lighting…** still captures a quick pair from the current viewport.
 Saved camera renders show normal lighting, the complete alarm look, and
 each linked circuit offline on its own. The private revisions in
 `Saved/T3LightingPreviews` include the camera poses, field of view,
-circuit IDs, and PNG hashes. The preview uses an editor simulation of
-the baked states. Direction maps and animated light data are retained
-in the intake for future rendering support.
+circuit IDs, and PNG hashes. The preview simulates the selected power
+state in the editor. Direction maps are retained in the intake for
+future rendering support.
 
 When an imported interior has an alarm lightmap and an authored generator
 circuit, the editor records the link automatically. To change it, select the

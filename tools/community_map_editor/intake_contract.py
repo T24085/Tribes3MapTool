@@ -14,7 +14,8 @@ from native_terrain_paint import MAX_PAINT_BYTES, MAX_PAINT_LAYERS, MAX_PAINT_PN
 from sky_intake import MAX_SKIES, MAX_SKY_BYTES, MAX_SKY_SLOTS, SKY_INDEX, SKY_PNG, validate_sky_artwork
 from source_profiles import (ASCEND, ASCEND_ART_VERSIONS, ASCEND_COLLISION_VERSIONS, ASCEND_CONVEX_COLLISION_VERSION,
                              ASCEND_PLACEMENT_ART_VERSION, ASCEND_PRIVATE_MESH_VERSIONS,
-                             BRUSH_PREVIEW_REFERENCE, NAMES, T2, T2_DIF_LOD_LIGHT_VERSION, T2_DIF_LOD_VERSIONS,
+                             BRUSH_PREVIEW_REFERENCE, NAMES, T2, T2_DIF_ANIMATION_VERSION, T2_DIF_LOD_LIGHT_VERSION,
+                             T2_DIF_LOD_VERSIONS, T2_DIF_VERSIONS,
                              UNREAL_INTAKE_VERSION,
                              UNREAL_INTAKE_VERSIONS, VENGEANCE, VENGEANCE_ART_INTAKE_VERSION,
                              VENGEANCE_BSP_MATERIALS_VERSION, VENGEANCE_MESH_MATERIALS_VERSION,
@@ -35,7 +36,7 @@ MAX_INTAKE_INTERIORS = 128
 MAX_INTAKE_INTERIOR_BYTES = 96 * 1024 * 1024
 PLAYABLE_BOUNDS = "playable_bounds_cm"
 BOUNDARY_RECIPE = "draft_boundary_recipe"
-LATEST_INTAKE_VERSION = max(UNREAL_INTAKE_VERSION, *T2_DIF_LOD_VERSIONS)
+LATEST_INTAKE_VERSION = max(UNREAL_INTAKE_VERSION, *T2_DIF_VERSIONS)
 T1_SHAPE_INTAKE_VERSION = {4: 18, 5: 19, 6: 20, 7: 21}
 EQUIPMENT_FILE = "equipment.json"
 UNREAL_SCENE = "source-scene.json"
@@ -691,7 +692,8 @@ def load_intake(manifest):
         interior_prefix = "unrealmesh:bsp." if vengeance_bsp and not vengeance_static else "unrealmesh:"
     else:
         interior_prefix = "interiorshape:" if legacy_int else "interiorinstance:"
-    interior_versions = (*range(4, 11), *range(15, 22), *T2_DIF_LOD_VERSIONS)
+    dif_animation = header["format"] == T2_DIF_ANIMATION_VERSION
+    interior_versions = (*range(4, 11), *range(15, 22), *T2_DIF_VERSIONS)
     if vengeance_bsp:
         interior_versions += UNREAL_INTAKE_VERSIONS
     if ascend_mesh:
@@ -701,7 +703,7 @@ def load_intake(manifest):
                                        required=(4, 15, 16, 17, ASCEND_PLACEMENT_ART_VERSION, *ASCEND_COLLISION_VERSIONS))
     model_files.update(validate_model_index(header, inventory, field="shapes", review_field="shape_review",
                                            pattern=SHAPE_FILE, prefix=("tsstatic:", "staticshape:"),
-                                           supported=(*range(5, 11), *range(18, 22), *T2_DIF_LOD_VERSIONS),
+                                           supported=(*range(5, 11), *range(18, 22), *T2_DIF_VERSIONS),
                                            required=(5, *range(18, 22))))
     texture_files = {name for name in inventory if TEXTURE_FILE.fullmatch(name)}
     has_textures = TEXTURE_INDEX in inventory
@@ -808,7 +810,7 @@ def load_intake(manifest):
             if LIGHTING_INDEX in inventory and model_format in (1, 3):
                 source_hash = geometry["source"]["sha256"]
                 lit_models[name] = (source_hash, len(geometry["triangles"]))
-                if header["format"] == T2_DIF_LOD_LIGHT_VERSION:
+                if dif_animation or header["format"] == T2_DIF_LOD_LIGHT_VERSION:
                     for position, level in enumerate(geometry.get("lods", {}).get("secondary", ()), 1):
                         lit_models[dif_lighting_key(name, position)] = (source_hash, len(level["triangles"]))
             if has_textures:
@@ -860,7 +862,7 @@ def load_intake(manifest):
             raise ValueError("Invalid intake minimap PNG header or dimensions.")
         if name.endswith(".json"):
             docs[name] = json.loads(data)
-    if has_dif_lods != (header["format"] in T2_DIF_LOD_VERSIONS):
+    if not dif_animation and has_dif_lods != (header["format"] in T2_DIF_LOD_VERSIONS):
         raise ValueError("Intake version does not match its DIF detail levels.")
     if 19 <= header["format"] <= 21 and header["format"] != shape_version:
         raise ValueError("The newest DTS shape does not match the intake version.")
@@ -884,11 +886,15 @@ def load_intake(manifest):
         if vengeance_mesh_art and not any("file" in binding for filename in vengeance_mesh_files
                                           for binding in docs[TEXTURE_INDEX][filename].values()):
             raise ValueError("Vengeance mesh artwork intake requires at least one authored mesh texture.")
+    lighting = docs.get(LIGHTING_INDEX, {})
     if LIGHTING_INDEX in docs:
-        validate_lighting(docs[LIGHTING_INDEX], lit_models, inventory, legacy=legacy_int, receipts=receipts)
-    has_secondary_lighting = any("#" in key for key in docs.get(LIGHTING_INDEX, {}))
-    if has_secondary_lighting != (header["format"] == T2_DIF_LOD_LIGHT_VERSION):
+        validate_lighting(lighting, lit_models, inventory, legacy=legacy_int,
+                          rectangles_allowed=dif_animation, receipts=receipts)
+    has_secondary_lighting = any("#" in key for key in lighting)
+    if not dif_animation and has_secondary_lighting != (header["format"] == T2_DIF_LOD_LIGHT_VERSION):
         raise ValueError("Intake version does not match its secondary DIF lighting.")
+    if dif_animation and not any("surface_rects" in record.get("animation", {}) for record in lighting.values()):
+        raise ValueError("Animated DIF lighting intake requires source mask rectangles.")
     terrain = docs["terrain.json"]
     if not isinstance(terrain, dict):
         raise ValueError("Invalid terrain record.")
@@ -1017,7 +1023,7 @@ def load_intake(manifest):
                     or not isinstance(receipt["name"], str) or not receipt["name"].casefold().endswith(".pkg")
                     or not any(all(receipt[key] == source[key] for key in receipt) for source in header["sources"][1:])):
                 raise ValueError("External Vengeance height texture does not match the intake provenance.")
-    if WEATHER_FILE in docs or header["format"] in (10, *T2_DIF_LOD_VERSIONS):
+    if WEATHER_FILE in docs or header["format"] in (10, *T2_DIF_VERSIONS):
         weather = mission_weather(rows, terrain)
         expected = weather if weather["objects"] else None
         if json.dumps(docs.get(WEATHER_FILE), sort_keys=True) != json.dumps(expected, sort_keys=True):
@@ -1032,7 +1038,7 @@ def load_intake(manifest):
                                   ("interiors", "interior_review", "shapes", "shape_review")))
         if references - known:
             raise ValueError("Intake model does not belong to this mission.")
-    if EQUIPMENT_FILE in docs or header["format"] in (8, 9, 10, *T2_DIF_LOD_VERSIONS):
+    if EQUIPMENT_FILE in docs or header["format"] in (8, 9, 10, *T2_DIF_VERSIONS):
         from mission_equipment import mission_equipment
 
         expected = mission_equipment(rows, terrain)

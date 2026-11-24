@@ -20,6 +20,7 @@ ANIMATION_TABLES = {
     "surface_data": ("stateDatas", ("surfaceIndex", "mapIndex", "lightStateIndex")),
 }
 ANIMATION_BUFFERS = {"names_hex": "nameBuffer", "state_masks_hex": "stateDataBuffers"}
+ANIMATION_RECT_FIELDS = ("mapOffsetX", "mapOffsetY", "mapSizeX", "mapSizeY", "lightStateInfoStart", "lightCount")
 
 
 def lightmap_uv(surface):
@@ -108,6 +109,17 @@ def archive_lighting(interior, source_hash, ranges):
             result["animation"] = archive_animation(interior, animations)
         except (AttributeError, TypeError, ValueError):
             result["review"].append("The animated light tables could not be preserved by this decoder.")
+        else:
+            try:
+                rectangles = [[surface, *(getattr(interior.surfaces[surface], field)
+                                          for field in ANIMATION_RECT_FIELDS)]
+                              for surface in sorted({row[0] for row in result["animation"]["surface_data"]})
+                              if 0 <= surface < len(interior.surfaces)]
+                if rectangles:
+                    validate_rectangles(result["animation"], rectangles)
+                    result["animation"]["surface_rects"] = rectangles
+            except (AttributeError, TypeError, ValueError):
+                result["review"].append("The animated light mask rectangles could not be preserved by this decoder.")
     return result, images
 
 
@@ -127,8 +139,9 @@ def archive_animation(interior, animations):
     return data
 
 
-def validate_animation(data, animations):
-    if not isinstance(data, dict) or data.keys() != ANIMATION_TABLES.keys() | ANIMATION_BUFFERS.keys():
+def validate_animation(data, animations, *, rectangles_allowed=False):
+    optional = {"surface_rects"} if rectangles_allowed else set()
+    if not isinstance(data, dict) or data.keys() - optional != ANIMATION_TABLES.keys() | ANIMATION_BUFFERS.keys():
         raise ValueError("Invalid interior light animation tables.")
     for key, (_, fields) in ANIMATION_TABLES.items():
         rows = data[key]
@@ -142,6 +155,31 @@ def validate_animation(data, animations):
         and re.fullmatch(r"[0-9a-f]*", data[key]) for key in ANIMATION_BUFFERS
     ):
         raise ValueError("Invalid interior light animation inventory.")
+    if "surface_rects" in data:
+        validate_rectangles(data, data["surface_rects"])
+
+
+def validate_rectangles(animation, rectangles):
+    if not isinstance(rectangles, list) or not 0 < len(rectangles) <= len(animation["surface_data"]):
+        raise ValueError("Invalid DIF animated light mask rectangles.")
+    layout = {}
+    previous = -1
+    for row in rectangles:
+        if not isinstance(row, list) or len(row) != 7 or any(type(value) is not int for value in row):
+            raise ValueError("Invalid DIF animated light mask rectangle.")
+        surface, x, y, width, height, first, count = row
+        if (not previous < surface <= 250_000 or not 0 <= x < x + width <= 4096
+                or not 0 <= y < y + height <= 4096 or not 0 <= first < first + count <= 65_536):
+            raise ValueError("Invalid DIF animated light mask rectangle bounds.")
+        previous = surface
+        layout[surface] = (width * height, first, count)
+    if layout.keys() != {row[0] for row in animation["surface_data"]}:
+        raise ValueError("The DIF animated light masks and surface rectangles do not match.")
+    mask_size = len(animation["state_masks_hex"]) // 2
+    for surface, offset, slot in animation["surface_data"]:
+        size, first, count = layout[surface]
+        if not (first <= slot < first + count and (offset == -1 or 0 <= offset <= mask_size - size)):
+            raise ValueError("Invalid DIF animated light mask offset or slot.")
 
 
 def legacy_state_sources(record, receipts):
@@ -202,7 +240,7 @@ def valid_baked_uv(uv, normal, alarm, legacy):
             and all(number(value) for value in uv[4:]))
 
 
-def validate_lighting(index, models, inventory, *, legacy=False, receipts=()):
+def validate_lighting(index, models, inventory, *, legacy=False, rectangles_allowed=False, receipts=()):
     files = {name for name in inventory if LIGHTMAP_FILE.fullmatch(name)}
     if not isinstance(index, dict) or not index or index.keys() - models.keys() or len(files) > MAX_LIGHTMAPS:
         raise ValueError("Invalid interior lighting inventory.")
@@ -217,7 +255,7 @@ def validate_lighting(index, models, inventory, *, legacy=False, receipts=()):
                 or type(record["animated_lights"]) is not int or not 0 <= record["animated_lights"] <= 250_000):
             raise ValueError("Invalid interior lighting provenance.")
         if "animation" in record:
-            validate_animation(record["animation"], record["animated_lights"])
+            validate_animation(record["animation"], record["animated_lights"], rectangles_allowed=rectangles_allowed)
         roles = legacy_state_sources(record, receipts) if legacy else {}
         atlases, surfaces, review = (record[key] for key in ("atlases", "surfaces", "review"))
         if (not isinstance(atlases, list) or len(atlases) > MAX_LIGHTMAPS
@@ -269,9 +307,9 @@ def load_lighting_index(folder, inventory):
 
 
 def model_lighting(index, filename, geometry):
-    primary = index.get(filename)
+    primary = prepared_level(index.get(filename))
     levels = geometry.get("lods", {}).get("secondary", ())
-    secondary = {position: index[key] for position in range(1, len(levels) + 1)
+    secondary = {position: prepared_level(index[key]) for position in range(1, len(levels) + 1)
                  if (key := dif_lighting_key(filename, position)) in index}
     if not secondary:
         return primary
@@ -290,8 +328,26 @@ def model_lighting(index, filename, geometry):
             [surface, first, count, slots.get(normal), slots.get(alarm), uv]
             for surface, first, count, normal, alarm, uv in record["surfaces"]
         ]
+    warnings = [warning for record in (primary or {}, *secondary.values())
+                for warning in record.get("animation_warnings", ())]
     return {**(primary or {}), "atlases": atlases, "surfaces": primary["surfaces"] if primary else [],
-            "lod_surfaces": lod_surfaces}
+            "lod_surfaces": lod_surfaces, **({"animation_warnings": warnings} if warnings else {})}
+
+
+def prepared_level(record):
+    if not record or "surface_rects" not in record.get("animation", {}):
+        return record
+    from dif_light_animation import ambient_atlas_tracks
+
+    animated, warnings = ambient_atlas_tracks(record)
+    atlases = list(record["atlases"])
+    variants = {}
+    for key, tracks in animated.items():
+        variants[key] = len(atlases)
+        atlases.append({**atlases[key[1]], "ambient_loops": tracks})
+    surfaces = [[source, first, count, variants.get((0, normal), normal), variants.get((1, alarm), alarm), uv]
+                for source, first, count, normal, alarm, uv in record["surfaces"]]
+    return {**record, "atlases": atlases, "surfaces": surfaces, "animation_warnings": list(warnings)}
 
 
 def alarm_switches_material(lighting):
@@ -312,6 +368,10 @@ def lighting_coverage(index):
 
 
 def lighting_summary(record):
+    from dif_light_animation import ambient_atlas_tracks
+
+    animated, warnings = ambient_atlas_tracks(record)
+    review = [*record["review"], *warnings]
     return {
         "normal_surfaces": sum(row[3] is not None for row in record["surfaces"]),
         "alarm_surfaces": sum(row[4] is not None for row in record["surfaces"]),
@@ -320,8 +380,9 @@ def lighting_summary(record):
         "authored_alarm_state": record["has_alarm"],
         "source_animated_lights": record["animated_lights"],
         "saved_animation_states": len(record.get("animation", {}).get("states", ())),
-        "review_count": len(record["review"]),
-        "first_review_messages": record["review"][:12],
+        "animated_atlases": len(animated),
+        "review_count": len(review),
+        "first_review_messages": review[:12],
         "source_sha256": record["source_sha256"],
         **({"source_light_states": record["legacy_states"]} if "legacy_states" in record else {}),
     }

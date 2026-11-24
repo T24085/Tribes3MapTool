@@ -2,14 +2,17 @@
 
 from hashlib import sha256
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import unreal
 
+from dif_light_animation import mask_texture
 from intake_contract import bounded
 from interior_geometry import ASCEND_STATIC_MESH, VENGEANCE_BSP, VENGEANCE_STATIC_MESH, material_sections
 from interior_lighting import model_lighting
 from mesh_mappings import source_reference
-from model_textures import has_shader_inputs, load_texture_index, placement_key, shader_signature
+from model_textures import has_shader_inputs, load_texture_index, placement_key, shader_signature, validate_png
 from source_profiles import BRUSH_PREVIEW_FOLDER, BRUSH_PREVIEW_REFERENCE
 from texture_batches_unreal import import_texture
 
@@ -20,12 +23,13 @@ VENGEANCE_DESTINATIONS = {VENGEANCE_BSP: '/Game/Community/VengeanceBSPTextures',
                           VENGEANCE_STATIC_MESH: '/Game/Community/VengeanceMeshTextures'}
 HASH_TAG = 'T3ModelTextureHash'
 ALARM_BLEND = 'T2 Alarm Blend'
+LIGHT_PREVIEW_TIME = 'T2 Light Preview Time'
 BAKED_MATERIAL_PREFIX = 'M_T2Baked_'
 LEGACY_BAKED_PREFIX = 'M_T1Baked_'
 BAKED_MATERIAL_PREFIXES = (BAKED_MATERIAL_PREFIX, LEGACY_BAKED_PREFIX)
 
 
-def source_texture(folder, filename, digest, *, srgb, destination=DESTINATION, normal=False):
+def source_texture(folder, filename, digest, *, srgb, destination=DESTINATION, normal=False, intensity=False):
     assets = unreal.EditorAssetLibrary
     pinned = (folder / filename).resolve(strict=True)
     if pinned.parent != folder or sha256(bounded(pinned, 16 * 1024 * 1024)).hexdigest() != digest:
@@ -40,6 +44,9 @@ def source_texture(folder, filename, digest, *, srgb, destination=DESTINATION, n
         texture.set_editor_property('srgb', srgb)
         if normal:
             texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP)
+        elif intensity:
+            texture.set_editor_property('mip_gen_settings', unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS)
+            texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_GRAYSCALE)
         elif destination == LEGACY_DESTINATION and not srgb:
             texture.set_editor_property('mip_gen_settings', unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS)
             texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_VECTOR_DISPLACEMENTMAP)
@@ -166,11 +173,61 @@ def source_material(folder, inventory, record, *, destination, mode='opaque', tw
     return material
 
 
-def lighted_material(folder, inventory, albedo, normal, alarm, *, legacy=False, masked=False):
+def loop_expression(node, connect, uv, time, preview, dimensions, track, destination, y):
+    duration, states = track
+    width, height = dimensions
+    png, tiles, columns, rows = mask_texture(states, width, height)
+    digest = sha256(png).hexdigest()
+    with TemporaryDirectory() as staging:
+        root = Path(staging).resolve()
+        filename = f'dif_intensity_{digest[:32]}.png'
+        (root / filename).write_bytes(png)
+        intensity = source_texture(root, filename, digest, srgb=False, intensity=True, destination=destination)
+    mask = node(unreal.MaterialExpressionTextureObject, -900, y)
+    mask.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
+    mask.set_editor_property('texture', intensity)
+    custom = node(unreal.MaterialExpressionCustom, -650, y)
+    custom.set_editor_property('description', 'Tribes 2 ambient light loop')
+    custom.set_editor_property('output_type', unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    pins = []
+    inputs = [('UV', uv), ('Clock', time), ('PreviewTime', preview), ('Mask', mask)]
+    for key, _ in inputs:
+        pin = unreal.CustomInput()
+        pin.set_editor_property('input_name', key)
+        pins.append(pin)
+    custom.set_editor_property('inputs', pins)
+    for key, source in inputs:
+        connect(source, '', custom, key)
+
+    def color(rgb):
+        return 'float3(' + ','.join(f'{channel}.0' for channel in rgb) + ')'
+
+    # The DIF uses the active state's mask while its color ramps to the next state.
+    code = [f'float Phase = fmod(max(0.0, PreviewTime >= 0.0 ? PreviewTime : Clock) * 1000.0, {duration}.0);',
+            'float3 Color = float3(0.0,0.0,0.0);', 'float2 Tile = float2(0.0,0.0);']
+    for i, (start, rgb, _) in enumerate(states):
+        end = states[i + 1][0] if i + 1 < len(states) else duration
+        next_color = states[(i + 1) % len(states)][1]
+        tile = tiles[i]
+        code.extend([('if' if not i else 'else if') + f' (Phase < {end}.0) {{',
+                     f' Color = lerp({color(rgb)}, {color(next_color)}, (Phase - {start}.0) / {end - start}.0);',
+                     f' Tile = float2({tile % columns}.0, {tile // columns}.0);', '}'])
+    code.extend([f'float2 HalfTexel = 0.5 / float2({width}.0,{height}.0);',
+                 f'float2 At = (clamp(UV, HalfTexel, 1.0 - HalfTexel) + Tile) / float2({columns}.0,{rows}.0);',
+                 'float Intensity = Texture2DSampleLevel(Mask, MaskSampler, At, 0).r * 255.0;',
+                 'return floor((floor(Color + 0.5) * Intensity + 128.0) / 256.0) / 255.0;'])
+    custom.set_editor_property('code', '\n'.join(code))
+    return custom, ''
+
+
+def lighted_material(folder, inventory, albedo, normal, alarm, *, legacy=False, masked=False,
+                     normal_loops=(), alarm_loops=()):
     names = (albedo, normal, alarm)
     signature = '|'.join(inventory[name] if name else '-' for name in names)
     if legacy:
         signature += '|t1-masked' if masked else '|t1-opaque'
+    if normal_loops or alarm_loops:
+        signature += '|dif-ambient-v1|' + json.dumps([normal_loops, alarm_loops], separators=(',', ':'))
     digest = sha256(signature.encode()).hexdigest()
     prefix = LEGACY_BAKED_PREFIX if legacy else BAKED_MATERIAL_PREFIX
     destination = LEGACY_DESTINATION if legacy else DESTINATION
@@ -200,17 +257,38 @@ def lighted_material(folder, inventory, albedo, normal, alarm, *, legacy=False, 
             connect(coords, '', value, 'UVs')
         return value, 'RGB'
 
+    def add_loops(bake, name, loops, y):
+        if not loops:
+            return bake
+        # Texture streaming can report a smaller resident mip in a rendering editor.
+        dimensions = validate_png(bounded(folder / name, 16 * 1024 * 1024))
+        time = node(unreal.MaterialExpressionTime, -1160, y)
+        preview = node(unreal.MaterialExpressionScalarParameter, -1160, y + 150)
+        preview.set_editor_property('parameter_name', LIGHT_PREVIEW_TIME)
+        preview.set_editor_property('default_value', -1.0)
+        value = bake
+        for index, loop in enumerate(loops):
+            row = y + index * 300
+            add = node(unreal.MaterialExpressionAdd, -390, row)
+            connect(*value, add, 'A')
+            connect(*loop_expression(node, connect, uv, time, preview, dimensions, loop, destination, row), add, 'B')
+            value = add, ''
+        clamp = node(unreal.MaterialExpressionSaturate, -270, y)
+        inputs = list(lib.get_material_expression_input_names(clamp))
+        connect(*value, clamp, str(inputs[0]))
+        return clamp, ''
+
     try:
         uv = node(unreal.MaterialExpressionTextureCoordinate, -780, 140)
         uv.set_editor_property('coordinate_index', 1)
         color = sample(albedo, 'SourceColor', -220)
-        bake = sample(normal, 'NormalLightmap', 40, uv)
-        if alarm is not None and (legacy or alarm != normal):
+        bake = add_loops(sample(normal, 'NormalLightmap', 40, uv), normal, normal_loops, 820)
+        if alarm is not None and (legacy or alarm != normal or normal_loops != alarm_loops):
             emergency_uv = uv
             if legacy:
                 emergency_uv = node(unreal.MaterialExpressionTextureCoordinate, -780, 360)
                 emergency_uv.set_editor_property('coordinate_index', 2)
-            emergency = sample(alarm, 'AlarmLightmap', 340, emergency_uv)
+            emergency = add_loops(sample(alarm, 'AlarmLightmap', 340, emergency_uv), alarm, alarm_loops, 1900)
             blend = node(unreal.MaterialExpressionScalarParameter, -540, 650)
             blend.set_editor_property('parameter_name', ALARM_BLEND)
             lerp = node(unreal.MaterialExpressionLinearInterpolate, -290, 140)
@@ -228,10 +306,11 @@ def lighted_material(folder, inventory, albedo, normal, alarm, *, legacy=False, 
             material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_MASKED)
             if not lib.connect_material_property(color[0], 'A', unreal.MaterialProperty.MP_OPACITY_MASK):
                 raise ValueError('Unreal could not link the baked interior opacity mask.')
-        if legacy:
+        if legacy or normal_loops or alarm_loops:
             lib.recompile_material(material)
         save_material(material, digest)
-    except Exception:
+    except Exception as error:
+        unreal.log_warning(f'Baked interior material {material.get_name()}: {error}')
         unreal.EditorAssetLibrary.delete_loaded_asset(material)
         raise
     return material
@@ -254,6 +333,9 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
         lighting = model_lighting(lighting_index, filename, geometry)
         if not authored and not lighting:
             continue
+        if lighting:
+            for warning in lighting.get('animation_warnings', ()):
+                unreal.log_warning(f"{geometry['source']['name']}: {warning}")
         sections = material_sections(geometry, lighting)
         vengeance_destination = VENGEANCE_DESTINATIONS.get(geometry['format'])
         if reference.startswith(BRUSH_PREVIEW_REFERENCE) and reference not in moving_references:
@@ -269,7 +351,9 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
                 normal_map = atlases[normal]['color']['file'] if normal >= 0 else None
                 alarm_map = atlases[alarm]['color']['file'] if alarm >= 0 else None
                 slots[component_slot] = lighted_material(folder, inventory, name, normal_map, alarm_map,
-                                                         legacy=legacy, masked=mode == 'masked')
+                                                         legacy=legacy, masked=mode == 'masked',
+                                                         normal_loops=atlases[normal].get('ambient_loops', ()) if normal >= 0 else (),
+                                                         alarm_loops=atlases[alarm].get('ambient_loops', ()) if alarm >= 0 else ())
             elif not name:
                 continue
             else:

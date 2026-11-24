@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES 2 interior lighting and animated mask placements",
+  "type": "object",
+  "minProperties": 1,
+  "propertyNames": {"pattern": "^interior-[0-9]{4}[.]json(#[1-9][0-9]*)?$"},
+  "additionalProperties": {"$ref": "#/$defs/model"},
+  "not": {
+    "additionalProperties": {
+      "not": {
+        "required": ["animation"],
+        "properties": {"animation": {"required": ["surface_rects"]}}
+      }
+    }
+  },
+  "$defs": {
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_sha256", "has_alarm", "animated_lights", "atlases", "surfaces", "review"],
+      "properties": {
+        "source_sha256": {"$ref": "intake-v10.schema.json#/$defs/model/properties/source_sha256"},
+        "has_alarm": {"$ref": "intake-v10.schema.json#/$defs/model/properties/has_alarm"},
+        "animated_lights": {"$ref": "intake-v10.schema.json#/$defs/model/properties/animated_lights"},
+        "atlases": {"$ref": "intake-v10.schema.json#/$defs/model/properties/atlases"},
+        "surfaces": {"$ref": "intake-v10.schema.json#/$defs/model/properties/surfaces"},
+        "review": {"$ref": "intake-v10.schema.json#/$defs/model/properties/review"},
+        "animation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tracks", "states", "surface_data", "names_hex", "state_masks_hex"],
+          "properties": {
+            "tracks": {"$ref": "intake-v10.schema.json#/$defs/model/properties/animation/properties/tracks"},
+            "states": {"$ref": "intake-v10.schema.json#/$defs/model/properties/animation/properties/states"},
+            "surface_data": {"$ref": "intake-v10.schema.json#/$defs/model/properties/animation/properties/surface_data"},
+            "names_hex": {"$ref": "intake-v10.schema.json#/$defs/hex_buffer"},
+            "state_masks_hex": {"$ref": "intake-v10.schema.json#/$defs/hex_buffer"},
+            "surface_rects": {
+              "type": "array", "minItems": 1, "maxItems": 250000,
+              "items": {
+                "type": "array", "minItems": 7, "items": false,
+                "description": "Source surface, top-left atlas X and Y, mask width and height, first light-state slot and slot count.",
+                "prefixItems": [
+                  {"type": "integer", "minimum": 0, "maximum": 250000},
+                  {"type": "integer", "minimum": 0, "maximum": 4095},
+                  {"type": "integer", "minimum": 0, "maximum": 4095},
+                  {"type": "integer", "minimum": 1, "maximum": 4096},
+                  {"type": "integer", "minimum": 1, "maximum": 4096},
+                  {"type": "integer", "minimum": 0, "maximum": 65535},
+                  {"type": "integer", "minimum": 1, "maximum": 65536}
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

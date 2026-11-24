@@ -43,8 +43,15 @@ Original Damnation and High Octane missions built and reopened in Unreal
 5.3.1. All five building meshes retained their 14 authored detail levels,
 material assignments, and primary-mesh collision. Deferring distance-field
 rebuilds brought the two-map import to 64 seconds in local verification.
-High Octane also cooked successfully for Windows. The importer preserves
-original animated light tracks for review. Playback remains open.
+High Octane also cooked successfully for Windows.
+
+Version 45 intakes preserve the atlas rectangles for animated Tribes 2
+lights. Unreal imported both instances of Damnation's original power
+building with animated materials. Pixel readback matched its three alarm
+loops at seven points in each cycle across both detail levels. Normal
+lighting stayed steady. The Damnation draft, animated materials, and
+mask textures cooked for Windows. Triggered and flickering tracks remain
+in review.
 
 The stock Unreal workspace can use **Build for Direct Host** after importing a draft. Select a verified Direct Host bundle that supports standard Unreal World Settings. Offline playtesting uses the separate game-compatible setup described in the editor guide.
 

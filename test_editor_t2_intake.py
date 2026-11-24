@@ -722,7 +722,8 @@ class IntakeTests(unittest.TestCase):
             "tracks": [[0, 0, 1, 2, 750]], "states": [[255, 80, 40, 500, 0, 1]],
             "surface_data": [[0, 0, 0]], "names_hex": "616c61726d00", "state_masks_hex": "010203",
         })
-        self.assertEqual(record["review"], ["Surface 1 refers to a missing alarm atlas."])
+        self.assertEqual(record["review"], ["Surface 1 refers to a missing alarm atlas.",
+                                           "The animated light mask rectangles could not be preserved by this decoder."])
         model, _ = load_intake_geometry(manifest.parent, "interior-0001.json", header["files"]["interior-0001.json"])
         unlit, lit = render_sections(model, record)
         self.assertEqual(unlit[-3:], ([], -1, -1))
@@ -787,6 +788,26 @@ class IntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Invalid interior lightmap surface binding"):
             load_intake(multi)
 
+        first.mapOffsetX, first.mapOffsetY = 1, 2
+        first.mapSizeX, first.mapSizeY = 2, 1
+        first.lightStateInfoStart, first.lightCount = 0, 1
+        for levels in ([interior], [primary, distant]):
+            use_decoder = (lambda _raw: Record(difVersion=44, interiors=levels), "b" * 64)
+            with patch("mission_interiors.load_decoder", return_value=use_decoder):
+                animated = convert(self.mission, self.library, dif_decoder=self.folder / "decoder.py")
+            new_header, _, _ = load_intake(animated)
+            self.assertEqual(new_header["format"], 45)
+            new_index = load_lighting_index(animated.parent, new_header["files"])
+            animation = new_index[name]["animation"]
+            self.assertEqual(animation["surface_rects"], [[0, 1, 2, 2, 1, 0, 1]])
+        animation["surface_data"][0][1] = 2
+        data = json.dumps(new_index).encode()
+        (animated.parent / LIGHTING_INDEX).write_bytes(data)
+        new_header["files"][LIGHTING_INDEX] = hashlib.sha256(data).hexdigest()
+        animated.write_text(json.dumps(new_header), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Invalid DIF animated light mask offset or slot"):
+            load_intake(animated)
+
         record["surfaces"][0][2] = 500
         data = json.dumps(index).encode()
         (manifest.parent / LIGHTING_INDEX).write_bytes(data)
@@ -794,6 +815,37 @@ class IntakeTests(unittest.TestCase):
         manifest.write_text(json.dumps(header), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "Invalid interior lightmap surface binding"):
             load_intake(manifest)
+
+    def test_ambient_dif_masks_follow_the_active_state_and_power_mode(self):
+        from PIL import Image
+        from dif_light_animation import mask_texture
+
+        record = {
+            "atlases": [{"color": {"file": "base.png"}}],
+            "surfaces": [[2, 0, 1, 0, 0, [0, 1, .25, .25, 0, 0]]],
+            "animation": {
+                "tracks": [[0, 0, 3, 11, 3000]],
+                "states": [[255, 0, 0, 0, 0, 2], [128, 0, 0, 600, 2, 1], [0, 0, 0, 2000, 3, 1]],
+                "surface_data": [[2, 0, 7], [2, 2, 7], [2, 4, 7], [2, -1, 7]],
+                "surface_rects": [[2, 1, 2, 2, 1, 7, 1]],
+                "state_masks_hex": "0102ab7f2f21",
+            },
+        }
+        lighting = model_lighting({"interior-0001.json": record}, "interior-0001.json", {})
+        self.assertEqual(lighting["surfaces"][0][3:5], [0, 1])
+        self.assertTrue(alarm_switches_material(lighting))
+        self.assertEqual(lighting["animation_warnings"], [])
+        (duration, states), = lighting["atlases"][1]["ambient_loops"]
+        self.assertEqual(duration, 3000)
+        self.assertEqual([state[0] for state in states], [0, 600, 2000])
+        self.assertEqual([state[1] for state in states], [[255, 0, 0], [128, 0, 0], [0, 0, 0]])
+        png, tiles, columns, rows = mask_texture(states, 4, 4)
+        self.assertEqual((tiles, columns, rows), ([0, 1, 2], 3, 1))
+        with Image.open(io.BytesIO(png)) as image:
+            self.assertEqual(image.size, (12, 4))
+            self.assertEqual(image.crop((0, 2, 12, 3)).tobytes(),
+                             bytes([0, 0xab, 0x7f, 0, 0, 0x2f, 0x21, 0, 0, 0, 0, 0]))
+            self.assertEqual(image.getpixel((1, 1)), 0)
 
     def test_duplicate_archive_interior_stays_in_review(self):
         source = self.folder / "Assets.vl2"
