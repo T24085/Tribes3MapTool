@@ -60,6 +60,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
     solid = tk.BooleanVar(window, value=selection["perimeter"])
     ceiling = tk.BooleanVar(window, value=limits["ceiling_m"] is not None)
     floor = tk.BooleanVar(window, value=limits["floor_m"] is not None)
+    warn = tk.BooleanVar(window, value=selection.get("warn_players", False))
     solid_polygon = list(selection.get("wall_polygon_m", ()))
     custom = tk.BooleanVar(window, value=bool(solid_polygon))
     channels = validate_channels(selection.get("wall_block_channels"))
@@ -149,7 +150,10 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         row=10, columnspan=2, sticky="w", pady=(6, 0),
     )
     message = ttk.Label(body, wraplength=320)
-    message.grid(row=11, columnspan=2, sticky="w", pady=(6, 0))
+    ttk.Checkbutton(body, text="Warn players crossing the mission boundary", variable=warn).grid(
+        row=11, columnspan=2, sticky="w", pady=(8, 0),
+    )
+    message.grid(row=12, columnspan=2, sticky="w", pady=(6, 0))
 
     def distance(entry, label):
         try:
@@ -165,6 +169,8 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
             }
             if shape.get() == "polygon":
                 options["flag_polygon_m"] = polygon
+            if warn.get():
+                options["warn_players"] = True
             if solid.get():
                 options["wall_limits"] = {
                     "ceiling_m": distance(entries["ceiling_m"], "the ceiling height") if ceiling.get() else None,
@@ -184,7 +190,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         window.destroy()
 
     buttons = ttk.Frame(body)
-    buttons.grid(row=12, columnspan=2, sticky="ew", pady=(8, 0))
+    buttons.grid(row=13, columnspan=2, sticky="ew", pady=(8, 0))
     ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side="left")
     ttk.Button(buttons, text="Apply", command=save).pack(side="right")
     window.bind("<Escape>", lambda _event: window.destroy())

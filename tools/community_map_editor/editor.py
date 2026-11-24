@@ -282,6 +282,9 @@ def marker_snapshot():
         raise ValueError('Each team needs one flag and between one and 24 spawns.')
     hard_perimeter = verify_walls(world(), actors, perimeter_markers)
     verify_flag_bounds(actors, flags, hard_perimeter)
+    from perimeter_warning_unreal import verify_warning
+
+    verify_warning(actors, ident)
     if any(routes.values()):
         if any(len(points) != 1 for points in routes.values()):
             raise ValueError('A route check needs one Route Start and one Route End.')

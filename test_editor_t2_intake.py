@@ -28,7 +28,7 @@ from object_catalog import build_rows, classify, load_catalog, source_fields
 from minimap import export_host_minimap, framing, terrain_pixels, view_transform
 from perimeter import (PolygonWalls, check_inside_perimeter, check_marker_clearance, flag_bounds, mission_extents,
                        plan_boundaries, plan_walls, triangulate_polygon, turn, verified_extents, wall_appearance,
-                       wall_boxes, wall_surface)
+                       wall_boxes, wall_surface, warning_surface)
 from perimeter_collision import probe_profiles, validate_channels
 from public_layout import export_public_layout
 from source_library import catalog_rows, record_draft, record_source
@@ -1046,3 +1046,12 @@ class IntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Enable solid side walls"):
             plan_boundaries({}, {}, [], perimeter=False, flag_inset_m=None,
                             wall_visual={"style": "energy", "distance_m": 20})
+
+    def test_warning_only_uses_the_mission_area_without_collision_or_altitude_caps(self):
+        header = {"minimap": {"image_bounds": ((-5000, -4000), (6000, 7000))}}
+        self.assertEqual(plan_boundaries(header, {}, [{"status": "boundary"}],
+                                         perimeter=False, flag_inset_m=None, warn_players=True), (None, None))
+        self.assertEqual(warning_surface(header, None), PolygonWalls(
+            ((-5000, -4000), (6000, -4000), (6000, 7000), (-5000, 7000)), 0, 0, False, False))
+        with self.assertRaisesRegex(ValueError, "MissionArea"):
+            plan_boundaries(header, {}, [], perimeter=False, flag_inset_m=None, warn_players=True)

@@ -116,15 +116,23 @@ def wall_surface(walls):
     return PolygonWalls(rectangle_outline((lower[:2], upper[:2])), lower[2], upper[2], ceiling, floor)
 
 
+def warning_surface(header, walls):
+    if walls:
+        return wall_surface(walls)
+    return PolygonWalls(rectangle_outline(header["minimap"]["image_bounds"]), 0, 0, False, False)
+
+
 def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limits=None, flag_polygon_m=None,
-                    wall_polygon_m=None, wall_block_channels=None, wall_visual=None):
+                    wall_polygon_m=None, wall_block_channels=None, wall_visual=None, warn_players=False):
+    if type(warn_players) is not bool:
+        raise ValueError("Choose whether to warn players outside the mission area.")
     channels = validate_channels(wall_block_channels)
     appearance = wall_appearance(wall_visual)
     if any(value is not None for value in (wall_limits, wall_polygon_m, channels, appearance)) and not perimeter:
         raise ValueError("Enable solid side walls before setting their shape, limits, collision channels or appearance.")
     if flag_inset_m is not None and flag_polygon_m is not None:
         raise ValueError("Choose either the flag-only inset or a flag-only polygon.")
-    if not perimeter and flag_inset_m is None and flag_polygon_m is None:
+    if not perimeter and flag_inset_m is None and flag_polygon_m is None and not warn_players:
         return None, None
     if "minimap" not in header or not any(row["status"] == "boundary" for row in rows):
         raise ValueError("A playable MissionArea is required for a boundary.")

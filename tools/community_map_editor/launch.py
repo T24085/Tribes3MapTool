@@ -68,7 +68,7 @@ def install_editor_scripts(project, env, *, include_seed=True):
     folder.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(TOOL/'editor.py', folder/'t3_map_editor.py')
     for name in ('intake_contract.py', 'import_intake.py', 'mesh_mappings.py', 'perimeter.py', 'perimeter_collision.py',
-                 'polygon_walls_unreal.py', 'perimeter_visual.py',
+                 'polygon_walls_unreal.py', 'perimeter_visual.py', 'perimeter_warning_unreal.py',
                  'terrain_layers.py', 'native_terrain_paint.py', 'native_terrain_material_unreal.py',
                  'texture_batches.py', 'texture_batches_unreal.py',
                  'draft_materials.py',
@@ -207,7 +207,8 @@ def package_preview(parent, cooked, target, ident, markers, *, host_export=False
                          'DRAFT_STARTS':lua([markers['T3Spawn1'],markers['T3Spawn2']]),
                          'DRAFT_FLAGS':lua([markers['T3Flag1'][0],markers['T3Flag2'][0]]),
                          'DRAFT_COLLISION_FILTER':(REPO/'runtime-fixes/mission_perimeter_collision.lua').read_text(encoding='utf-8'),
-                         'DRAFT_FLAG_LIMIT':(REPO/'runtime-fixes/mission_flag_limit.lua').read_text(encoding='utf-8')}.items():
+                         'DRAFT_FLAG_LIMIT':(REPO/'runtime-fixes/mission_flag_limit.lua').read_text(encoding='utf-8'),
+                         'DRAFT_BOUNDARY_WARNING':(REPO/'runtime-fixes/mission_boundary_warning.lua').read_text(encoding='utf-8')}.items():
         offline = offline.replace('@@'+token+'@@', value)
     add(folder+'offline.lua', contents=offline.encode())
     boot = (REPO/'host/lua/Stonehenge/standalone_bootstrap.lua').read_text(encoding='utf-8')

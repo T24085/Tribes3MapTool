@@ -27,6 +27,9 @@ end)()({valid=valid,report=report,scope=scope})
 local configure_perimeter=(function()
 @@DRAFT_COLLISION_FILTER@@
 end)()({valid=valid,report=report,scope=scope})
+local warn_players=(function()
+@@DRAFT_BOUNDARY_WARNING@@
+end)()({valid=valid,report=report,scope=scope})
 local function objective(gm,class,team,marker,isFlag)
  local api=asset('/Script/Engine.Default__GameplayStatics')
  local half=math.rad(marker[4])/2
@@ -70,6 +73,8 @@ local function step()
   install(gm)
  end
  local status=bootstrap(state)
+ local players=FindAllOf('ValPlayerController')or{}
+ if #players==1 and valid(players[1])then warn_players(players[1],players[1].PlayerState)end
  if status~=last then report(status);last=status end
  if not linked and (state.finished or status:find('Choose a loadout',1,true))then
   local names={}
