@@ -33,6 +33,17 @@ def write_authored_host(root):
     (root/'package-manifest.json').write_text(json.dumps({'files': rows}), encoding='utf-8')
 
 
+def unreal_installation(root, minor):
+    binaries = root / 'Engine/Binaries/Win64'
+    binaries.mkdir(parents=True)
+    for name in ('UnrealEditor.exe', 'UnrealEditor-Cmd.exe'):
+        (binaries / name).touch()
+    build = root / 'Engine/Build'
+    build.mkdir()
+    (build / 'Build.version').write_text(json.dumps({'MajorVersion': 5, 'MinorVersion': minor}), encoding='utf-8')
+    return binaries
+
+
 class EditorHostExportTests(unittest.TestCase):
     def test_long_workspace_cache_gets_a_stable_short_local_path(self):
         with TemporaryDirectory() as folder, patch.dict('os.environ', {'LOCALAPPDATA': folder}):
@@ -48,12 +59,12 @@ class EditorHostExportTests(unittest.TestCase):
     def test_clean_authoring_workspace_opens_with_no_game_or_host_inputs(self):
         with TemporaryDirectory() as folder:
             root = Path(folder).resolve()
-            for name in ('UnrealEditor.exe', 'UnrealEditor-Cmd.exe'):
-                (root / name).touch()
-            settings = bootstrap.create_workspace(root, root)
+            engine = root / 'Unreal 5.3'
+            binaries = unreal_installation(engine, 3)
+            settings = bootstrap.create_workspace(root, engine)
             original = settings.read_bytes()
             with self.assertRaises(FileExistsError):
-                bootstrap.create_workspace(root, root)
+                bootstrap.create_workspace(root, binaries)
             self.assertEqual(settings.read_bytes(), original)
             config = json.loads(original)
             config['direct_host_exporter'] = str(root/'unavailable.py')
@@ -73,6 +84,23 @@ class EditorHostExportTests(unittest.TestCase):
             with patch.object(launch, 'run_owned_job', side_effect=run_editor) as owned:
                 launch.run(config)
             owned.assert_called_once()
+
+    def test_setup_selects_only_an_actual_unreal_53_installation(self):
+        with TemporaryDirectory() as folder, patch.dict('os.environ', {'ProgramData': folder}):
+            root = Path(folder).resolve()
+            wrong_engine, right_engine = root / 'Unreal 5.8', root / 'Unreal 5.3'
+            unreal_installation(wrong_engine, 8)
+            right_binaries = unreal_installation(right_engine, 3)
+            manifest = root / 'Epic/UnrealEngineLauncher/LauncherInstalled.dat'
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({'InstallationList': [
+                {'InstallLocation': str(wrong_engine)}, {'InstallLocation': str(right_engine)},
+            ]}), encoding='utf-8')
+
+            self.assertEqual(bootstrap.discover_engine(), right_binaries)
+            with self.assertRaisesRegex(ValueError, 'requires Unreal Engine 5.3'):
+                bootstrap.create_workspace(root, wrong_engine)
+            self.assertFalse((root / 'CommunityMapEditor').exists())
 
     def test_authoring_host_capability_has_to_be_in_the_verified_inventory(self):
         with TemporaryDirectory() as folder:

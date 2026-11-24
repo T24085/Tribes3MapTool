@@ -12,14 +12,18 @@ Drafts live in the Community maps folder inside the authoring project. Put newly
 ## Local setup
 
 For a fresh workspace on Windows, use Python 3.13 and Unreal Engine 5.3.
-Run these commands from the source checkout with your own workspace parent
-and Unreal binaries folder.
+Run these commands from the source checkout with your own workspace parent.
+Setup finds Unreal Engine 5.3 through Epic Games Launcher and opens the
+new workspace.
 
 ```powershell
 py -3.13 -m pip install Pillow
-py -3.13 tools/community_map_editor/bootstrap.py "D:\Maps" "C:\UE_5.3\Engine\Binaries\Win64"
-py -3.13 tools/community_map_editor/launch.py "D:\Maps\CommunityMapEditor\local-settings.json"
+py -3.13 tools/community_map_editor/bootstrap.py "D:\Maps" --launch
 ```
+
+For an unregistered engine, pass its installation or Win64 binaries
+folder as the second argument. To reopen the workspace, run
+`py -3.13 tools/community_map_editor/launch.py "D:\Maps\CommunityMapEditor\local-settings.json"`.
 
 The setup creates an isolated `CommunityMapEditor` folder and generates a
 starter Grass, Rock and Forest palette. It refuses to replace an existing

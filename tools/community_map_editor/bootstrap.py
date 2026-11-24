@@ -2,7 +2,10 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from tempfile import TemporaryDirectory
 
 
@@ -13,12 +16,46 @@ PALETTE = {
 }
 
 
+def validate_engine(location):
+    location = location.resolve()
+    binaries = location / 'Engine/Binaries/Win64' if (location / 'Engine').is_dir() else location
+    if not all((binaries / name).is_file() for name in ('UnrealEditor.exe', 'UnrealEditor-Cmd.exe')):
+        raise ValueError(f'No Unreal Editor binaries found at {binaries}. Select an Unreal Engine 5.3 installation.')
+    version_file = binaries.parent.parent / 'Build/Build.version'
+    try:
+        version = json.loads(version_file.read_bytes())
+    except (OSError, ValueError) as error:
+        raise ValueError(f'Could not read the Unreal Engine version at {version_file.resolve()}.') from error
+    if not isinstance(version, dict) or (version.get('MajorVersion'), version.get('MinorVersion')) != (5, 3):
+        raise ValueError('The map editor requires Unreal Engine 5.3 for its TRIBES 3 map packages.')
+    return binaries.resolve()
+
+
+def discover_engine():
+    program_data = os.environ.get('ProgramData')
+    if program_data:
+        launcher_state = Path(program_data) / 'Epic/UnrealEngineLauncher/LauncherInstalled.dat'
+        try:
+            installs = json.loads(launcher_state.read_bytes())['InstallationList']
+        except (OSError, ValueError, TypeError, KeyError):
+            installs = []
+        if isinstance(installs, list):
+            for install in installs:
+                if not isinstance(install, dict) or not isinstance(install.get('InstallLocation'), str):
+                    continue
+                location = Path(install['InstallLocation'])
+                if location.is_absolute():
+                    try:
+                        return validate_engine(location)
+                    except (OSError, ValueError):
+                        continue
+    raise ValueError('Unreal Engine 5.3 was not found in Epic Games Launcher. Provide the installation folder as the second argument.')
+
+
 def create_workspace(parent, engine):
     from PIL import Image
 
-    engine = engine.resolve(strict=True)
-    if not (engine / 'UnrealEditor.exe').is_file() or not (engine / 'UnrealEditor-Cmd.exe').is_file():
-        raise ValueError('Select the Win64 binaries folder of your Unreal Engine 5.3 installation.')
+    engine = validate_engine(engine)
     root = parent.resolve() / 'CommunityMapEditor'
     if root.exists():
         raise FileExistsError(f'The editor workspace already exists: {root}')
@@ -63,14 +100,19 @@ def create_workspace(parent, engine):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('workspace_parent', type=Path)
-    parser.add_argument('engine_binaries', type=Path)
+    parser.add_argument('engine', type=Path, nargs='?', help='Unreal Engine 5.3 installation or Win64 binaries folder')
+    parser.add_argument('--launch', action='store_true', help='Open the new workspace after setup')
     args = parser.parse_args()
     try:
-        settings = create_workspace(args.workspace_parent, args.engine_binaries)
+        engine = args.engine if args.engine is not None else discover_engine()
+        settings = create_workspace(args.workspace_parent, engine)
     except (OSError, ValueError, ImportError) as error:
         parser.exit(1, f'{error}\n')
-    print(settings)
+    print(settings, flush=True)
+    if args.launch:
+        return subprocess.call([sys.executable, str(Path(__file__).with_name('launch.py')), str(settings)])
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

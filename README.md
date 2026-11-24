@@ -4,13 +4,17 @@ This is the in-development Windows source for the TRIBES 3 community map editor.
 
 ## Get started
 
-Install Python 3.13 and Unreal Engine 5.3, then run these commands from this checkout. Use your own workspace parent and Unreal binaries directory.
+Install Python 3.13 and Unreal Engine 5.3, then run these commands from this checkout with your own workspace parent.
 
 ```powershell
 py -3.13 -m pip install Pillow
-py -3.13 tools/community_map_editor/bootstrap.py "D:/Maps" "C:/UE_5.3/Engine/Binaries/Win64"
-py -3.13 tools/community_map_editor/launch.py "D:/Maps/CommunityMapEditor/local-settings.json"
+py -3.13 tools/community_map_editor/bootstrap.py "D:/Maps" --launch
 ```
+
+Setup detects UE 5.3 through Epic Games Launcher. For an unregistered
+build, pass its installation directory after the workspace parent.
+To reopen the workspace, run
+`py -3.13 tools/community_map_editor/launch.py "D:/Maps/CommunityMapEditor/local-settings.json"`.
 
 See the [editor guide](tools/community_map_editor/README.md) for conversion, cooking, offline playtests and host export requirements. The source snapshot contains no installed game, Unreal Editor binaries or cooked maps.
 
@@ -31,11 +35,16 @@ Minimap-bearing drafts require a Direct Host bundle whose game launcher
 supports portable minimaps. Export and staging check the inventoried
 launcher and reader before publishing the bundle.
 
-A connected headless client joined the Tribes 2 fixture from its cached
-map. After the test moved the player's pawn to the flag and capture
-zones, the host recorded the pickup, advanced the score from zero to
-one, and reset the flag at home. The host and client both shut down
-under their original process owners.
+A connected headless client joined each of the four authored fixtures
+from its cached map. On each map, the test moved the player's pawn to
+the flag and capture zones. The host recorded the pickup, advanced the
+score from zero to one, and reset the flag at home. Both the host and
+client shut down under their original process owners.
+
+A fresh checkout with the updated setup successfully created and
+reopened a blank CTF draft in headless UE 5.3. The draft contained three
+spawns and one flag per team, and the starter grass material loaded.
+Setup rejected UE 5.8 before creating a workspace.
 
 ## Flag boundary verification
 
