@@ -15,7 +15,7 @@ from community_maps import MapDefinition, valid_label
 from map_sync_contract import MINIMAP_MAX_IMAGE, map_catalog, minimap_payload, png_dimensions
 from portable_maps import host_definitions, load_json, merge_map_manifests, owned_path
 from tools.t2_map_release import (DRAFT, create_plan, descriptor_paths, flag_boundary_features, publish_directory,
-                                  regular_row, verify_flag_boundary_runtime)
+                                  regular_row, verify_draft_world_settings, verify_flag_boundary_runtime)
 from verified_file_cache import MAX_PACKAGE_MANIFEST_BYTES
 
 
@@ -316,6 +316,7 @@ def export_draft(run, host, destination, *, label, minimap=None, equipment_adapt
     merged = merge_map_manifests(host, central)
     previous, old_members = installed_release(host, central, merged, definition, replace_existing=replace_existing)
     existing = {row['path'].casefold(): row for row in merged['files']}
+    verify_draft_world_settings(host, existing)
     prior_keys = {name.casefold() for name in old_members}
     if any(name.startswith(f'content/community/{map_id.casefold()}/') and name not in prior_keys for name in existing):
         raise ValueError('The draft asset group contains files outside this map inventory.')

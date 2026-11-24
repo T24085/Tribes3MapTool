@@ -62,6 +62,36 @@ def flag_boundary_features(level):
     return tuple(kind for kind in markers if kind not in pending)
 
 
+def verified_host_source(host, files, name, message):
+    maximum = 2*1024*1024
+    row = files.get(name)
+    path = host/name
+    if row is None or row['bytes'] > maximum or path.resolve() != path or not path.is_file():
+        raise ValueError(message)
+    with path.open('rb') as stream:
+        data = stream.read(maximum+1)
+    if len(data) != row['bytes'] or sha256(data).hexdigest() != row['sha256']:
+        raise ValueError(message)
+    return data
+
+
+def verify_draft_world_settings(host, files):
+    network = 'lua/network.lua'
+    if network not in files and not ((host/network).exists() or (host/network).is_symlink()):
+        return
+    message = 'Choose a verified Direct Host baseline that supports authored draft World Settings.'
+    source = verified_host_source(host, files, network, message)
+    # Older hosts do not impose the retail-only ValWorldSettings requirement.
+    if (b'releaseNativeWorldSettings(gm,assert(mapDefinitions[baseKitSelectedMap]))' not in source
+            or b'native_settings_actual_same_world_owner_required' not in source):
+        return
+    if b'native_settings_authored_draft_world_owner_required' not in source:
+        raise ValueError(message)
+    catalog = verified_host_source(host, files, 'lib/host_catalog_runtime.py', message)
+    if b'.editor_draft=true' not in catalog:
+        raise ValueError(message)
+
+
 def verify_flag_boundary_runtime(host, files, features):
     capabilities = {}
     if 'floor' in features or 'ceiling' in features:
@@ -70,17 +100,10 @@ def verify_flag_boundary_runtime(host, files, features):
         capabilities['return timer'] = b'T3_EDITOR_FLAG_RETURN_TIMER_V1'
     needed = ' and '.join(capabilities)
     message = f'Choose a verified Direct Host baseline that supports flag-only {needed}.'
-    maximum = 2*1024*1024
     for name, prefix in FLAG_RUNTIME.items():
-        row = files.get(name)
-        path = host/name
-        if row is None or row['bytes'] > maximum or path.resolve() != path or not path.is_file():
-            raise ValueError(message)
-        with path.open('rb') as stream:
-            data = stream.read(maximum + 1)
+        data = verified_host_source(host, files, name, message)
         markers = {prefix + marker for marker in capabilities.values()}
-        if (len(data) != row['bytes'] or sha256(data).hexdigest() != row['sha256']
-                or not markers <= {line.strip() for line in data.splitlines()}):
+        if not markers <= {line.strip() for line in data.splitlines()}:
             raise ValueError(message)
 
 
@@ -250,14 +273,16 @@ def stage_release(package, source, destination, *, rollback=False, link_content=
         elif name not in members or regular_row(source, name) != expected:
             raise ValueError(f'The current map file changed after the release was prepared: {name}')
     if map_id in plan[f'{new}_catalog']:
+        inventory = {row['path']: row for row in initial['files']}
+        verify_draft_world_settings(source, inventory)
         level = f'content/Maps/Community/{map_id}/Arena_{map_id}_P.umap'
         selected = package/replacement/level if level in changes else source/level
         if features := flag_boundary_features(selected):
-            verify_flag_boundary_runtime(source, {row['path']: row for row in initial['files']}, features)
+            verify_flag_boundary_runtime(source, inventory, features)
 
     with TemporaryDirectory(dir=destination.parent) as temp:
         candidate = Path(temp) / 'host'
-        candidate.mkdir()
+        (candidate/'content').mkdir(parents=True)
         for name in sorted(members - changes.keys()):
             original, copy = source / name, candidate / name
             if original.resolve(strict=True) != original or not original.is_file():

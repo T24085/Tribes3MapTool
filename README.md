@@ -14,6 +14,8 @@ py -3.13 tools/community_map_editor/launch.py "D:/Maps/CommunityMapEditor/local-
 
 See the [editor guide](tools/community_map_editor/README.md) for conversion, cooking, offline playtests and host export requirements. The source snapshot contains no installed game, Unreal Editor binaries or cooked maps.
 
+Direct Host export and staging check the target bundle's support for editor draft World Settings. Rolling back the last custom map preserves the content directory required by the original native-map catalog.
+
 ## Flag boundary verification
 
 An Unreal Engine 5.3 draft with a three-second flag return timer passed a Windows cook, Direct Host export, staging and rollback checks. In an offline match, reentry cleared the warning and kept the flag with the carrier. A second exit returned the flag home after 3.034 seconds and displayed the HUD notice.
