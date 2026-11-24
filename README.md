@@ -16,7 +16,9 @@ See the [editor guide](tools/community_map_editor/README.md) for conversion, coo
 
 ## Flag boundary verification
 
-An Unreal Engine 5.3 draft with a three-second flag return timer passed a Windows cook, Direct Host export, staging and rollback checks. In the isolated cooked CTF match, reentering the boundary cleared the warning and kept the flag with the carrier. On a second exit, the flag returned home after 3.034 seconds and the HUD showed the return notice. The gameplay check covered an offline match. Connected multiplayer and occupied vehicles still need in-game verification.
+An Unreal Engine 5.3 draft with a three-second flag return timer passed a Windows cook, Direct Host export, staging and rollback checks. In an offline match, reentry cleared the warning and kept the flag with the carrier. A second exit returned the flag home after 3.034 seconds and displayed the HUD notice.
+
+Two isolated Direct Host matches verified notification delivery to a connected client. With an on-foot carrier, the host returned the flag after 3.060 seconds. In the second match, an Unreal test pawn with a Vehicle-channel root crossed the ceiling while the attached character remained inside. The flag returned after 3.066 seconds. Reentry cleared the warning and kept the flag in both matches. A drivable vehicle and the rendered network HUD still need in-game verification.
 
 ## Source tests
 

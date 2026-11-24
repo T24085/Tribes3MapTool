@@ -40,6 +40,13 @@ return function(factory)
  local pawn_class=object('Class /Script/Engine.Pawn')
  local character_class=object('Class /Script/Valhalla.ValCharacter')
  local player_class=object('Class /Script/Engine.PlayerController')
+ local primitive_class=object('Class /Script/Engine.PrimitiveComponent')
+ local root=object('Vehicle Collision',world)
+ root.channel=6
+ root.IsA=function(_,kind)return kind==primitive_class end
+ root.GetOwner=function()return vehicle end
+ root.GetCollisionObjectType=function(self)return self.channel end
+ vehicle.RootComponent=root
  for _,p in ipairs({pawn,nextPawn,vehicle})do
   p.IsA=function(_,kind)return kind==pawn_class or (p~=vehicle and kind==character_class) end
   p.GetAttachParentActor=function(self)return self.parent end
@@ -89,6 +96,7 @@ return function(factory)
     {'SweepHitResult','StructProperty',32},{'bTeleport','BoolProperty',264},{'ReturnValue','BoolProperty',265}},
   ['/Script/Engine.Actor:GetAttachParentActor']={{'ReturnValue','ObjectProperty',0}},
   ['/Script/Engine.Pawn:GetController']={{'ReturnValue','ObjectProperty',0}},
+  ['/Script/Engine.PrimitiveComponent:GetCollisionObjectType']={{'ReturnValue','ByteProperty',0}},
   ['/Script/Engine.GameplayStatics:GetTimeSeconds']={{'WorldContextObject','ObjectProperty',0},
     {'ReturnValue','DoubleProperty',8}},
   ['/Script/Engine.PlayerController:ClientMessage']={{'S','StrProperty',0},{'Type','NameProperty',16},
@@ -98,6 +106,8 @@ return function(factory)
   if path=='/Script/Engine.Pawn'then return pawn_class end
   if path=='/Script/Valhalla.ValCharacter'then return character_class end
   if path=='/Script/Engine.PlayerController'then return player_class end
+  if path=='/Script/Engine.PrimitiveComponent'then return primitive_class end
+  if path=='/Script/ChaosVehicles.WheeledVehiclePawn'then return nil end
   if path=='/Script/Engine.Default__GameplayStatics'then return clock end
   if path=='/Script/Topaz.ETopFlagState'then
    local e=object(path);e.ForEachName=function(_,cb)cb(name('ETopFlagState::Dropped'),4)end;return e
@@ -119,11 +129,16 @@ return function(factory)
  return {start=function()return service(gm)end,move=move,tick=tick,
   pawn=pawn,nextPawn=nextPawn,vehicle=vehicle,flags=flags,world=world,notices=notices,
   pilot=pilot,other=other,at_time=function(value)time=value end,
-  enter_vehicle=function()
+  enter_vehicle=function(clear_state,another_driver)
    pawn.parent,pawn.controller=vehicle,nil
-   vehicle.controller,vehicle.PlayerState=pilot,pilot.PlayerState
-   pilot.Pawn=vehicle
+   if clear_state then pawn.PlayerState=nil end
+   local driver=another_driver and other or pilot
+   pilot.Pawn=nil
+   vehicle.controller,vehicle.PlayerState=driver,driver.PlayerState
+   driver.Pawn=vehicle
   end,
+  vehicle_channel=function(channel)root.channel=channel end,
+  attach_without_possession=function()pawn.parent=vehicle end,
   fail_notice=function()pilot.ClientMessage=function()error('closed connection')end end,
   points=function(enabled)if not enabled then points={points[3]}end end,
   return_timer=function(seconds,omit)
@@ -211,7 +226,7 @@ class MissionFlagLimitTest(unittest.TestCase):
                 flag.owner = f.pawn
                 f.move(f.pawn, 975, 150, 680)
                 self.assertTrue(f.start())
-                f.enter_vehicle()
+                f.enter_vehicle(True)
                 if transferred:
                     flag.owner = f.vehicle
                 f.move(f.vehicle, 1450, 157, 705)
@@ -220,6 +235,33 @@ class MissionFlagLimitTest(unittest.TestCase):
                 self.assertEqual((flag.at.X, flag.at.Y, flag.at.Z), (975, 150, 680))
                 self.assertEqual(list(f.pilot.messages.values()), ["T3FlagBoundaryDrop"])
                 self.assertEqual(len(f.other.messages), 0)
+
+    def test_attachment_to_a_non_vehicle_pawn_does_not_move_the_flag_sample(self):
+        f = self.fixture()
+        flag = f.flags[1]
+        flag.owner = f.pawn
+        f.move(f.pawn, 975, 150, 680)
+        f.move(f.vehicle, 1450, 157, 705)
+        f.vehicle_channel(1)
+        f.attach_without_possession()
+        self.assertTrue(f.start())
+        self.assertEqual(flag.drops, 0)
+        f.move(f.pawn, 1100, 150, 680)
+        f.tick()
+        self.assertEqual((flag.at.X, flag.at.Y, flag.at.Z), (975, 150, 680))
+        self.assertEqual(list(f.pilot.messages.values()), ['T3FlagBoundaryDrop'])
+
+    def test_another_vehicle_driver_does_not_inherit_the_flag_carriers_notice(self):
+        f = self.fixture()
+        flag = f.flags[1]
+        flag.owner = f.pawn
+        f.move(f.pawn, 975, 150, 680)
+        self.assertTrue(f.start())
+        f.enter_vehicle(True, True)
+        f.move(f.vehicle, 1450, 157, 705)
+        f.tick()
+        self.assertEqual(flag.drops, 1)
+        self.assertEqual(len(f.other.messages), 0)
 
     def test_failed_notification_does_not_stop_boundary_enforcement_or_other_notices(self):
         f = self.fixture()
@@ -342,7 +384,7 @@ class MissionFlagLimitTest(unittest.TestCase):
                     flag.owner = f.nextPawn
                     f.move(f.nextPawn, 1100, 0, 100)
                 else:
-                    f.enter_vehicle()
+                    f.enter_vehicle(True)
                     flag.owner = f.vehicle
                     f.move(f.vehicle, 1100, 0, 100)
                 f.tick()

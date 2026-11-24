@@ -171,6 +171,7 @@ return function(env)
    {'SweepHitResult','StructProperty',32},{'bTeleport','BoolProperty',264},{'ReturnValue','BoolProperty',265}})
   native('/Script/Engine.Actor:GetAttachParentActor',{{'ReturnValue','ObjectProperty',0}})
   native('/Script/Engine.Pawn:GetController',{{'ReturnValue','ObjectProperty',0}})
+  native('/Script/Engine.PrimitiveComponent:GetCollisionObjectType',{{'ReturnValue','ByteProperty',0}})
   local clock
   if return_delay then
    local path='/Script/Engine.GameplayStatics:GetTimeSeconds'
@@ -182,26 +183,42 @@ return function(env)
   local pawn_class=StaticFindObject('/Script/Engine.Pawn')
   local character_class=StaticFindObject('/Script/Valhalla.ValCharacter')
   local player_class=StaticFindObject('/Script/Engine.PlayerController')
+  local primitive_class=StaticFindObject('/Script/Engine.PrimitiveComponent')
+  local wheeled_class=StaticFindObject('/Script/ChaosVehicles.WheeledVehiclePawn')
   local states=StaticFindObject('/Script/Topaz.ETopFlagState')
-  assert(valid(pawn_class)and valid(character_class)and valid(player_class)and valid(states),
+  assert(valid(pawn_class)and valid(character_class)and valid(player_class)and valid(primitive_class)and valid(states),
          'mission_flag_limit_native_types_required')
   local function carrying_pawn(actor)
    return in_world(actor) and actor:HasAuthority() and actor:IsA(pawn_class)
   end
+  local function is_vehicle(actor)
+   if not carrying_pawn(actor) or actor:IsA(character_class) then return false end
+   if valid(wheeled_class) and actor:IsA(wheeled_class) then return true end
+   local root=actor.RootComponent
+   return valid(root) and root:IsA(primitive_class) and same(root:GetOwner(),actor) and root:GetCollisionObjectType()==6
+  end
   local function support_pawn(carrier)
    if carrier:IsA(character_class)then
     local attached=carrier:GetAttachParentActor()
-    if carrying_pawn(attached) and not attached:IsA(character_class)then return attached end
+    if is_vehicle(attached) then return attached end
    end
    return carrier
   end
-  local function player_controller(carrier,support)
+  local function owns_pawn(pc,pawn)
+   return in_world(pc) and pc:HasAuthority() and pc:IsA(player_class) and same(pc.Pawn,pawn)
+  end
+  local function player_controller(carrier,support,last)
    local player=carrier.PlayerState
    local pc=carrier:GetController()
    if not valid(pc) and in_world(player)then pc=player:GetOwner() end
-   if in_world(pc) and pc:HasAuthority() and pc:IsA(player_class)
-      and (same(pc.Pawn,carrier) or (same(pc.Pawn,support) and same(pc.PlayerState,player)))then
-    return pc
+   if owns_pawn(pc,carrier) then return pc end
+   if not same(carrier,support) then
+    local driver=support:GetController()
+    if owns_pawn(driver,support) and same(driver.PlayerState,support.PlayerState)
+       and (same(driver.PlayerState,player)
+            or (not valid(player) and last and same(last.carrier,carrier) and same(last.pc,driver)))then
+     return driver
+    end
    end
   end
   local notice_ready
@@ -298,9 +315,9 @@ return function(env)
      samples[team]=nil
     else
      local support=support_pawn(carrier)
-     local pc=player_controller(carrier,support)
-     local here=point(support)
      local last=samples[team]
+     local pc=player_controller(carrier,support,last)
+     local here=point(support)
      local same_carrier=last and same(last.carrier,carrier) and
       ((not last.pc and not pc) or same(last.pc,pc))
      -- Carry the last valid point through a verified possession switch to
