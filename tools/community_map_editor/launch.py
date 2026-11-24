@@ -68,7 +68,7 @@ def install_editor_scripts(project, env, *, include_seed=True):
     folder.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(TOOL/'editor.py', folder/'t3_map_editor.py')
     for name in ('intake_contract.py', 'import_intake.py', 'mesh_mappings.py', 'perimeter.py', 'perimeter_collision.py',
-                 'polygon_walls_unreal.py',
+                 'polygon_walls_unreal.py', 'perimeter_visual.py',
                  'terrain_layers.py', 'native_terrain_paint.py', 'native_terrain_material_unreal.py',
                  'texture_batches.py', 'texture_batches_unreal.py',
                  'draft_materials.py',

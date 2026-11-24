@@ -916,6 +916,8 @@ For a custom shape, enable **Use a solid polygon** and select **Draw solid polyg
 
 Use **Walls block** to choose the default `BlockAll` profile, Pawn, Vehicle, or both of those object channels. The selected response applies to the side walls and any caps. When the walls allow Pawns through, flag stands, spawns, and the flag-only limit can sit outside the solid perimeter. These choices use Unreal collision channels. Individual projectile and deployable classes still need their own rules.
 
+Use **Wall appearance** to add a cyan or amber surface to the solid boundary. Set the distance at which the walls begin to appear as you approach them from inside. They stay visible from outside. The saved draft keeps the style and distance, and the surface follows the side walls and any enabled caps without adding collision. The default appearance is invisible.
+
 The generated actors appear under **TRIBES CTF → Mission perimeter** in the World Outliner, and their collision is part of the cooked level. **Check CTF Markers** and **Build & Playtest** check wall and cap alignment and probe the selected collision responses. Walls that block Pawns also require every flag and spawn to be at least one metre inside. Draft rebuilds reuse the saved boundary settings.
 
 Enter a **Flag-only inset** to set a second boundary inside the mission area. The flag-only boundary also works independently of the solid walls. The minimap previews it in pink. Players can cross this boundary. The game uses its native drop action and places a carried flag at the carrier's last recorded in-bounds position. When there is no valid position for that carrier, the native return brings the flag home. Both original flag stands must be inside the limit.

@@ -27,7 +27,8 @@ from mission_weather import cloud_layers, precipitation_emitters
 from object_catalog import build_rows, classify, load_catalog, source_fields
 from minimap import export_host_minimap, framing, terrain_pixels, view_transform
 from perimeter import (PolygonWalls, check_inside_perimeter, check_marker_clearance, flag_bounds, mission_extents,
-                       plan_boundaries, plan_walls, triangulate_polygon, turn, verified_extents, wall_boxes)
+                       plan_boundaries, plan_walls, triangulate_polygon, turn, verified_extents, wall_appearance,
+                       wall_boxes, wall_surface)
 from perimeter_collision import probe_profiles, validate_channels
 from public_layout import export_public_layout
 from source_library import catalog_rows, record_draft, record_source
@@ -1025,3 +1026,23 @@ class IntakeTests(unittest.TestCase):
                 validate_channels(value)
         self.assertEqual(probe_profiles(validate_channels(["vehicle", "pawn"])),
                          (("Pawn", True), ("Vehicle", True), ("BlockAllDynamic", False)))
+
+    def test_boundary_visual_uses_inner_faces_and_preserves_optional_caps(self):
+        lower, upper = [-2000, -2500, -750], [4000, 5000, 8000]
+        for ceiling, floor in ((False, False), (True, False), (False, True), (True, True)):
+            with self.subTest(ceiling=ceiling, floor=floor):
+                surface = wall_surface(wall_boxes(lower, upper, ceiling=ceiling, floor=floor))
+                self.assertEqual(surface, PolygonWalls(
+                    ((-2000, -2500), (4000, -2500), (4000, 5000), (-2000, 5000)),
+                    -750, 8000, ceiling, floor,
+                ))
+                self.assertIs(wall_surface(surface), surface)
+        self.assertEqual(wall_appearance({"style": "warning", "distance_m": 80}),
+                         {"style": "warning", "distance_m": 80.0})
+        for style, distance in (("invalid", 20), ([], 20), ("energy", 0), ("energy", float("nan")),
+                                ("energy", float("inf")), ("warning", True), ("energy", 10_001)):
+            with self.subTest(style=style, distance=distance), self.assertRaises(ValueError):
+                wall_appearance({"style": style, "distance_m": distance})
+        with self.assertRaisesRegex(ValueError, "Enable solid side walls"):
+            plan_boundaries({}, {}, [], perimeter=False, flag_inset_m=None,
+                            wall_visual={"style": "energy", "distance_m": 20})

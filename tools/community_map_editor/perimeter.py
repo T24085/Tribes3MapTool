@@ -22,6 +22,9 @@ FLAG_COUNT = "T3MissionFlagVertexCount"
 MAX_VERTICES = 32
 SOLID_POLYGON = TAG + "Polygon"
 POLYGON_REQUIRED = TAG + "PolygonRequired"
+VISUAL_TAG = TAG + "Visual"
+VISUAL_REQUIRED = TAG + "VisualRequired"
+WALL_STYLES = {"energy": (0.08, 1.05, 1.35), "warning": (1.45, 0.44, 0.06)}
 
 
 class PolygonWalls(NamedTuple):
@@ -92,11 +95,33 @@ def plan_walls(bounds, terrain, markers, limits, polygon=None):
     return wall_boxes(lower, upper, ceiling=ceiling is not None, floor=floor is not None)
 
 
+def wall_appearance(value):
+    if value is None:
+        return None
+    if not isinstance(value, dict) or value.keys() != {"style", "distance_m"}:
+        raise ValueError("Invalid mission boundary appearance.")
+    style, distance = value["style"], value["distance_m"]
+    if not isinstance(style, str) or style not in WALL_STYLES:
+        raise ValueError("Choose a boundary style.")
+    if type(distance) not in (int, float) or not 1 <= distance <= 10_000:
+        raise ValueError("Boundary fade distance must be between 1 and 10,000 metres.")
+    return {"style": style, "distance_m": float(distance)}
+
+
+def wall_surface(walls):
+    if isinstance(walls, PolygonWalls):
+        return walls
+    ceiling, floor = "Ceiling" in walls, "Floor" in walls
+    lower, upper = verified_extents(walls, ceiling=ceiling, floor=floor)
+    return PolygonWalls(rectangle_outline((lower[:2], upper[:2])), lower[2], upper[2], ceiling, floor)
+
+
 def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limits=None, flag_polygon_m=None,
-                    wall_polygon_m=None, wall_block_channels=None):
+                    wall_polygon_m=None, wall_block_channels=None, wall_visual=None):
     channels = validate_channels(wall_block_channels)
-    if (wall_limits is not None or wall_polygon_m is not None or channels is not None) and not perimeter:
-        raise ValueError("Enable solid side walls before setting their shape, limits or collision channels.")
+    appearance = wall_appearance(wall_visual)
+    if any(value is not None for value in (wall_limits, wall_polygon_m, channels, appearance)) and not perimeter:
+        raise ValueError("Enable solid side walls before setting their shape, limits, collision channels or appearance.")
     if flag_inset_m is not None and flag_polygon_m is not None:
         raise ValueError("Choose either the flag-only inset or a flag-only polygon.")
     if not perimeter and flag_inset_m is None and flag_polygon_m is None:
@@ -338,13 +363,27 @@ def verify_flag_bounds(actors, flags, hard_perimeter=None):
             raise ValueError("The flag-only limit must be inside the hard perimeter.")
 
 
-def place_walls(actors, boxes, *, draft=None, block_channels=None):
+def place_walls(actors, boxes, *, draft=None, block_channels=None, visual=None):
     import unreal
 
     if isinstance(boxes, PolygonWalls):
         from polygon_walls_unreal import place
 
-        return place(actors, draft, boxes, block_channels)
+        collision_actors = [place(actors, draft, boxes, block_channels)]
+    else:
+        collision_actors = place_boxes(actors, boxes, block_channels)
+    if visual is not None:
+        from perimeter_visual import place_visual
+
+        place_visual(actors, draft, wall_surface(boxes), wall_appearance(visual))
+        for actor in collision_actors:
+            actor.tags = [*actor.tags, unreal.Name(VISUAL_REQUIRED)]
+
+
+def place_boxes(actors, boxes, block_channels):
+    import unreal
+
+    placed = []
     for side, (center, size) in boxes.items():
         actor = actors.spawn_actor_from_class(unreal.TriggerBox, unreal.Vector(*center))
         if not actor:
@@ -361,6 +400,22 @@ def place_walls(actors, boxes, *, draft=None, block_channels=None):
         component = actor.get_component_by_class(unreal.BoxComponent)
         component.set_box_extent(unreal.Vector(*(value / 2 for value in size)), False)
         configure_wall(actor, component, block_channels)
+        placed.append(actor)
+    return placed
+
+
+def check_wall_visual(actors, walls, surface):
+    import unreal
+
+    visuals = [actor for actor in actors if actor.actor_has_tag(unreal.Name(VISUAL_TAG))]
+    required = [actor for actor in walls if actor.actor_has_tag(unreal.Name(VISUAL_REQUIRED))]
+    if not visuals and not required:
+        return
+    if surface is None or len(required) != len(walls) or len(visuals) != 1:
+        raise ValueError("The mission perimeter is missing its matching visual or collision actors.")
+    from perimeter_visual import verify_visual
+
+    verify_visual(visuals[0], surface)
 
 
 def verify_walls(world, actors, markers):
@@ -371,13 +426,16 @@ def verify_walls(world, actors, markers):
     if not polygon and any(actor.actor_has_tag(unreal.Name(POLYGON_REQUIRED)) for actor in actors):
         raise ValueError("The saved draft is missing its solid perimeter collision actor.")
     if not walls:
+        check_wall_visual(actors, walls, None)
         return
     channels = read_channels(walls)
     pawn_markers = markers if blocks_pawns(channels) else []
     if polygon:
         from polygon_walls_unreal import verify
 
-        return verify(world, walls, actors, pawn_markers, channels)
+        surface = verify(world, walls, actors, pawn_markers, channels)
+        check_wall_visual(actors, walls, surface)
+        return surface
     actual = {}
     cap_modes = set()
     for actor in walls:
@@ -400,6 +458,7 @@ def verify_walls(world, actors, markers):
         raise ValueError("The four perimeter walls must agree on which caps are required.")
     (ceiling, floor), = cap_modes
     lower, upper = verified_extents(actual, ceiling=ceiling, floor=floor)
+    check_wall_visual(actors, walls, wall_surface(actual))
     check_marker_clearance(lower, upper, pawn_markers)
 
     # Trace only the generated walls. Terrain or base collisions cannot pass this check.

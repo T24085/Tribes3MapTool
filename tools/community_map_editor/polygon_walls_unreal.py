@@ -33,11 +33,7 @@ def mesh_geometry(walls):
     return (x, y, z), vertices, indices, caps
 
 
-def place(actors, draft, walls, channels):
-    from source_profiles import imported_draft
-
-    if not imported_draft(draft):
-        raise ValueError("A solid polygon must belong to an imported draft.")
+def dynamic_shell(walls):
     position, vertices, indices, _ = mesh_geometry(walls)
     mesh = unreal.DynamicMesh()
     mesh.append_buffers_to_mesh(unreal.GeometryScriptSimpleMeshBuffers(
@@ -46,6 +42,15 @@ def place(actors, draft, walls, channels):
         uv0=[unreal.Vector2D((x + z * 0.173) / 100, (y + z * 0.367) / 100) for x, y, z in vertices],
         triangles=[unreal.IntVector(*triangle) for triangle in indices],
     ))
+    return position, mesh
+
+
+def place(actors, draft, walls, channels):
+    from source_profiles import imported_draft
+
+    if not imported_draft(draft):
+        raise ValueError("A solid polygon must belong to an imported draft.")
+    position, mesh = dynamic_shell(walls)
     options = unreal.GeometryScriptCreateNewStaticMeshAssetOptions(
         enable_recompute_normals=True,
         enable_collision=True,
@@ -72,6 +77,7 @@ def place(actors, draft, walls, channels):
     actor.set_folder_path("TRIBES CTF/Mission perimeter")
     actor.tags = [unreal.Name(tag) for tag in (TAG, SOLID_POLYGON, *filter_tags(channels))]
     configure_wall(actor, component, channels)
+    return actor
 
 
 def read_plan(asset):

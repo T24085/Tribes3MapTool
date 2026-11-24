@@ -45,6 +45,7 @@ WALL_COLLISION_CHOICES = {
     "Vehicles (Vehicle)": ("vehicle",),
     "Pawn and Vehicle": ("pawn", "vehicle"),
 }
+WALL_VISUAL_CHOICES = {"Invisible": None, "Cyan energy": "energy", "Amber warning": "warning"}
 
 
 def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
@@ -64,6 +65,9 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
     channels = validate_channels(selection.get("wall_block_channels"))
     collision_choice = tk.StringVar(window, value=next(label for label, mode in WALL_COLLISION_CHOICES.items()
                                                        if mode == channels))
+    appearance = selection.get("wall_visual", {"style": None, "distance_m": 80})
+    style_choice = tk.StringVar(window, value=next(label for label, style in WALL_VISUAL_CHOICES.items()
+                                                   if style == appearance["style"]))
     entries = {}
     toggles = []
 
@@ -74,6 +78,8 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
             entries[key].configure(state="normal" if solid.get() and enabled.get() else "disabled")
         wall_draw.configure(state="normal" if solid.get() and custom.get() else "disabled")
         wall_collision.configure(state="readonly" if solid.get() else "disabled")
+        wall_style.configure(state="readonly" if solid.get() else "disabled")
+        fade_distance.configure(state="normal" if solid.get() and WALL_VISUAL_CHOICES[style_choice.get()] else "disabled")
 
     ttk.Checkbutton(body, text="Add solid side walls", variable=solid, command=update_fields).grid(
         row=0, columnspan=2, sticky="w", pady=(0, 6),
@@ -106,7 +112,15 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
     ttk.Label(body, text="Walls block").grid(row=4, column=0, sticky="w", padx=(12, 10), pady=3)
     wall_collision = ttk.Combobox(body, textvariable=collision_choice, values=list(WALL_COLLISION_CHOICES), width=23)
     wall_collision.grid(row=4, column=1, sticky="w")
-    ttk.Separator(body).grid(row=5, columnspan=2, sticky="ew", pady=10)
+    ttk.Label(body, text="Wall appearance").grid(row=5, column=0, sticky="w", padx=(12, 10), pady=3)
+    wall_style = ttk.Combobox(body, textvariable=style_choice, values=list(WALL_VISUAL_CHOICES), width=23)
+    wall_style.grid(row=5, column=1, sticky="w")
+    wall_style.bind("<<ComboboxSelected>>", lambda _event: update_fields())
+    ttk.Label(body, text="Visible from inside within (m)").grid(row=6, column=0, sticky="w", padx=(12, 10), pady=3)
+    fade_distance = ttk.Entry(body, width=10)
+    fade_distance.insert(0, str(appearance["distance_m"]))
+    fade_distance.grid(row=6, column=1, sticky="w")
+    ttk.Separator(body).grid(row=7, columnspan=2, sticky="ew", pady=10)
     polygon = list(selection.get("flag_polygon_m", ()))
     shape = tk.StringVar(window, value="polygon" if polygon else "inset")
 
@@ -122,20 +136,20 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         show_polygon(window, header, terrain, rows, polygon, keep)
 
     ttk.Radiobutton(body, text="Flag-only inset (m, optional)", variable=shape, value="inset",
-                    command=shape_changed).grid(row=6, column=0, sticky="w", padx=(0, 10))
+                    command=shape_changed).grid(row=8, column=0, sticky="w", padx=(0, 10))
     flag = ttk.Entry(body, width=10)
     if selection["flag_inset_m"] is not None:
         flag.insert(0, str(selection["flag_inset_m"]))
-    flag.grid(row=6, column=1, sticky="w")
+    flag.grid(row=8, column=1, sticky="w")
     ttk.Radiobutton(body, text="Flag-only polygon", variable=shape, value="polygon",
-                    command=shape_changed).grid(row=7, column=0, sticky="w")
+                    command=shape_changed).grid(row=9, column=0, sticky="w")
     draw = ttk.Button(body, text=f"Edit {len(polygon)} corners…" if polygon else "Draw on minimap…", command=draw_polygon)
-    draw.grid(row=7, column=1, sticky="w", pady=3)
+    draw.grid(row=9, column=1, sticky="w", pady=3)
     ttk.Label(body, text="Crossing the flag-only limit drops a carried flag.", wraplength=320).grid(
-        row=8, columnspan=2, sticky="w", pady=(6, 0),
+        row=10, columnspan=2, sticky="w", pady=(6, 0),
     )
     message = ttk.Label(body, wraplength=320)
-    message.grid(row=9, columnspan=2, sticky="w", pady=(6, 0))
+    message.grid(row=11, columnspan=2, sticky="w", pady=(6, 0))
 
     def distance(entry, label):
         try:
@@ -160,6 +174,8 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
                     options["wall_polygon_m"] = solid_polygon
                 if mode := WALL_COLLISION_CHOICES[collision_choice.get()]:
                     options["wall_block_channels"] = list(mode)
+                if style := WALL_VISUAL_CHOICES[style_choice.get()]:
+                    options["wall_visual"] = {"style": style, "distance_m": distance(fade_distance, "the fade distance")}
             plan_boundaries(header, terrain, rows, **options)
         except ValueError as exc:
             message.configure(text=str(exc))
@@ -168,7 +184,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         window.destroy()
 
     buttons = ttk.Frame(body)
-    buttons.grid(row=10, columnspan=2, sticky="ew", pady=(8, 0))
+    buttons.grid(row=12, columnspan=2, sticky="ew", pady=(8, 0))
     ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side="left")
     ttk.Button(buttons, text="Apply", command=save).pack(side="right")
     window.bind("<Escape>", lambda _event: window.destroy())

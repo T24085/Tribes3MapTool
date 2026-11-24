@@ -20,7 +20,7 @@ from mission_equipment import mission_equipment, power_context
 from mission_weather import cloud_layers, mission_weather, precipitation_emitters
 from native_terrain_paint import NativeTerrainPaint
 from object_catalog import applicable_mappings, build_rows, classify, load_catalog
-from perimeter import POLYGON_REQUIRED, PolygonWalls, plan_boundaries, place_flag_bounds, place_walls, verify_walls
+from perimeter import POLYGON_REQUIRED, PolygonWalls, plan_boundaries, place_flag_bounds, place_walls, verify_walls, wall_appearance
 from perimeter_collision import validate_channels
 from sky_intake import SKY_INDEX, load_sky_index
 from source_library import record_draft
@@ -63,7 +63,7 @@ def choose():
         required = {"manifest", "perimeter", "flag_inset_m", "mesh_mappings", "terrain_layers"}
         if (not isinstance(selection, dict)
                 or not required <= selection.keys() <= required | {"wall_limits", "flag_polygon_m", "wall_polygon_m",
-                                                                    "wall_block_channels"}
+                                                                    "wall_block_channels", "wall_visual"}
                 or not isinstance(selection["manifest"], str) or type(selection["perimeter"]) is not bool):
             raise ValueError("The conversion window returned an invalid import selection.")
         mappings = selection["mesh_mappings"]
@@ -75,7 +75,7 @@ def choose():
                           flag_inset_m=selection["flag_inset_m"], mesh_mappings=mappings,
                           terrain_layers=selection["terrain_layers"], wall_limits=selection.get("wall_limits"),
                           flag_polygon_m=selection.get("flag_polygon_m"), wall_polygon_m=selection.get("wall_polygon_m"),
-                          wall_block_channels=selection.get("wall_block_channels"))
+                          wall_block_channels=selection.get("wall_block_channels"), wall_visual=selection.get("wall_visual"))
 
 
 def terrain_mesh(ident, t, weights, *, tile_cm=None, name="Terrain", uv_origin=(0, 0), paint=None, materials=None,
@@ -636,6 +636,7 @@ class DraftImport:
             flag_polygon_m=self.options.get("flag_polygon_m"),
             wall_polygon_m=self.options.get("wall_polygon_m"),
             wall_block_channels=self.options.get("wall_block_channels"),
+            wall_visual=self.options.get("wall_visual"),
         )
         if self.batch_target is None and not editor.SAVING.save_dirty_packages_with_dialog(True, True):
             return Outcome("cancelled", "User cancelled the editor save prompt.")
@@ -743,7 +744,8 @@ class DraftImport:
                 actor.static_mesh_component.set_material(0, material)
             ground.append(actor)
         if boxes:
-            place_walls(editor.ACTORS, boxes, draft=ident, block_channels=self.options.get("wall_block_channels"))
+            place_walls(editor.ACTORS, boxes, draft=ident, block_channels=self.options.get("wall_block_channels"),
+                        visual=self.options.get("wall_visual"))
         self.ident, self.level, self.size, self.ground = ident, level, size, ground
         self.run.report["draft"] = ident
 
@@ -926,7 +928,7 @@ class DraftImport:
 
 
 def import_map(manifest, *, perimeter=False, flag_inset_m=None, wall_limits=None, mesh_mappings=None, terrain_layers=None,
-               flag_polygon_m=None, wall_polygon_m=None, wall_block_channels=None,
+               flag_polygon_m=None, wall_polygon_m=None, wall_block_channels=None, wall_visual=None,
                recorded_rules=None, batch_target=None, on_finished=None):
     import t3_map_editor as editor
 
@@ -941,6 +943,8 @@ def import_map(manifest, *, perimeter=False, flag_inset_m=None, wall_limits=None
         options["wall_polygon_m"] = wall_polygon_m
     if wall_block_channels is not None:
         options["wall_block_channels"] = list(validate_channels(wall_block_channels))
+    if wall_visual is not None:
+        options["wall_visual"] = wall_appearance(wall_visual)
     draft = DraftImport(editor, manifest, options, recorded_rules, batch_target)
     operators = {
         "verify": draft.verify, "plan": draft.plan, "textures": draft.textures, "terrain": draft.terrain_step,
