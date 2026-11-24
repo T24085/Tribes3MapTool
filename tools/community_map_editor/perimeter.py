@@ -1,7 +1,7 @@
 """Author and validate the optional collision perimeter of an imported draft."""
 
 import math
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 from perimeter_collision import TAG, blocks_pawns, configure_wall, filter_tags, has_wall_collision, probe_profiles, read_channels, validate_channels
 from terrain_grid import height_range
@@ -19,6 +19,9 @@ FLAG_CORNERS = ("T3MissionFlagMin", "T3MissionFlagMax")
 FLAG_POLYGON = "T3MissionFlagPolygon"
 FLAG_VERTEX = "T3MissionFlagVertex"
 FLAG_COUNT = "T3MissionFlagVertexCount"
+FLAG_FLOOR = "T3MissionFlagFloor"
+FLAG_CEILING = "T3MissionFlagCeiling"
+FLAG_CAPS = {FLAG_FLOOR: "T3MissionFlagNeedsFloor", FLAG_CEILING: "T3MissionFlagNeedsCeiling"}
 MAX_VERTICES = 32
 SOLID_POLYGON = TAG + "Polygon"
 POLYGON_REQUIRED = TAG + "PolygonRequired"
@@ -34,6 +37,12 @@ class PolygonWalls(NamedTuple):
     z_max: float
     ceiling: bool
     floor: bool
+
+
+class FlagBoundary(NamedTuple):
+    points: tuple
+    floor: Optional[float] = None
+    ceiling: Optional[float] = None
 
 
 def mission_extents(bounds, terrain, *, depth_m=DEFAULT_DEPTH_M, height_m=DEFAULT_CEILING_M):
@@ -143,7 +152,7 @@ def warning_surface(bounds, terrain, walls, polygon, limits):
 
 def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limits=None, flag_polygon_m=None,
                     wall_polygon_m=None, wall_block_channels=None, wall_visual=None, warn_players=False,
-                    warning_polygon_m=None, warning_limits=None, warning_audience=None):
+                    warning_polygon_m=None, warning_limits=None, warning_audience=None, flag_limits=None):
     if type(warn_players) is not bool:
         raise ValueError("Choose whether to warn players outside the mission area.")
     if warning_audience is not None and (not isinstance(warning_audience, str) or warning_audience not in WARNING_AUDIENCES):
@@ -156,6 +165,8 @@ def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limi
         raise ValueError("Enable solid side walls before setting their shape, limits, collision channels or appearance.")
     if flag_inset_m is not None and flag_polygon_m is not None:
         raise ValueError("Choose either the flag-only inset or a flag-only polygon.")
+    if flag_limits is not None and flag_inset_m is None and flag_polygon_m is None:
+        raise ValueError("Set a flag-only inset or draw a polygon before setting its height limits.")
     if not perimeter and flag_inset_m is None and flag_polygon_m is None and not warn_players:
         return None, None, None
     if "minimap" not in header or not any(row["status"] == "boundary" for row in rows):
@@ -172,6 +183,15 @@ def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limi
         check_flag_polygon(limit, flags, bounds)
     if isinstance(walls, PolygonWalls) and limit is not None and blocks_pawns(channels):
         check_inside_perimeter(walls.vertices, rectangle_outline(limit) if len(limit) == 2 else limit)
+    if limit is not None:
+        floor = ceiling = None
+        if flag_limits is not None:
+            above, below = height_limits(flag_limits)
+            if above is not None or below is not None:
+                low, high = mission_extents(bounds, terrain, depth_m=below or 0, height_m=above or 0)
+                floor, ceiling = (low[2] if below is not None else None, high[2] if above is not None else None)
+                check_flag_altitude(floor, ceiling, flags)
+        limit = FlagBoundary(limit, floor, ceiling)
     warning = warning_surface(bounds, terrain, walls, warning_polygon_m, warning_limits) if warn_players else None
     return walls, limit, warning
 
@@ -184,6 +204,18 @@ def flag_bounds(bounds, inset_m, flags):
     limit = ([x + inset for x in lower], [x - inset for x in upper])
     check_flag_bounds(limit, flags)
     return limit
+
+
+def check_flag_altitude(floor, ceiling, flags):
+    for at in (floor, ceiling):
+        if at is not None and (not math.isfinite(at) or abs(at) > 10_000_000):
+            raise ValueError("The flag-only floor or ceiling is outside the supported world coordinates.")
+    if floor is not None and ceiling is not None and floor >= ceiling:
+        raise ValueError("The flag-only ceiling must be above its floor.")
+    for label, point in flags:
+        if (floor is not None and point[2] < floor + CLEARANCE
+                or ceiling is not None and point[2] > ceiling - CLEARANCE):
+            raise ValueError(f"{label} must be at least one metre inside the flag-only height limits.")
 
 
 def check_flag_bounds(bounds, flags):
@@ -325,25 +357,33 @@ def triangulate_polygon(vertices):
     return triangles
 
 
-def place_flag_bounds(actors, points):
+def place_flag_bounds(actors, boundary):
     import unreal
 
-    rectangular = len(points) == 2
-    for index, (x, y) in enumerate(points, 1):
-        point = actors.spawn_actor_from_class(unreal.TargetPoint, unreal.Vector(x, y, 0))
+    def add_marker(label, location, tags):
+        point = actors.spawn_actor_from_class(unreal.TargetPoint, unreal.Vector(*location))
         if not point:
             raise RuntimeError("Could not create a flag-only limit marker.")
-        if rectangular:
-            label = "minimum" if index == 1 else "maximum"
-            tags = [FLAG_CORNERS[index - 1]]
-        else:
-            label = f"vertex {index:02d}"
-            tags = [FLAG_POLYGON, FLAG_VERTEX + str(index), FLAG_COUNT + str(len(points))]
         point.set_actor_label("Flag-only limit · " + label)
         point.set_folder_path("TRIBES CTF/Mission perimeter")
         point.set_editor_property("tags", [unreal.Name(tag) for tag in tags])
         point.set_actor_enable_collision(False)
         point.set_actor_hidden_in_game(True)
+
+    altitudes = {FLAG_FLOOR: boundary.floor, FLAG_CEILING: boundary.ceiling}
+    required = [FLAG_CAPS[tag] for tag, height in altitudes.items() if height is not None]
+    points = boundary.points
+    for index, (x, y) in enumerate(points, 1):
+        if len(points) == 2:
+            label = "minimum" if index == 1 else "maximum"
+            tags = [FLAG_CORNERS[index - 1]]
+        else:
+            label = f"vertex {index:02d}"
+            tags = [FLAG_POLYGON, FLAG_VERTEX + str(index), FLAG_COUNT + str(len(points))]
+        add_marker(label, (x, y, 0), [*tags, *required])
+    for tag, height in altitudes.items():
+        if height is not None:
+            add_marker("floor" if tag == FLAG_FLOOR else "ceiling", (*points[0], height), [tag])
 
 
 def verify_flag_bounds(actors, flags, hard_perimeter=None):
@@ -353,25 +393,38 @@ def verify_flag_bounds(actors, flags, hard_perimeter=None):
         actor for actor in actors if actor.actor_has_tag(unreal.Name(TAG))
     )):
         hard_perimeter = None
-    corners, vertices, counts = {}, {}, set()
+    corners, vertices, counts, caps, requirements = {}, {}, set(), {}, set()
+    roles = {*FLAG_CORNERS, FLAG_POLYGON, *FLAG_CAPS}
     for actor in actors:
-        if actor.actor_has_tag(unreal.Name(FLAG_POLYGON)):
-            tags = {str(tag) for tag in actor.tags}
+        tags = {str(tag) for tag in actor.tags}
+        found = tags & roles
+        required = frozenset(tag for tag, requirement in FLAG_CAPS.items() if requirement in tags)
+        if not found and not required:
+            continue
+        if len(found) != 1 or not isinstance(actor, unreal.TargetPoint) or actor.get_actor_enable_collision():
+            raise ValueError("Flag-only boundary markers must be non-colliding TargetPoints with one role.")
+        tag, = found
+        at = actor.get_actor_location()
+        if tag in FLAG_CAPS:
+            if required or tag in caps:
+                raise ValueError("Each flag-only height limit needs one cap marker.")
+            caps[tag] = at.z
+            continue
+        requirements.add(required)
+        if tag == FLAG_POLYGON:
             indices = [i for i in range(1, MAX_VERTICES + 1) if FLAG_VERTEX + str(i) in tags]
             sizes = [n for n in range(3, MAX_VERTICES + 1) if FLAG_COUNT + str(n) in tags]
-            if (len(indices) != 1 or len(sizes) != 1 or indices[0] in vertices
-                    or not isinstance(actor, unreal.TargetPoint) or actor.get_actor_enable_collision()):
+            if len(indices) != 1 or len(sizes) != 1 or indices[0] in vertices:
                 raise ValueError("Flag polygon vertices must be distinct, indexed, non-colliding TargetPoints.")
-            at = actor.get_actor_location()
             vertices[indices[0]] = (at.x, at.y)
             counts.add(sizes[0])
-        for tag in FLAG_CORNERS:
-            if not actor.actor_has_tag(unreal.Name(tag)):
-                continue
-            if tag in corners or not isinstance(actor, unreal.TargetPoint) or actor.get_actor_enable_collision():
+        else:
+            if tag in corners:
                 raise ValueError("The flag-only limit needs two distinct, non-colliding TargetPoints.")
-            at = actor.get_actor_location()
             corners[tag] = (at.x, at.y)
+    if (requirements or caps) and requirements != {frozenset(caps)}:
+        raise ValueError("The flag-only height markers are missing, unexpected or inconsistent.")
+    check_flag_altitude(caps.get(FLAG_FLOOR), caps.get(FLAG_CEILING), flags)
     if vertices:
         if corners or len(counts) != 1 or vertices.keys() != set(range(1, next(iter(counts)) + 1)):
             raise ValueError("The flag polygon is missing vertices or mixed with an inset.")

@@ -65,7 +65,8 @@ def choose():
         if (not isinstance(selection, dict)
                 or not required <= selection.keys() <= required | {"wall_limits", "flag_polygon_m", "wall_polygon_m",
                                                                     "wall_block_channels", "wall_visual", "warn_players",
-                                                                    "warning_polygon_m", "warning_limits", "warning_audience"}
+                                                                    "warning_polygon_m", "warning_limits", "warning_audience",
+                                                                    "flag_limits"}
                 or not isinstance(selection["manifest"], str) or type(selection["perimeter"]) is not bool):
             raise ValueError("The conversion window returned an invalid import selection.")
         mappings = selection["mesh_mappings"]
@@ -80,7 +81,7 @@ def choose():
                           wall_block_channels=selection.get("wall_block_channels"), wall_visual=selection.get("wall_visual"),
                           warn_players=selection.get("warn_players", False),
                           warning_polygon_m=selection.get("warning_polygon_m"), warning_limits=selection.get("warning_limits"),
-                          warning_audience=selection.get("warning_audience"))
+                          warning_audience=selection.get("warning_audience"), flag_limits=selection.get("flag_limits"))
 
 
 def terrain_mesh(ident, t, weights, *, tile_cm=None, name="Terrain", uv_origin=(0, 0), paint=None, materials=None,
@@ -646,6 +647,7 @@ class DraftImport:
             warning_polygon_m=self.options.get("warning_polygon_m"),
             warning_limits=self.options.get("warning_limits"),
             warning_audience=self.options.get("warning_audience"),
+            flag_limits=self.options.get("flag_limits"),
         )
         if self.batch_target is None and not editor.SAVING.save_dirty_packages_with_dialog(True, True):
             return Outcome("cancelled", "User cancelled the editor save prompt.")
@@ -943,8 +945,8 @@ class DraftImport:
 
 def import_map(manifest, *, perimeter=False, flag_inset_m=None, wall_limits=None, mesh_mappings=None, terrain_layers=None,
                flag_polygon_m=None, wall_polygon_m=None, wall_block_channels=None, wall_visual=None, warn_players=False,
-               warning_polygon_m=None, warning_limits=None, warning_audience=None, recorded_rules=None, batch_target=None,
-               on_finished=None):
+               warning_polygon_m=None, warning_limits=None, warning_audience=None, flag_limits=None, recorded_rules=None,
+               batch_target=None, on_finished=None):
     import t3_map_editor as editor
 
     options = {"perimeter": perimeter, "flag_inset_m": flag_inset_m,
@@ -954,6 +956,8 @@ def import_map(manifest, *, perimeter=False, flag_inset_m=None, wall_limits=None
         options["wall_limits"] = wall_limits
     if flag_polygon_m is not None:
         options["flag_polygon_m"] = flag_polygon_m
+    if flag_limits is not None:
+        options["flag_limits"] = flag_limits
     if wall_polygon_m is not None:
         options["wall_polygon_m"] = wall_polygon_m
     if wall_block_channels is not None:

@@ -101,35 +101,59 @@ return function(env)
   local world=gm:GetWorld()
   assert(valid(world),'mission_flag_limit_world_required')
   local function in_world(actor)return valid(actor)and same(actor:GetWorld(),world)end
-  local lower,upper
+  local lower,upper,floor,ceiling,required_caps
   local vertices,vertex_count={},nil
   for _,actor in ipairs(FindAllOf('TargetPoint')or{})do
    if in_world(actor)then
-    if actor:ActorHasTag(FName('T3MissionFlagMin'))then
+    local minimum=actor:ActorHasTag(FName('T3MissionFlagMin'))
+    local maximum=actor:ActorHasTag(FName('T3MissionFlagMax'))
+    local vertex=actor:ActorHasTag(FName('T3MissionFlagPolygon'))
+    local floor_marker=actor:ActorHasTag(FName('T3MissionFlagFloor'))
+    local ceiling_marker=actor:ActorHasTag(FName('T3MissionFlagCeiling'))
+    local needed=(actor:ActorHasTag(FName('T3MissionFlagNeedsFloor')) and 1 or 0)
+                 +(actor:ActorHasTag(FName('T3MissionFlagNeedsCeiling')) and 2 or 0)
+    local roles=(minimum and 1 or 0)+(maximum and 1 or 0)+(vertex and 1 or 0)
+               +(floor_marker and 1 or 0)+(ceiling_marker and 1 or 0)
+    assert(roles<=1,'mission_flag_limit_ambiguous_marker')
+    if minimum or maximum or vertex then
+     assert(required_caps==nil or required_caps==needed,'mission_flag_limit_inconsistent_height_markers')
+     required_caps=needed
+    else
+     assert(needed==0,'mission_flag_limit_height_requires_outline_marker')
+    end
+    if minimum then
      assert(not lower,'mission_flag_limit_duplicate_lower_marker');lower=point(actor)
-    end
-    if actor:ActorHasTag(FName('T3MissionFlagMax'))then
+    elseif maximum then
      assert(not upper,'mission_flag_limit_duplicate_upper_marker');upper=point(actor)
-    end
-    if actor:ActorHasTag(FName('T3MissionFlagPolygon'))then
+    elseif vertex then
      local index=tagged_number(actor,'T3MissionFlagVertex',1)
      local size=tagged_number(actor,'T3MissionFlagVertexCount',3)
      assert(not vertices[index] and index<=size and (not vertex_count or vertex_count==size),
             'mission_flag_limit_invalid_polygon_index')
      vertex_count=size
      vertices[index]=point(actor)
+    elseif floor_marker then
+     assert(floor==nil,'mission_flag_limit_duplicate_floor');floor=point(actor).Z
+    elseif ceiling_marker then
+     assert(ceiling==nil,'mission_flag_limit_duplicate_ceiling');ceiling=point(actor).Z
     end
    end
   end
+  local actual_caps=(floor and 1 or 0)+(ceiling and 2 or 0)
+  assert((required_caps or 0)==actual_caps,'mission_flag_limit_incomplete_height_markers')
+  assert(not floor or not ceiling or floor<ceiling,'mission_flag_limit_invalid_height_range')
   if not lower and not upper and not vertex_count then return false end
-  local inside,crossed
+  local inside_xy,crossed
   if vertex_count then
    assert(not lower and not upper,'mission_flag_limit_mixed_shapes')
    for n=1,vertex_count do assert(vertices[n],'mission_flag_limit_missing_polygon_vertex')end
-   inside,crossed=polygon_limit(vertices)
+   inside_xy,crossed=polygon_limit(vertices)
   else
    assert(lower and upper and lower.X<upper.X and lower.Y<upper.Y,'mission_flag_limit_invalid_markers')
-   inside=function(v)return v.X>=lower.X and v.X<=upper.X and v.Y>=lower.Y and v.Y<=upper.Y end
+   inside_xy=function(v)return v.X>=lower.X and v.X<=upper.X and v.Y>=lower.Y and v.Y<=upper.Y end
+  end
+  local function inside(v)
+   return (not floor or v.Z>=floor) and (not ceiling or v.Z<=ceiling) and inside_xy(v)
   end
   native('/Script/Topaz.TopPickup_Flag:Drop',{{'bScored','BoolProperty',0},
    {'bInheritVelocity','BoolProperty',1},{'bForceReturnToStart','BoolProperty',2}})
@@ -200,8 +224,8 @@ return function(env)
    end
   end
   assert(flags[1]and flags[2],'mission_flag_limit_two_flags_required')
-  if vertex_count then
-   for _,flag in ipairs(flags)do assert(inside(point(flag)),'mission_flag_limit_flag_outside_polygon')end
+  if vertex_count or actual_caps~=0 then
+   for _,flag in ipairs(flags)do assert(inside(point(flag)),'mission_flag_limit_flag_outside_boundary')end
   end
   local function tick()
    if not in_world(gm)or not gm:HasAuthority()then return false end

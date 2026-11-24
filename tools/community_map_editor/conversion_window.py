@@ -161,9 +161,17 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
                     command=shape_changed).grid(row=9, column=0, sticky="w")
     draw = ttk.Button(body, text=f"Edit {len(polygon)} corners…" if polygon else "Draw on minimap…", command=draw_polygon)
     draw.grid(row=9, column=1, sticky="w", pady=3)
-    ttk.Label(body, text="Crossing the flag-only limit drops a carried flag.", wraplength=320).grid(
-        row=10, columnspan=2, sticky="w", pady=(6, 0),
-    )
+    flag_altitude = ttk.LabelFrame(body, text="Optional flag-only height limits (metres)", padding=(8, 4))
+    flag_altitude.grid(row=10, columnspan=2, sticky="ew", pady=(6, 0))
+    flag_height_fields = {}
+    for column, (key, label) in enumerate((("floor_m", "Below lowest terrain"), ("ceiling_m", "Above highest terrain"))):
+        ttk.Label(flag_altitude, text=label).grid(row=0, column=2 * column, sticky="w", padx=(0, 6))
+        field = ttk.Entry(flag_altitude, width=7)
+        previous = selection.get("flag_limits", {}).get(key)
+        if previous is not None:
+            field.insert(0, str(previous))
+        field.grid(row=0, column=2 * column + 1, sticky="w", padx=(0, 8))
+        flag_height_fields[key] = field
     def draw_warning():
         def keep(vertices):
             warning_polygon[:] = vertices
@@ -217,6 +225,11 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
             }
             if shape.get() == "polygon":
                 options["flag_polygon_m"] = polygon
+            if any(field.get().strip() for field in flag_height_fields.values()):
+                options["flag_limits"] = {
+                    key: distance(field, "the flag-only height limit") if field.get().strip() else None
+                    for key, field in flag_height_fields.items()
+                }
             if warn.get():
                 options["warn_players"] = True
                 if selected := next(key for key, label in WARNING_AUDIENCES.items() if label == audience.get()):
@@ -303,7 +316,8 @@ def show_minimap(parent, manifest, header, terrain, rows, *, flag_limit=None, wa
             canvas.create_line(*(v for corner in (*wall_polygon, wall_polygon[0]) for v in project(*corner)),
                                fill="#7ce0de", width=2)
         if flag_limit is not None:
-            corners = rectangle_outline(flag_limit) if len(flag_limit) == 2 else flag_limit
+            points = flag_limit.points
+            corners = rectangle_outline(points) if len(points) == 2 else points
             canvas.create_line(*(v for corner in (*corners, corners[0]) for v in project(*corner)),
                                fill="#f28aad", width=2, dash=(3, 3))
         if warning is not None:

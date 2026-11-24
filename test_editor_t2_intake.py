@@ -26,7 +26,7 @@ from mesh_mappings import placements, source_reference, source_transform
 from mission_weather import cloud_layers, precipitation_emitters
 from object_catalog import build_rows, classify, load_catalog, source_fields
 from minimap import export_host_minimap, framing, terrain_pixels, view_transform
-from perimeter import (PolygonWalls, check_inside_perimeter, check_marker_clearance, flag_bounds, mission_extents,
+from perimeter import (FlagBoundary, PolygonWalls, check_inside_perimeter, check_marker_clearance, flag_bounds, mission_extents,
                        plan_boundaries, plan_walls, triangulate_polygon, turn, verified_extents, wall_appearance,
                        wall_boxes, wall_surface)
 from perimeter_collision import probe_profiles, validate_channels
@@ -978,7 +978,7 @@ class IntakeTests(unittest.TestCase):
         boxes, saved, warning = plan_boundaries(header, {}, rows, **options)
         self.assertIsNone(boxes)
         self.assertIsNone(warning)
-        self.assertEqual(saved, tuple((x * 100, y * 100) for x, y in points))
+        self.assertEqual(saved, FlagBoundary(tuple((x * 100, y * 100) for x, y in points)))
         with self.assertRaisesRegex(ValueError, "either"):
             plan_boundaries(header, {}, rows, **dict(options, flag_inset_m=3))
         with self.assertRaisesRegex(ValueError, "edges cannot cross"):
@@ -1019,7 +1019,7 @@ class IntakeTests(unittest.TestCase):
         options = dict(perimeter=True, flag_inset_m=3, wall_polygon_m=[[-10, -10], [10, -10], [10, 10], [-10, 10]])
         walls, soft_limit, _ = plan_boundaries(header, terrain, rows, **options, wall_block_channels=["vehicle"])
         self.assertIsInstance(walls, PolygonWalls)
-        self.assertEqual(soft_limit, ([-1700, -1700], [1700, 1700]))
+        self.assertEqual(soft_limit, FlagBoundary(([-1700, -1700], [1700, 1700])))
         with self.assertRaisesRegex(ValueError, "Blue Flag"):
             plan_boundaries(header, terrain, rows, **options, wall_block_channels=["pawn"])
         for value in ([], "pawn", ["pawn", "pawn"], ["projectile"], [{"pawn": True}]):
@@ -1070,7 +1070,7 @@ class IntakeTests(unittest.TestCase):
         walls, flag, warning = plan_boundaries(header, terrain, rows, perimeter=True, **options)
         self.assertEqual(warning, expected)
         self.assertNotEqual(warning, wall_surface(walls))
-        self.assertEqual(flag, ([-4700, -3700], [5700, 6700]))
+        self.assertEqual(flag, FlagBoundary(([-4700, -3700], [5700, 6700])))
         self.assertEqual(plan_boundaries(header, terrain, rows, perimeter=False, **options), (None, flag, expected))
         for audience in ("foot", "vehicle"):
             self.assertEqual(plan_boundaries(header, terrain, rows, perimeter=False,
@@ -1089,3 +1089,26 @@ class IntakeTests(unittest.TestCase):
                             **dict(options, warning_limits={"ceiling_m": -1, "floor_m": None}))
         with self.assertRaisesRegex(ValueError, "who gets the warning"):
             plan_boundaries(header, terrain, rows, perimeter=False, warning_audience="projectile", **options)
+
+    def test_flag_height_limits_are_independent_and_keep_both_stands_inside(self):
+        header = {"minimap": {"image_bounds": ((-5000, -4000), (6000, 7000))}}
+        terrain = {"origin_cm": [0, 0, 100], "cm_per_m": 100, "height_m": [0, 5]}
+        rows = [{"status": "boundary"}, {"status": "marker", "kind": "flag", "name": "Red Flag", "position_cm": [0, 0, 500]}]
+        rect = {"flag_inset_m": 3}
+        polygon = {"flag_inset_m": None, "flag_polygon_m": [[-8, -8], [8, -8], [8, 8], [-8, 8]]}
+        caps = {"floor_m": 2, "ceiling_m": 4}
+        for outline in (rect, polygon):
+            with self.subTest(outline=outline):
+                _, flag, warning = plan_boundaries(header, terrain, rows, perimeter=False, warn_players=True,
+                                                   flag_limits=caps, **outline)
+                self.assertEqual((flag.floor, flag.ceiling), (-100, 1000))
+                self.assertFalse(warning.floor or warning.ceiling)
+                _, ceiling_only, _ = plan_boundaries(header, terrain, rows, perimeter=False,
+                                                       flag_limits={"floor_m": None, "ceiling_m": 4}, **outline)
+                self.assertEqual((ceiling_only.floor, ceiling_only.ceiling), (None, 1000))
+                rows[-1]["position_cm"][2] = 950
+                with self.assertRaisesRegex(ValueError, "Red Flag.*height limits"):
+                    plan_boundaries(header, terrain, rows, perimeter=False, flag_limits=caps, **outline)
+                rows[-1]["position_cm"][2] = 500
+        with self.assertRaisesRegex(ValueError, "Set a flag-only inset or draw a polygon"):
+            plan_boundaries(header, terrain, rows, perimeter=False, flag_inset_m=None, flag_limits=caps)

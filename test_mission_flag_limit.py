@@ -25,7 +25,7 @@ return function(factory)
  FName=function(v)return v end
  local function marker(tags,x,y,owner)
   if type(tags)=='string'then tags={tags}end
-  local a=object(tags[1],owner or world);a.at={X=x,Y=y,Z=0}
+  local a=object(tags[1],owner or world);a.at={X=x,Y=y,Z=0};a.tags=tags
   a.ActorHasTag=function(_,wanted)
    for _,tag in ipairs(tags)do if tag==wanted then return true end end
    return false
@@ -121,6 +121,20 @@ return function(factory)
   end,
   fail_notice=function()pilot.ClientMessage=function()error('closed connection')end end,
   points=function(enabled)if not enabled then points={points[3]}end end,
+  altitude=function(floor,ceiling,omit)
+   for _,entry in ipairs(points)do
+    if entry.world==world then
+     if floor then table.insert(entry.tags,'T3MissionFlagNeedsFloor')end
+     if ceiling then table.insert(entry.tags,'T3MissionFlagNeedsCeiling')end
+    end
+   end
+   for _,cap in ipairs({{'Floor',floor},{'Ceiling',ceiling}})do
+    if cap[2] and cap[1]~=omit then
+     local entry=marker('T3MissionFlag'..cap[1],0,0)
+     entry.at.Z=cap[2];points[#points+1]=entry
+    end
+   end
+  end,
   polygon=function(vertices,size)
    points={}
    for i,p in ipairs(vertices)do
@@ -236,6 +250,39 @@ class MissionFlagLimitTest(unittest.TestCase):
         f.tick()
         self.assertEqual(flag.drops, 0)
         self.assertIn("MISSION_FLAG_LIMIT_READY", f.notices[1])
+
+    def test_altitude_crossing_releases_at_the_last_valid_sample_for_each_shape(self):
+        polygon = [(-900, -900), (900, -900), (900, 900), (-900, 900)]
+        for vertices in (None, polygon):
+            for height, outside in ((500, 501), (-200, -201)):
+                with self.subTest(vertices=vertices, height=height):
+                    f = self.fixture(vertices)
+                    f.altitude(-200, 500)
+                    flag = f.flags[1]
+                    flag.owner = f.pawn
+                    f.move(f.pawn, 100, 50, height)
+                    self.assertTrue(f.start())
+                    f.tick()
+                    self.assertEqual(flag.drops, 0)
+                    f.move(f.pawn, 101, 52, outside)
+                    f.tick()
+                    self.assertEqual((flag.drops, flag.moves), (1, 1))
+                    self.assertEqual((flag.at.X, flag.at.Y, flag.at.Z), (100, 50, height))
+                    self.assertEqual(list(f.pilot.messages.values()), ["T3FlagBoundaryDrop"])
+
+    def test_bad_height_markers_and_outside_stands_reject_startup(self):
+        f = self.fixture()
+        f.altitude(-100, 100, "Ceiling")
+        with self.assertRaisesRegex(LuaError, "incomplete_height_markers"):
+            f.start()
+        f = self.fixture()
+        f.altitude(200, 100)
+        with self.assertRaisesRegex(LuaError, "invalid_height_range"):
+            f.start()
+        f = self.fixture()
+        f.altitude(1, 300)
+        with self.assertRaisesRegex(LuaError, "flag_outside_boundary"):
+            f.start()
 
     def test_polygon_marker_errors_fail_at_startup(self):
         for size in (900, 8_000_000):
