@@ -34,6 +34,11 @@ collision. Version 44 intakes also retain baked normal and alarm lightmaps
 for each detail level. Unreal rendered both states at all three levels and
 cooked the map, materials, and color atlases for Windows.
 
+In an isolated Direct Host match, one connected headless client verified
+that all three red-base material slots switched to alarm after generator
+loss and returned to normal after auto-revive. The three blue-base slots
+stayed normal. The authored test map used a 40-second auto-revive timer.
+
 The stock Unreal workspace can use **Build for Direct Host** after importing a draft. Select a verified Direct Host bundle that supports standard Unreal World Settings. Offline playtesting uses the separate game-compatible setup described in the editor guide.
 
 From a fresh UE 5.3 workspace, authored Tribes 1, Tribes 2, Vengeance, and Ascend fixtures passed import, batch rebuild, Windows cooking, isolated Direct Host staging, and rollback.
