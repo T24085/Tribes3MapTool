@@ -14,6 +14,10 @@ py -3.13 tools/community_map_editor/launch.py "D:/Maps/CommunityMapEditor/local-
 
 See the [editor guide](tools/community_map_editor/README.md) for conversion, cooking, offline playtests and host export requirements. The source snapshot contains no installed game, Unreal Editor binaries or cooked maps.
 
+## Flag boundary verification
+
+An Unreal Engine 5.3 draft with a three-second flag return timer passed a Windows cook, Direct Host export, staging and rollback checks. In the isolated cooked CTF match, reentering the boundary cleared the warning and kept the flag with the carrier. On a second exit, the flag returned home after 3.034 seconds and the HUD showed the return notice. The gameplay check covered an offline match. Connected multiplayer and occupied vehicles still need in-game verification.
+
 ## Source tests
 
 ```powershell
