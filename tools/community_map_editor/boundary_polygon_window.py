@@ -7,20 +7,22 @@ from minimap import framing, terrain_pixels, view_transform
 from perimeter import MAX_VERTICES, check_polygon_clearance, check_polygon_outline, parse_polygon, rectangle_outline
 
 
-def show_polygon(parent, header, terrain, rows, initial, on_save, *, solid=False, constrain_pawns=True):
+def show_polygon(parent, header, terrain, rows, initial, on_save, *, kind="flag", constrain_pawns=True):
     window = tk.Toplevel(parent)
-    label = "Solid perimeter" if solid else "Flag-only boundary"
-    boundary = "mission perimeter" if solid else "flag-only limit"
-    color = "#7ce0de" if solid else "#f28aad"
+    label, boundary, color = {
+        "wall": ("Solid perimeter", "mission perimeter", "#7ce0de"),
+        "flag": ("Flag-only boundary", "flag-only limit", "#f28aad"),
+        "warning": ("Warning boundary", "warning boundary", "#b8a6ff"),
+    }[kind]
     window.title("Draw " + label.lower())
     window.transient(parent)
     window.resizable(False, False)
     body = ttk.Frame(window, padding=12)
     body.pack(fill="both", expand=True)
     instruction = "Click each corner in order."
-    if not solid:
+    if kind == "flag":
         instruction += " Keep both flags inside."
-    elif constrain_pawns:
+    elif kind == "wall" and constrain_pawns:
         instruction += " Keep flags and spawns inside."
     ttk.Label(body, text=instruction).pack(anchor="w")
     size = 416
@@ -40,13 +42,13 @@ def show_polygon(parent, header, terrain, rows, initial, on_save, *, solid=False
             continue
         point = row["position_cm"]
         flag = row["kind"] == "flag"
-        if (solid and constrain_pawns) or (flag and not solid):
+        if (kind == "wall" and constrain_pawns) or (kind == "flag" and flag):
             markers.append((row["name"] or row["kind"], point))
         x, y = project(*point[:2])
         team_color = "#6ab7ff" if row["team"] == 1 else "#ff7575"
         if flag:
             canvas.create_polygon(x, y - 6, x + 6, y, x, y + 6, x - 6, y, fill=team_color, outline="#111b23")
-        elif solid:
+        elif kind != "flag":
             canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill=team_color, outline="#111b23")
     vertices = list(initial)
     message = ttk.Label(body, wraplength=size)

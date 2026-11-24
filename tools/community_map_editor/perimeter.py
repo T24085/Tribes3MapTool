@@ -72,15 +72,20 @@ def check_marker_clearance(lower, upper, markers):
             raise ValueError(f"{label} must be at least one metre inside the mission perimeter.")
 
 
-def plan_walls(bounds, terrain, markers, limits, polygon=None):
-    if limits is None:
-        limits = {"ceiling_m": DEFAULT_CEILING_M, "floor_m": None}
+def height_limits(limits):
     if not isinstance(limits, dict) or limits.keys() != {"ceiling_m", "floor_m"}:
         raise ValueError("Invalid mission boundary height settings.")
     ceiling, floor = limits["ceiling_m"], limits["floor_m"]
     for label, distance in (("Ceiling", ceiling), ("Floor", floor)):
         if distance is not None and (type(distance) not in (int, float) or not 0 <= distance <= 10_000):
             raise ValueError(f"{label} distance must be between 0 and 10,000 metres.")
+    return ceiling, floor
+
+
+def plan_walls(bounds, terrain, markers, limits, polygon=None):
+    if limits is None:
+        limits = {"ceiling_m": DEFAULT_CEILING_M, "floor_m": None}
+    ceiling, floor = height_limits(limits)
     lower, upper = mission_extents(
         bounds, terrain, depth_m=DEFAULT_DEPTH_M if floor is None else floor,
         height_m=DEFAULT_CEILING_M if ceiling is None else ceiling,
@@ -116,16 +121,32 @@ def wall_surface(walls):
     return PolygonWalls(rectangle_outline((lower[:2], upper[:2])), lower[2], upper[2], ceiling, floor)
 
 
-def warning_surface(header, walls):
-    if walls:
+def warning_surface(bounds, terrain, walls, polygon, limits):
+    if walls and polygon is None and limits is None:
         return wall_surface(walls)
-    return PolygonWalls(rectangle_outline(header["minimap"]["image_bounds"]), 0, 0, False, False)
+    if polygon is None:
+        vertices = wall_surface(walls).vertices if walls else rectangle_outline(bounds)
+    else:
+        vertices = parse_polygon(polygon, "Warning boundary")
+        check_polygon_outline(vertices, "Warning boundary", bounds)
+    if limits is None:
+        return PolygonWalls(vertices, 0, 0, False, False)
+    ceiling, floor = height_limits(limits)
+    if ceiling is None and floor is None:
+        return PolygonWalls(vertices, 0, 0, False, False)
+    lower, upper = mission_extents(bounds, terrain, depth_m=floor or 0, height_m=ceiling or 0)
+    if ceiling is not None and floor is not None and lower[2] >= upper[2]:
+        raise ValueError("The warning ceiling must be above its floor.")
+    return PolygonWalls(vertices, lower[2], upper[2], ceiling is not None, floor is not None)
 
 
 def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limits=None, flag_polygon_m=None,
-                    wall_polygon_m=None, wall_block_channels=None, wall_visual=None, warn_players=False):
+                    wall_polygon_m=None, wall_block_channels=None, wall_visual=None, warn_players=False,
+                    warning_polygon_m=None, warning_limits=None):
     if type(warn_players) is not bool:
         raise ValueError("Choose whether to warn players outside the mission area.")
+    if not warn_players and (warning_polygon_m is not None or warning_limits is not None):
+        raise ValueError("Enable player warnings before setting their shape or height limits.")
     channels = validate_channels(wall_block_channels)
     appearance = wall_appearance(wall_visual)
     if any(value is not None for value in (wall_limits, wall_polygon_m, channels, appearance)) and not perimeter:
@@ -133,7 +154,7 @@ def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limi
     if flag_inset_m is not None and flag_polygon_m is not None:
         raise ValueError("Choose either the flag-only inset or a flag-only polygon.")
     if not perimeter and flag_inset_m is None and flag_polygon_m is None and not warn_players:
-        return None, None
+        return None, None, None
     if "minimap" not in header or not any(row["status"] == "boundary" for row in rows):
         raise ValueError("A playable MissionArea is required for a boundary.")
     bounds = header["minimap"]["image_bounds"]
@@ -148,7 +169,8 @@ def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limi
         check_flag_polygon(limit, flags, bounds)
     if isinstance(walls, PolygonWalls) and limit is not None and blocks_pawns(channels):
         check_inside_perimeter(walls.vertices, rectangle_outline(limit) if len(limit) == 2 else limit)
-    return walls, limit
+    warning = warning_surface(bounds, terrain, walls, warning_polygon_m, warning_limits) if warn_players else None
+    return walls, limit, warning
 
 
 def flag_bounds(bounds, inset_m, flags):

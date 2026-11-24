@@ -61,6 +61,11 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
     ceiling = tk.BooleanVar(window, value=limits["ceiling_m"] is not None)
     floor = tk.BooleanVar(window, value=limits["floor_m"] is not None)
     warn = tk.BooleanVar(window, value=selection.get("warn_players", False))
+    warning_polygon = list(selection.get("warning_polygon_m", ()))
+    custom_warning = tk.BooleanVar(window, value=bool(warning_polygon))
+    saved_warning_limits = selection.get("warning_limits")
+    warning_limits = saved_warning_limits or {"ceiling_m": None, "floor_m": None}
+    custom_warning_height = tk.BooleanVar(window, value=saved_warning_limits is not None)
     solid_polygon = list(selection.get("wall_polygon_m", ()))
     custom = tk.BooleanVar(window, value=bool(solid_polygon))
     channels = validate_channels(selection.get("wall_block_channels"))
@@ -71,6 +76,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
                                                    if style == appearance["style"]))
     entries = {}
     toggles = []
+    warning_fields = {}
 
     def update_fields():
         for toggle in toggles:
@@ -81,6 +87,13 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         wall_collision.configure(state="readonly" if solid.get() else "disabled")
         wall_style.configure(state="readonly" if solid.get() else "disabled")
         fade_distance.configure(state="normal" if solid.get() and WALL_VISUAL_CHOICES[style_choice.get()] else "disabled")
+        warning_shape.configure(state="normal" if warn.get() else "disabled")
+        warning_draw.configure(state="normal" if warn.get() and custom_warning.get() else "disabled")
+        warning_height.configure(state="normal" if warn.get() else "disabled")
+        adjust_height = warn.get() and custom_warning_height.get()
+        for enabled, toggle, entry in warning_fields.values():
+            toggle.configure(state="normal" if adjust_height else "disabled")
+            entry.configure(state="normal" if adjust_height and enabled.get() else "disabled")
 
     ttk.Checkbutton(body, text="Add solid side walls", variable=solid, command=update_fields).grid(
         row=0, columnspan=2, sticky="w", pady=(0, 6),
@@ -101,7 +114,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
             solid_polygon[:] = vertices
             wall_draw.configure(text=f"Edit {len(solid_polygon)} corners…")
 
-        show_polygon(window, header, terrain, rows, solid_polygon, keep, solid=True,
+        show_polygon(window, header, terrain, rows, solid_polygon, keep, kind="wall",
                      constrain_pawns=blocks_pawns(WALL_COLLISION_CHOICES[collision_choice.get()]))
 
     wall_shape = ttk.Checkbutton(body, text="Use a solid polygon", variable=custom, command=update_fields)
@@ -149,10 +162,40 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
     ttk.Label(body, text="Crossing the flag-only limit drops a carried flag.", wraplength=320).grid(
         row=10, columnspan=2, sticky="w", pady=(6, 0),
     )
-    message = ttk.Label(body, wraplength=320)
-    ttk.Checkbutton(body, text="Warn players crossing the mission boundary", variable=warn).grid(
-        row=11, columnspan=2, sticky="w", pady=(8, 0),
+    def draw_warning():
+        def keep(vertices):
+            warning_polygon[:] = vertices
+            warning_draw.configure(text=f"Edit {len(warning_polygon)} corners…")
+
+        show_polygon(window, header, terrain, rows, warning_polygon, keep, kind="warning")
+
+    warning_group = ttk.LabelFrame(body, text="Player warning and sound", padding=(8, 4))
+    warning_group.grid(row=11, columnspan=2, sticky="ew", pady=(8, 0))
+    ttk.Checkbutton(warning_group, text="Warn players on crossing", variable=warn, command=update_fields).grid(
+        row=0, columnspan=2, sticky="w", pady=(0, 3),
     )
+    warning_shape = ttk.Checkbutton(warning_group, text="Draw a separate outline", variable=custom_warning,
+                                    command=update_fields)
+    warning_shape.grid(row=1, column=0, sticky="w", padx=(0, 10))
+    warning_draw = ttk.Button(warning_group, text=f"Edit {len(warning_polygon)} corners…" if warning_polygon else
+                              "Draw on minimap…", command=draw_warning)
+    warning_draw.grid(row=1, column=1, sticky="w", pady=3)
+    warning_height = ttk.Checkbutton(warning_group, text="Set warning height limits", variable=custom_warning_height,
+                                     command=update_fields)
+    warning_height.grid(row=2, columnspan=2, sticky="w")
+    for index, (key, title, initial) in enumerate((
+        ("ceiling_m", "Above highest terrain (m)", DEFAULT_CEILING_M),
+        ("floor_m", "Below lowest terrain (m)", DEFAULT_DEPTH_M),
+    ), 3):
+        saved = warning_limits[key]
+        enabled = tk.BooleanVar(window, value=saved is not None)
+        toggle = ttk.Checkbutton(warning_group, text=title, variable=enabled, command=update_fields)
+        toggle.grid(row=index, column=0, sticky="w", padx=(12, 10), pady=2)
+        entry = ttk.Entry(warning_group, width=10)
+        entry.insert(0, str(initial if saved is None else saved))
+        entry.grid(row=index, column=1, sticky="w")
+        warning_fields[key] = enabled, toggle, entry
+    message = ttk.Label(body, wraplength=320)
     message.grid(row=12, columnspan=2, sticky="w", pady=(6, 0))
 
     def distance(entry, label):
@@ -171,6 +214,13 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
                 options["flag_polygon_m"] = polygon
             if warn.get():
                 options["warn_players"] = True
+                if custom_warning.get():
+                    options["warning_polygon_m"] = warning_polygon
+                if custom_warning_height.get():
+                    options["warning_limits"] = {
+                        key: distance(entry, "the warning height") if enabled.get() else None
+                        for key, (enabled, _toggle, entry) in warning_fields.items()
+                    }
             if solid.get():
                 options["wall_limits"] = {
                     "ceiling_m": distance(entries["ceiling_m"], "the ceiling height") if ceiling.get() else None,
@@ -199,7 +249,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
     window.grab_set()
 
 
-def show_minimap(parent, manifest, header, terrain, rows, *, flag_limit=None, wall_polygon=None):
+def show_minimap(parent, manifest, header, terrain, rows, *, flag_limit=None, wall_polygon=None, warning=None):
     window = tk.Toplevel(parent)
     window.title(f"{header['name']} · Minimap preview")
     window.geometry("660x425")
@@ -249,6 +299,10 @@ def show_minimap(parent, manifest, header, terrain, rows, *, flag_limit=None, wa
             corners = rectangle_outline(flag_limit) if len(flag_limit) == 2 else flag_limit
             canvas.create_line(*(v for corner in (*corners, corners[0]) for v in project(*corner)),
                                fill="#f28aad", width=2, dash=(3, 3))
+        if warning is not None:
+            corners = warning.vertices
+            canvas.create_line(*(v for corner in (*corners, corners[0]) for v in project(*corner)),
+                               fill="#b8a6ff", width=2, dash=(7, 4))
         for row in rows:
             if row["status"] != "marker":
                 continue
@@ -286,6 +340,8 @@ def show_minimap(parent, manifest, header, terrain, rows, *, flag_limit=None, wa
         legend += "\nPink line · Flag-only limit"
     if wall_polygon is not None:
         legend += "\nCyan line · Solid perimeter"
+    if warning is not None:
+        legend += "\nPurple dashes · Player warning"
     ttk.Label(body, text=legend).grid(
         row=8, column=1, columnspan=2, sticky="nw", pady=(8, 0)
     )
@@ -1085,9 +1141,9 @@ def run(library, meshes=(), drafts=()):
     def preview_map():
         try:
             _, header, terrain, rows = state["minimap"]
-            walls, limit = plan_boundaries(header, terrain, rows, **boundary_options)
+            walls, limit, warning = plan_boundaries(header, terrain, rows, **boundary_options)
             show_minimap(root, *state["minimap"], flag_limit=limit,
-                         wall_polygon=walls.vertices if isinstance(walls, PolygonWalls) else None)
+                         wall_polygon=walls.vertices if isinstance(walls, PolygonWalls) else None, warning=warning)
         except ValueError as exc:
             messagebox.showerror("Mission boundaries", str(exc), parent=root)
 

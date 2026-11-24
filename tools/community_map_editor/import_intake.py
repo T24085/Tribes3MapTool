@@ -21,7 +21,7 @@ from mission_weather import cloud_layers, mission_weather, precipitation_emitter
 from native_terrain_paint import NativeTerrainPaint
 from object_catalog import applicable_mappings, build_rows, classify, load_catalog
 from perimeter import (POLYGON_REQUIRED, PolygonWalls, plan_boundaries, place_flag_bounds, place_walls,
-                       verify_walls, wall_appearance, warning_surface)
+                       verify_walls, wall_appearance)
 from perimeter_collision import validate_channels
 from sky_intake import SKY_INDEX, load_sky_index
 from source_library import record_draft
@@ -64,7 +64,8 @@ def choose():
         required = {"manifest", "perimeter", "flag_inset_m", "mesh_mappings", "terrain_layers"}
         if (not isinstance(selection, dict)
                 or not required <= selection.keys() <= required | {"wall_limits", "flag_polygon_m", "wall_polygon_m",
-                                                                    "wall_block_channels", "wall_visual", "warn_players"}
+                                                                    "wall_block_channels", "wall_visual", "warn_players",
+                                                                    "warning_polygon_m", "warning_limits"}
                 or not isinstance(selection["manifest"], str) or type(selection["perimeter"]) is not bool):
             raise ValueError("The conversion window returned an invalid import selection.")
         mappings = selection["mesh_mappings"]
@@ -77,7 +78,8 @@ def choose():
                           terrain_layers=selection["terrain_layers"], wall_limits=selection.get("wall_limits"),
                           flag_polygon_m=selection.get("flag_polygon_m"), wall_polygon_m=selection.get("wall_polygon_m"),
                           wall_block_channels=selection.get("wall_block_channels"), wall_visual=selection.get("wall_visual"),
-                          warn_players=selection.get("warn_players", False))
+                          warn_players=selection.get("warn_players", False),
+                          warning_polygon_m=selection.get("warning_polygon_m"), warning_limits=selection.get("warning_limits"))
 
 
 def terrain_mesh(ident, t, weights, *, tile_cm=None, name="Terrain", uv_origin=(0, 0), paint=None, materials=None,
@@ -632,7 +634,7 @@ class DraftImport:
             if not isinstance(mesh, unreal.StaticMesh):
                 raise ValueError(f"Could not load the mapped static mesh {path}.")
             meshes[path] = mesh
-        boxes, flag_limit = plan_boundaries(
+        boxes, flag_limit, warning_zone = plan_boundaries(
             header, terrain, rows, perimeter=self.options["perimeter"],
             flag_inset_m=self.options["flag_inset_m"], wall_limits=self.options.get("wall_limits"),
             flag_polygon_m=self.options.get("flag_polygon_m"),
@@ -640,6 +642,8 @@ class DraftImport:
             wall_block_channels=self.options.get("wall_block_channels"),
             wall_visual=self.options.get("wall_visual"),
             warn_players=self.options.get("warn_players", False),
+            warning_polygon_m=self.options.get("warning_polygon_m"),
+            warning_limits=self.options.get("warning_limits"),
         )
         if self.batch_target is None and not editor.SAVING.save_dirty_packages_with_dialog(True, True):
             return Outcome("cancelled", "User cancelled the editor save prompt.")
@@ -648,7 +652,7 @@ class DraftImport:
         self.planned, self.meshes = planned, meshes
         self.generated, self.generated_models = generated, generated_models
         self.lighting_index, self.boxes, self.flag_limit = lighting_index, boxes, flag_limit
-        self.warning_zone = warning_surface(header, boxes) if self.options.get("warn_players") else None
+        self.warning_zone = warning_zone
 
     def textures(self, _):
         if not self.generated_models:
@@ -937,7 +941,7 @@ class DraftImport:
 
 def import_map(manifest, *, perimeter=False, flag_inset_m=None, wall_limits=None, mesh_mappings=None, terrain_layers=None,
                flag_polygon_m=None, wall_polygon_m=None, wall_block_channels=None, wall_visual=None, warn_players=False,
-               recorded_rules=None, batch_target=None, on_finished=None):
+               warning_polygon_m=None, warning_limits=None, recorded_rules=None, batch_target=None, on_finished=None):
     import t3_map_editor as editor
 
     options = {"perimeter": perimeter, "flag_inset_m": flag_inset_m,
@@ -955,6 +959,10 @@ def import_map(manifest, *, perimeter=False, flag_inset_m=None, wall_limits=None
         options["wall_visual"] = wall_appearance(wall_visual)
     if warn_players is not False:
         options["warn_players"] = warn_players
+    if warning_polygon_m is not None:
+        options["warning_polygon_m"] = warning_polygon_m
+    if warning_limits is not None:
+        options["warning_limits"] = warning_limits
     draft = DraftImport(editor, manifest, options, recorded_rules, batch_target)
     operators = {
         "verify": draft.verify, "plan": draft.plan, "textures": draft.textures, "terrain": draft.terrain_step,

@@ -28,7 +28,7 @@ from object_catalog import build_rows, classify, load_catalog, source_fields
 from minimap import export_host_minimap, framing, terrain_pixels, view_transform
 from perimeter import (PolygonWalls, check_inside_perimeter, check_marker_clearance, flag_bounds, mission_extents,
                        plan_boundaries, plan_walls, triangulate_polygon, turn, verified_extents, wall_appearance,
-                       wall_boxes, wall_surface, warning_surface)
+                       wall_boxes, wall_surface)
 from perimeter_collision import probe_profiles, validate_channels
 from public_layout import export_public_layout
 from source_library import catalog_rows, record_draft, record_source
@@ -975,8 +975,9 @@ class IntakeTests(unittest.TestCase):
         ]
         points = [[-14, -12], [14, -12], [14, 12], [6, 12], [0, 2], [-6, 12], [-14, 12]]
         options = dict(perimeter=False, flag_inset_m=None, flag_polygon_m=points)
-        boxes, saved = plan_boundaries(header, {}, rows, **options)
+        boxes, saved, warning = plan_boundaries(header, {}, rows, **options)
         self.assertIsNone(boxes)
+        self.assertIsNone(warning)
         self.assertEqual(saved, tuple((x * 100, y * 100) for x, y in points))
         with self.assertRaisesRegex(ValueError, "either"):
             plan_boundaries(header, {}, rows, **dict(options, flag_inset_m=3))
@@ -1016,7 +1017,7 @@ class IntakeTests(unittest.TestCase):
         rows = [{"status": "boundary"},
                 {"status": "marker", "kind": "flag", "name": "Blue Flag", "position_cm": [1500, 0, 200]}]
         options = dict(perimeter=True, flag_inset_m=3, wall_polygon_m=[[-10, -10], [10, -10], [10, 10], [-10, 10]])
-        walls, soft_limit = plan_boundaries(header, terrain, rows, **options, wall_block_channels=["vehicle"])
+        walls, soft_limit, _ = plan_boundaries(header, terrain, rows, **options, wall_block_channels=["vehicle"])
         self.assertIsInstance(walls, PolygonWalls)
         self.assertEqual(soft_limit, ([-1700, -1700], [1700, 1700]))
         with self.assertRaisesRegex(ValueError, "Blue Flag"):
@@ -1049,9 +1050,37 @@ class IntakeTests(unittest.TestCase):
 
     def test_warning_only_uses_the_mission_area_without_collision_or_altitude_caps(self):
         header = {"minimap": {"image_bounds": ((-5000, -4000), (6000, 7000))}}
-        self.assertEqual(plan_boundaries(header, {}, [{"status": "boundary"}],
-                                         perimeter=False, flag_inset_m=None, warn_players=True), (None, None))
-        self.assertEqual(warning_surface(header, None), PolygonWalls(
+        walls, flag_limit, warning = plan_boundaries(header, {}, [{"status": "boundary"}],
+                                                     perimeter=False, flag_inset_m=None, warn_players=True)
+        self.assertIsNone(walls)
+        self.assertIsNone(flag_limit)
+        self.assertEqual(warning, PolygonWalls(
             ((-5000, -4000), (6000, -4000), (6000, 7000), (-5000, 7000)), 0, 0, False, False))
         with self.assertRaisesRegex(ValueError, "MissionArea"):
             plan_boundaries(header, {}, [], perimeter=False, flag_inset_m=None, warn_players=True)
+
+    def test_warning_polygon_and_caps_are_independent_of_the_wall_and_flag_limit(self):
+        header = {"minimap": {"image_bounds": ((-5000, -4000), (6000, 7000))}}
+        terrain = {"origin_cm": [0, 0, 100], "cm_per_m": 100, "height_m": [0, 5]}
+        rows = [{"status": "boundary"}]
+        points = [[-10, -10], [10, -10], [10, 30], [-10, 30]]
+        options = {"flag_inset_m": 3, "warn_players": True, "warning_polygon_m": points,
+                   "warning_limits": {"ceiling_m": 40, "floor_m": 5}}
+        expected = PolygonWalls(tuple((x * 100, y * 100) for x, y in points), -400, 4600, True, True)
+        walls, flag, warning = plan_boundaries(header, terrain, rows, perimeter=True, **options)
+        self.assertEqual(warning, expected)
+        self.assertNotEqual(warning, wall_surface(walls))
+        self.assertEqual(flag, ([-4700, -3700], [5700, 6700]))
+        self.assertEqual(plan_boundaries(header, terrain, rows, perimeter=False, **options), (None, flag, expected))
+
+        # A saved warning without overrides still follows the solid perimeter and its caps.
+        self.assertEqual(plan_boundaries(header, terrain, rows, perimeter=True, flag_inset_m=3,
+                                         warn_players=True)[2], wall_surface(walls))
+        with self.assertRaisesRegex(ValueError, "Enable player warnings"):
+            plan_boundaries(header, terrain, rows, perimeter=False, **dict(options, warn_players=False))
+        with self.assertRaisesRegex(ValueError, "inside the playable boundary"):
+            plan_boundaries(header, terrain, rows, perimeter=False,
+                            **dict(options, warning_polygon_m=[[-50, -10], *points[1:]]))
+        with self.assertRaisesRegex(ValueError, "Ceiling distance"):
+            plan_boundaries(header, terrain, rows, perimeter=False,
+                            **dict(options, warning_limits={"ceiling_m": -1, "floor_m": None}))
