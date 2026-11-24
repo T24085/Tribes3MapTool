@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 7",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage"],
+  "properties": {
+    "format": {"const": 7},
+    "profile": {"$ref": "intake-v2.schema.json#/properties/profile"},
+    "reader": {"$ref": "intake-v2.schema.json#/properties/reader"},
+    "name": {"$ref": "intake-v2.schema.json#/properties/name"},
+    "source_game": {"$ref": "intake-v2.schema.json#/properties/source_game"},
+    "profile_sha256": {"$ref": "intake-v2.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v2.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v2.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v2.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v3.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v6.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v6.schema.json#/properties/interior_review"},
+    "shapes": {"$ref": "intake-v6.schema.json#/properties/shapes"},
+    "shape_review": {"$ref": "intake-v6.schema.json#/properties/shape_review"},
+    "files": {
+      "type": "object",
+      "required": ["objects.json", "terrain.json", "height.png", "equipment.json"],
+      "maxProperties": 401,
+      "propertyNames": {
+        "pattern": "^(objects\\.json|terrain\\.json|height\\.png|material-(index|[0-7])\\.png|minimap\\.png|(interior|shape)-[0-9]{4}\\.json|model-textures\\.json|texture_[a-f0-9]{32}\\.png|equipment\\.json)$"
+      },
+      "additionalProperties": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+    }
+  },
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v2.schema.json#/then"},
+  "else": {"$ref": "intake-v2.schema.json#/else"},
+  "dependentRequired": {
+    "interiors": ["interior_review"],
+    "interior_review": ["interiors"],
+    "shapes": ["shape_review"],
+    "shape_review": ["shapes"]
+  },
+  "$defs": {
+    "equipment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "equipment", "power_groups"],
+      "properties": {
+        "format": {"const": 1},
+        "equipment": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source_id", "role", "datablock", "team", "transform", "power_group", "review"],
+            "properties": {
+              "source_id": {"type": "integer", "minimum": 1},
+              "role": {"enum": ["generator", "sensor", "base_turret", "sentry_turret", "inventory_station", "vehicle_station", "force_shield"]},
+              "datablock": {"type": "string"},
+              "team": {"enum": [0, 1, 2]},
+              "transform": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "required": ["position_cm", "rotation_xyzw", "scale"],
+                "properties": {
+                  "position_cm": {"$ref": "#/$defs/vector3"},
+                  "rotation_xyzw": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}},
+                  "scale": {"$ref": "#/$defs/vector3"}
+                }
+              },
+              "power_group": {"type": ["integer", "null"], "minimum": 1},
+              "review": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "power_groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source_id", "name", "team", "declared_power", "generators"],
+            "properties": {
+              "source_id": {"type": "integer", "minimum": 1},
+              "name": {"type": "string"},
+              "team": {"enum": [0, 1, 2]},
+              "declared_power": {"type": ["boolean", "null"]},
+              "generators": {"type": "array", "items": {"type": "integer", "minimum": 1}, "uniqueItems": true}
+            }
+          }
+        }
+      }
+    },
+    "vector3": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}}
+  }
+}

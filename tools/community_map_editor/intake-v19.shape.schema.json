@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tribes 1 default-pose DTS geometry and optional authored collision",
+  "oneOf": [
+    {"$ref": "intake-v18.shape.schema.json"},
+    {
+      "type": "object",
+      "required": ["format", "source", "materials", "vertices_m", "triangles", "collision"],
+      "additionalProperties": false,
+      "properties": {
+        "format": {"const": 5},
+        "source": {"$ref": "intake-v18.shape.schema.json#/properties/source"},
+        "materials": {"$ref": "intake-v18.shape.schema.json#/properties/materials"},
+        "vertices_m": {"$ref": "intake-v18.shape.schema.json#/properties/vertices_m"},
+        "triangles": {"$ref": "intake-v18.shape.schema.json#/properties/triangles"},
+        "collision": {
+          "type": "object",
+          "required": ["detail", "vertices_m", "triangles"],
+          "additionalProperties": false,
+          "properties": {
+            "detail": {"type": "integer", "minimum": 0, "maximum": 1023},
+            "vertices_m": {"$ref": "intake-v18.shape.schema.json#/properties/vertices_m"},
+            "triangles": {
+              "type": "array", "minItems": 1, "maxItems": 250000,
+              "items": {
+                "type": "array", "minItems": 3, "maxItems": 3, "uniqueItems": true,
+                "items": {"$ref": "intake-v18.shape.schema.json#/$defs/vertex"}
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

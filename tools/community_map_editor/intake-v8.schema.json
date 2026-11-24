@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 8",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage"],
+  "properties": {
+    "format": {"const": 8},
+    "profile": {"$ref": "intake-v7.schema.json#/properties/profile"},
+    "reader": {"$ref": "intake-v7.schema.json#/properties/reader"},
+    "name": {"$ref": "intake-v7.schema.json#/properties/name"},
+    "source_game": {"$ref": "intake-v7.schema.json#/properties/source_game"},
+    "profile_sha256": {"$ref": "intake-v7.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v7.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v7.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v7.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v7.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v7.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v7.schema.json#/properties/interior_review"},
+    "shapes": {"$ref": "intake-v7.schema.json#/properties/shapes"},
+    "shape_review": {"$ref": "intake-v7.schema.json#/properties/shape_review"},
+    "files": {
+      "type": "object",
+      "required": ["objects.json", "terrain.json", "height.png", "weather.json"],
+      "maxProperties": 402,
+      "propertyNames": {
+        "pattern": "^(objects\\.json|terrain\\.json|height\\.png|material-(index|[0-7])\\.png|minimap\\.png|(interior|shape)-[0-9]{4}\\.json|model-textures\\.json|texture_[a-f0-9]{32}\\.png|equipment\\.json|weather\\.json)$"
+      },
+      "additionalProperties": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+    }
+  },
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v2.schema.json#/then"},
+  "else": {"$ref": "intake-v2.schema.json#/else"},
+  "dependentRequired": {
+    "interiors": ["interior_review"],
+    "interior_review": ["interiors"],
+    "shapes": ["shape_review"],
+    "shape_review": ["shapes"]
+  },
+  "$defs": {
+    "weather": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "objects"],
+      "properties": {
+        "format": {"const": 1},
+        "objects": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source_id", "class", "values", "invalid_source_fields"],
+            "properties": {
+              "source_id": {"type": "integer"},
+              "class": {"enum": ["sky", "precipitation"]},
+              "values": {"type": "object"},
+              "invalid_source_fields": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+            },
+            "if": {"properties": {"class": {"const": "sky"}}},
+            "then": {"properties": {"values": {"$ref": "#/$defs/sky_values"}}},
+            "else": {"properties": {"values": {"$ref": "#/$defs/precipitation_values"}}}
+          }
+        }
+      }
+    },
+    "fraction": {"type": "number", "minimum": 0, "maximum": 1},
+    "source_speed": {"type": "number", "minimum": 0, "maximum": 10000},
+    "source_vector3": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "items": {"type": "number", "minimum": -10000, "maximum": 10000}
+    },
+    "rgba": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"$ref": "#/$defs/fraction"}},
+    "sky_values": {
+      "type": "object",
+      "additionalProperties": false,
+      "dependentRequired": {"wind_source_xyz": ["wind_target_axes"], "wind_target_axes": ["wind_source_xyz"]},
+      "properties": {
+        "material_list": {"type": "string", "minLength": 1, "maxLength": 255},
+        "uses_sky_textures": {"type": "boolean"},
+        "wind_affects_precipitation": {"type": "boolean"},
+        "solid_rgba": {"$ref": "#/$defs/rgba"},
+        "wind_source_xyz": {"$ref": "#/$defs/source_vector3"},
+        "wind_target_axes": {"$ref": "#/$defs/source_vector3"},
+        "cloud_height_fractions": {
+          "type": "object", "minProperties": 1, "propertyNames": {"enum": ["0", "1", "2"]},
+          "additionalProperties": {"$ref": "#/$defs/fraction"}
+        },
+        "cloud_speeds_source": {
+          "type": "object", "minProperties": 1,
+          "propertyNames": {"enum": ["cloudspeed0", "cloudspeed1", "cloudspeed2", "cloudspeed3"]},
+          "additionalProperties": {
+            "type": "array", "minItems": 1, "maxItems": 2,
+            "items": {"type": "number", "minimum": -10000, "maximum": 10000}
+          }
+        }
+      }
+    },
+    "precipitation_values": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["snow", "rain", "unmapped"]},
+        "datablock": {"type": "string", "minLength": 1, "maxLength": 128},
+        "fraction": {"$ref": "#/$defs/fraction"},
+        "max_drops": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "radius_cm": {"type": "number", "minimum": 0, "maximum": 10000000},
+        "minvelocity_source": {"$ref": "#/$defs/source_speed"},
+        "maxvelocity_source": {"$ref": "#/$defs/source_speed"},
+        "offsetspeed_source": {"$ref": "#/$defs/source_speed"},
+        "colors_source": {
+          "type": "object", "minProperties": 1, "propertyNames": {"enum": ["1", "2", "3"]},
+          "additionalProperties": {"anyOf": [{"$ref": "#/$defs/rgba"}, {"const": [-1, 0, 0, 1]}]}
+        }
+      }
+    }
+  }
+}

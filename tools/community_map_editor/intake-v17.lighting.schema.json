@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tribes 1 baked interior lighting",
+  "type": "object", "minProperties": 1, "maxProperties": 128,
+  "propertyNames": {"pattern": "^interior-[0-9]{4}[.]json$"},
+  "additionalProperties": {
+    "type": "object", "additionalProperties": false,
+    "required": ["source_sha256", "has_alarm", "animated_lights", "atlases", "surfaces", "review", "legacy_states"],
+    "properties": {
+      "source_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"},
+      "has_alarm": {"type": "boolean"},
+      "animated_lights": {"type": "integer", "minimum": 0, "maximum": 32768},
+      "atlases": {
+        "type": "array", "maxItems": 512,
+        "items": {
+          "type": "object", "required": ["color"], "additionalProperties": false,
+          "properties": {
+            "color": {
+              "type": "object", "required": ["file", "source_sha256"], "additionalProperties": false,
+              "properties": {
+                "file": {"type": "string", "pattern": "^lightmap_[a-f0-9]{32}[.]png$"},
+                "source_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+              }
+            }
+          }
+        }
+      },
+      "surfaces": {
+        "type": "array", "maxItems": 250000,
+        "items": {
+          "type": "array", "minItems": 6, "maxItems": 6,
+          "prefixItems": [
+            {"type": "integer", "minimum": 0},
+            {"type": "integer", "minimum": 0},
+            {"type": "integer", "minimum": 1},
+            {"$ref": "#/$defs/atlas"},
+            {"$ref": "#/$defs/atlas"},
+            {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/projection"}}
+          ]
+        }
+      },
+      "review": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 240}},
+      "legacy_states": {
+        "type": "array", "minItems": 1, "maxItems": 256,
+        "items": {
+          "type": "object", "required": ["label", "role", "reference"], "additionalProperties": false,
+          "dependentRequired": {"source": ["sha256", "version", "shift", "light_tracks"], "sha256": ["source"], "version": ["source"], "shift": ["source"], "light_tracks": ["source"], "base_source": ["base_sha256", "source"], "base_sha256": ["base_source"]},
+          "properties": {
+            "label": {"type": "string", "minLength": 1, "maxLength": 240},
+            "role": {"enum": ["normal", "alarm", "review"]},
+            "reference": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/dil"}]},
+            "source": {"$ref": "#/$defs/dil"},
+            "sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"},
+            "version": {"enum": [6, 7]},
+            "shift": {"type": "integer", "minimum": 0, "maximum": 16},
+            "light_tracks": {"type": "integer", "minimum": 0, "maximum": 16384},
+            "base_source": {"$ref": "#/$defs/dil"},
+            "base_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "atlas": {"anyOf": [{"type": "null"}, {"type": "integer", "minimum": 0, "maximum": 511}]},
+    "projection": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "array", "minItems": 4, "maxItems": 4,
+          "prefixItems": [
+            {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+            {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+            {"type": "number", "minimum": -1000000, "maximum": 1000000},
+            {"type": "number", "minimum": -1000000, "maximum": 1000000}
+          ]
+        }
+      ]
+    },
+    "dil": {"type": "string", "pattern": "^[^:/\\\\]{1,240}[.][dD][iI][lL]$"}
+  }
+}

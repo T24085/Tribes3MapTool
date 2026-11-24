@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES static legacy interior geometry, intake version 15",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "source", "materials", "vertices_m", "triangles"],
+  "properties": {
+    "format": {"const": 3},
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "sha256", "decoder_sha256", "dig_version", "lod", "geometry_name", "geometry_sha256", "material_name", "material_sha256"],
+      "properties": {
+        "name": {"type": "string", "minLength": 5, "maxLength": 244},
+        "sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"},
+        "decoder_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"},
+        "dig_version": {"const": 7},
+        "lod": {"type": "integer", "minimum": 0, "maximum": 4095},
+        "geometry_name": {"type": "string", "minLength": 5, "maxLength": 244},
+        "geometry_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"},
+        "material_name": {"type": "string", "minLength": 5, "maxLength": 244},
+        "material_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+      }
+    },
+    "materials": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
+    "vertices_m": {"type": "array", "minItems": 3, "maxItems": 65536, "items": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number", "minimum": -20000, "maximum": 20000}}},
+    "triangles": {
+      "description": "A material slot, three vertex indices, then six texture coordinates in source pixels.",
+      "type": "array", "minItems": 1, "maxItems": 250000,
+      "items": {
+        "type": "array", "minItems": 10, "maxItems": 10,
+        "prefixItems": [
+          {"type": "integer", "minimum": 0, "maximum": 255},
+          {"type": "integer", "minimum": 0, "maximum": 65535},
+          {"type": "integer", "minimum": 0, "maximum": 65535},
+          {"type": "integer", "minimum": 0, "maximum": 65535}
+        ],
+        "items": {"type": "number", "minimum": -1000000, "maximum": 1000000}
+      }
+    }
+  }
+}

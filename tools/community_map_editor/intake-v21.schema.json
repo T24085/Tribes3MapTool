@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 21",
+  "description": "Tribes 1 maps with at least one DTS shape using materials found only during animation.",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage", "shapes", "shape_review"],
+  "properties": {
+    "format": {"const": 21},
+    "profile": {"$ref": "intake-v20.schema.json#/properties/profile"},
+    "source_game": {"$ref": "intake-v20.schema.json#/properties/source_game"},
+    "reader": {"$ref": "intake-v20.schema.json#/properties/reader"},
+    "name": {"$ref": "intake-v20.schema.json#/properties/name"},
+    "profile_sha256": {"$ref": "intake-v20.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v20.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v20.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v20.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v20.schema.json#/properties/environment"},
+    "terrain_art": {"$ref": "intake-v20.schema.json#/properties/terrain_art"},
+    "files": {"$ref": "intake-v20.schema.json#/properties/files"},
+    "interiors": {"$ref": "intake-v20.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v20.schema.json#/properties/interior_review"},
+    "shapes": {"$ref": "intake-v20.schema.json#/properties/shapes"},
+    "shape_review": {"$ref": "intake-v20.schema.json#/properties/shape_review"}
+  },
+  "dependentRequired": {
+    "interiors": ["interior_review"],
+    "interior_review": ["interiors"]
+  },
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v20.schema.json#/then"},
+  "else": {"$ref": "intake-v20.schema.json#/else"}
+}

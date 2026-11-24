@@ -1,0 +1,91 @@
+{
+  "format": 1,
+  "profile": "tribes2-ctf",
+  "revision": 1,
+  "reader": [
+    {
+      "id": "decode",
+      "operation": "decode",
+      "label": "Decode Tribes 2 mission"
+    }
+  ],
+  "draft": [
+    {
+      "id": "verify",
+      "operation": "verify",
+      "label": "Verify intake and resolve rules"
+    },
+    {
+      "id": "plan",
+      "operation": "plan",
+      "label": "Plan models, terrain and boundaries"
+    },
+    {
+      "id": "textures",
+      "operation": "textures",
+      "label": "Import meshes and material textures"
+    },
+    {
+      "id": "terrain",
+      "operation": "terrain",
+      "label": "Build terrain and initialize draft"
+    },
+    {
+      "id": "objectives",
+      "operation": "objectives",
+      "label": "Place objects, equipment and objectives"
+    },
+    {
+      "id": "lighting",
+      "operation": "lighting",
+      "label": "Apply lighting and fog"
+    },
+    {
+      "id": "weather",
+      "operation": "weather",
+      "label": "Apply sky and weather"
+    },
+    {
+      "id": "save",
+      "operation": "save",
+      "label": "Save draft and source records"
+    },
+    {
+      "id": "lighting-stills",
+      "operation": "lighting-stills",
+      "label": "Render lighting inspection stills"
+    },
+    {
+      "id": "showcase",
+      "operation": "showcase",
+      "label": "Build model showcase"
+    },
+    {
+      "id": "contact-sheets",
+      "operation": "contact-sheets",
+      "label": "Render map contact sheets"
+    }
+  ],
+  "host": [
+    {
+      "id": "preflight",
+      "operation": "preflight",
+      "label": "Check Direct Host build inputs"
+    },
+    {
+      "id": "cook",
+      "operation": "cook",
+      "label": "Cook Windows map"
+    },
+    {
+      "id": "package",
+      "operation": "package",
+      "label": "Assemble cooked package inventory"
+    },
+    {
+      "id": "stage",
+      "operation": "stage",
+      "label": "Stage portable Direct Host package"
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Vengeance model texture index for map intake version 29",
+  "type": "object",
+  "minProperties": 1,
+  "maxProperties": 128,
+  "propertyNames": {"pattern": "^interior-[0-9]{4}\\.json$"},
+  "additionalProperties": {
+    "type": "object",
+    "minProperties": 1,
+    "maxProperties": 256,
+    "propertyNames": {"pattern": "^(?:0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"},
+    "additionalProperties": {
+      "oneOf": [
+        {"$ref": "#/$defs/binding"},
+        {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {"reason": {"$ref": "#/$defs/review"}},
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "review": {"type": "string", "minLength": 1, "maxLength": 240},
+    "texture": {
+      "type": "object",
+      "required": ["file", "source", "source_sha256", "size"],
+      "properties": {
+        "file": {"pattern": "^texture_[a-f0-9]{32}\\.png$", "type": "string"},
+        "source": {"pattern": "^[^/\\\\:]{1,255}$", "type": "string"},
+        "source_sha256": {"pattern": "^[a-f0-9]{64}$", "type": "string"},
+        "size": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "items": {"type": "integer", "minimum": 1, "maximum": 4096}
+        }
+      }
+    },
+    "binding": {"$ref": "#/$defs/bindingFields", "unevaluatedProperties": false},
+    "bindingFields": {
+      "$ref": "#/$defs/texture",
+      "required": ["mode", "two_sided"],
+      "properties": {
+        "mode": {"enum": ["opaque", "masked", "translucent"]},
+        "two_sided": {"type": "boolean"},
+        "warning": {"$ref": "#/$defs/review"},
+        "opacity": {
+          "$ref": "#/$defs/texture",
+          "properties": {
+            "pan": {
+              "type": "array", "minItems": 2, "maxItems": 2,
+              "items": {"type": "number", "minimum": -1024, "maximum": 1024}
+            }
+          },
+          "unevaluatedProperties": false
+        },
+        "glow": {
+          "type": "object",
+          "required": ["color", "mask", "brightness"],
+          "properties": {
+            "color": {"$ref": "#/$defs/texture", "unevaluatedProperties": false},
+            "mask": {"$ref": "#/$defs/texture", "unevaluatedProperties": false},
+            "brightness": {"type": "integer", "minimum": 0, "maximum": 255}
+          },
+          "additionalProperties": false
+        }
+      },
+      "if": {"properties": {"mode": {"const": "opaque"}}},
+      "then": {"not": {"required": ["opacity"]}}
+    }
+  }
+}

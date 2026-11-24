@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 18",
+  "description": "Tribes 1 terrain with static DTS props and optional interiors, artwork, and lighting.",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage", "shapes", "shape_review"],
+  "properties": {
+    "format": {"const": 18},
+    "profile": {"$ref": "intake-v17.schema.json#/properties/profile"},
+    "source_game": {"$ref": "intake-v17.schema.json#/properties/source_game"},
+    "reader": {"$ref": "intake-v17.schema.json#/properties/reader"},
+    "name": {"$ref": "intake-v17.schema.json#/properties/name"},
+    "profile_sha256": {"$ref": "intake-v17.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v17.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v17.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v17.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v17.schema.json#/properties/environment"},
+    "terrain_art": {"$ref": "intake-v17.schema.json#/properties/terrain_art"},
+    "files": {
+      "type": "object", "maxProperties": 1286,
+      "required": ["objects.json", "terrain.json", "height.png"],
+      "propertyNames": {"pattern": "^(objects[.]json|terrain[.]json|height[.]png|minimap[.]png|terrain-art-[a-f0-9]{32}[.]png|(interior|shape)-[0-9]{4}[.]json|model-textures[.]json|texture_[a-f0-9]{32}[.]png|interior-lighting[.]json|lightmap_[a-f0-9]{32}[.]png)$"},
+      "additionalProperties": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+    },
+    "interiors": {"$ref": "intake-v15.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v15.schema.json#/properties/interior_review"},
+    "shapes": {"$ref": "intake-v6.schema.json#/properties/shapes"},
+    "shape_review": {"$ref": "intake-v6.schema.json#/properties/shape_review"}
+  },
+  "dependentRequired": {
+    "interiors": ["interior_review"],
+    "interior_review": ["interiors"]
+  },
+  "anyOf": [
+    {"properties": {"shapes": {"minProperties": 1}}},
+    {"properties": {"shape_review": {"minProperties": 1}}}
+  ],
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v2.schema.json#/then"},
+  "else": {"$ref": "intake-v2.schema.json#/else"}
+}

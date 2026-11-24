@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 23",
+  "description": "Legacy Unreal editor exports paired with metric heightfields and explicitly assigned CTF objectives.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "profile", "source_game", "name", "reader", "profile_sha256", "sources", "files", "coverage", "minimap"],
+  "properties": {
+    "format": {"const": 23},
+    "profile": {"enum": ["vengeance-ctf", "ascend-ctf"]},
+    "source_game": {"enum": ["Tribes: Vengeance", "Tribes: Ascend"]},
+    "name": {"$ref": "intake-v21.schema.json#/properties/name"},
+    "reader": {"enum": ["legacy-unreal-intake-v1", "t2-public-layout-v1"]},
+    "profile_sha256": {"$ref": "intake-v21.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v21.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v21.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v21.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v21.schema.json#/properties/environment"},
+    "interiors": {
+      "type": "object",
+      "maxProperties": 128,
+      "propertyNames": {"pattern": "^unrealmesh:[a-z0-9_./:$-]{1,512}$"},
+      "additionalProperties": {"type": "string", "pattern": "^interior-[0-9]{4}\\.json$"}
+    },
+    "interior_review": {"type": "object", "maxProperties": 0},
+    "files": {
+      "type": "object",
+      "required": ["objects.json", "terrain.json", "height.png", "minimap.png"],
+      "propertyNames": {"anyOf": [
+        {"enum": ["objects.json", "terrain.json", "height.png", "minimap.png", "source-scene.json"]},
+        {"pattern": "^interior-[0-9]{4}\\.json$"}
+      ]},
+      "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    }
+  },
+  "dependentRequired": {"interiors": ["interior_review"], "interior_review": ["interiors"]},
+  "allOf": [
+    {
+      "if": {"properties": {"profile": {"const": "vengeance-ctf"}}},
+      "then": {"properties": {"source_game": {"const": "Tribes: Vengeance"}}},
+      "else": {"properties": {"source_game": {"const": "Tribes: Ascend"}}}
+    },
+    {
+      "if": {"properties": {"reader": {"const": "legacy-unreal-intake-v1"}}},
+      "then": {"properties": {"files": {"required": ["source-scene.json"]}}},
+      "else": {"properties": {"files": {"not": {"required": ["source-scene.json"]}}}}
+    },
+    {
+      "if": {"required": ["interiors"]},
+      "then": {"properties": {"reader": {"const": "legacy-unreal-intake-v1"}}}
+    },
+    {
+      "if": {"properties": {"profile": {"const": "vengeance-ctf"}}},
+      "then": {"properties": {"interiors": {"propertyNames": {"pattern": "^unrealmesh:bsp\\.[1-9][0-9]*$"}}}}
+    }
+  ]
+}

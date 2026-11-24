@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Darkstar DTS animation clips and local-space mesh frames",
+  "type": "object", "additionalProperties": false,
+  "required": ["nodes", "objects", "meshes", "clips", "transitions"],
+  "properties": {
+    "nodes": {"type": "array", "minItems": 1, "maxItems": 8192, "items": {"$ref": "#/$defs/node"}},
+    "objects": {"type": "array", "minItems": 1, "maxItems": 8192, "items": {"$ref": "#/$defs/object"}},
+    "meshes": {"type": "array", "minItems": 1, "maxItems": 8192, "items": {"$ref": "#/$defs/mesh"}},
+    "clips": {"type": "array", "minItems": 1, "maxItems": 250000, "items": {"$ref": "#/$defs/clip"}},
+    "transitions": {
+      "type": "array", "maxItems": 200000,
+      "items": {
+        "type": "array", "minItems": 6, "items": false,
+        "prefixItems": [
+          {"$ref": "#/$defs/index"}, {"$ref": "#/$defs/index"},
+          {"$ref": "#/$defs/phase"}, {"$ref": "#/$defs/phase"},
+          {"$ref": "#/$defs/duration"}, {"$ref": "#/$defs/pose"}
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "index": {"type": "integer", "minimum": 0},
+    "int32": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+    "metres": {"type": "number", "minimum": -20000, "maximum": 20000},
+    "phase": {"type": "number", "minimum": 0, "maximum": 1},
+    "duration": {"type": "number", "minimum": 0, "maximum": 1000000},
+    "name": {"type": "string", "maxLength": 24},
+    "position": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"$ref": "#/$defs/metres"}},
+    "uv": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {"type": "number", "minimum": -1000000, "maximum": 1000000}
+    },
+    "quat_component": {"type": "number", "minimum": -1, "maximum": 1},
+    "pose": {
+      "description": "Quaternion x y z w, then translation x y z in metres.",
+      "type": "array", "minItems": 7, "maxItems": 7,
+      "prefixItems": [
+        {"$ref": "#/$defs/quat_component"}, {"$ref": "#/$defs/quat_component"},
+        {"$ref": "#/$defs/quat_component"}, {"$ref": "#/$defs/quat_component"}
+      ],
+      "items": {"$ref": "#/$defs/metres"}
+    },
+    "node": {
+      "type": "object", "additionalProperties": false, "required": ["name", "parent", "pose"],
+      "properties": {
+        "name": {"$ref": "#/$defs/name"}, "parent": {"type": "integer", "minimum": -1},
+        "pose": {"$ref": "#/$defs/pose"}
+      }
+    },
+    "object": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "node", "mesh", "offset_m", "visible", "render", "collide"],
+      "properties": {
+        "name": {"$ref": "#/$defs/name"}, "node": {"$ref": "#/$defs/index"},
+        "mesh": {"$ref": "#/$defs/index"}, "offset_m": {"$ref": "#/$defs/position"},
+        "visible": {"type": "boolean"}, "render": {"type": "boolean"}, "collide": {"type": "boolean"}
+      }
+    },
+    "mesh": {
+      "type": "object", "additionalProperties": false, "required": ["frames", "uv_frames", "faces"],
+      "properties": {
+        "frames": {
+          "type": "array", "minItems": 1, "maxItems": 200000,
+          "items": {"type": "array", "minItems": 3, "maxItems": 200000, "items": {"$ref": "#/$defs/position"}}
+        },
+        "uv_frames": {
+          "type": "array", "minItems": 1, "maxItems": 200000,
+          "items": {"type": "array", "maxItems": 200000, "items": {"$ref": "#/$defs/uv"}}
+        },
+        "faces": {
+          "description": "Original Darkstar winding with alternating vertex and UV indices, then material.",
+          "type": "array", "maxItems": 200000,
+          "items": {
+            "type": "array", "minItems": 7, "maxItems": 7,
+            "prefixItems": [
+              {"$ref": "#/$defs/index"}, {"$ref": "#/$defs/index"}, {"$ref": "#/$defs/index"},
+              {"$ref": "#/$defs/index"}, {"$ref": "#/$defs/index"}, {"$ref": "#/$defs/index"}
+            ],
+            "items": {"type": "integer", "minimum": -1, "maximum": 255}
+          }
+        }
+      }
+    },
+    "clip": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "duration_s", "loop", "priority", "nodes", "objects", "material_swaps", "triggers"],
+      "properties": {
+        "name": {"$ref": "#/$defs/name"}, "duration_s": {"$ref": "#/$defs/duration"},
+        "loop": {"type": "boolean"}, "priority": {"$ref": "#/$defs/int32"},
+        "nodes": {
+          "type": "array", "maxItems": 8192,
+          "items": {
+            "type": "array", "minItems": 2, "items": false,
+            "prefixItems": [
+              {"$ref": "#/$defs/index"},
+              {"type": "array", "minItems": 1, "maxItems": 200000, "items": {"$ref": "#/$defs/node_key"}}
+            ]
+          }
+        },
+        "objects": {
+          "type": "array", "maxItems": 8192,
+          "items": {
+            "type": "array", "minItems": 2, "items": false,
+            "prefixItems": [
+              {"$ref": "#/$defs/index"},
+              {"type": "array", "minItems": 1, "maxItems": 200000, "items": {"$ref": "#/$defs/cel_key"}}
+            ]
+          }
+        },
+        "material_swaps": {
+          "type": "array", "maxItems": 200000,
+          "items": {
+            "type": "array", "minItems": 1, "maxItems": 200000,
+            "items": {
+              "type": "array", "minItems": 3, "items": false,
+              "prefixItems": [
+                {"$ref": "#/$defs/phase"},
+                {"type": "integer", "minimum": 0, "maximum": 4095},
+                {"type": "integer", "minimum": 0, "maximum": 65535}
+              ]
+            }
+          }
+        },
+        "triggers": {
+          "type": "array", "maxItems": 200000,
+          "items": {
+            "type": "array", "minItems": 3, "items": false,
+            "prefixItems": [{"$ref": "#/$defs/phase"}, {"$ref": "#/$defs/int32"}, {"type": "boolean"}]
+          }
+        }
+      }
+    },
+    "node_key": {
+      "type": "array", "minItems": 3, "items": false,
+      "prefixItems": [{"$ref": "#/$defs/phase"}, {"$ref": "#/$defs/pose"}, {"type": ["boolean", "null"]}]
+    },
+    "cel_key": {
+      "type": "array", "minItems": 4, "items": false,
+      "prefixItems": [
+        {"$ref": "#/$defs/phase"}, {"type": ["integer", "null"], "minimum": 0},
+        {"type": ["boolean", "null"]}, {"type": ["integer", "null"], "minimum": 0}
+      ]
+    }
+  }
+}

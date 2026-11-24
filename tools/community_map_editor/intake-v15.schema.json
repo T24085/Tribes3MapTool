@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 15",
+  "description": "Tribes 1 terrain with static interior models. Each interior-NNNN.json uses intake-v15.interior.schema.json.",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage", "interiors", "interior_review"],
+  "$defs": {"reference": {"pattern": "^interiorshape:.+$"}},
+  "properties": {
+    "format": {"const": 15},
+    "profile": {"$ref": "intake-v12.schema.json#/properties/profile"},
+    "source_game": {"$ref": "intake-v12.schema.json#/properties/source_game"},
+    "reader": {"$ref": "intake-v2.schema.json#/properties/reader"},
+    "name": {"$ref": "intake-v2.schema.json#/properties/name"},
+    "profile_sha256": {"$ref": "intake-v2.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v2.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v2.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v2.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v3.schema.json#/properties/environment"},
+    "terrain_art": {"$ref": "intake-v14.schema.json#/properties/terrain_art"},
+    "files": {
+      "type": "object", "maxProperties": 388,
+      "required": ["objects.json", "terrain.json", "height.png"],
+      "propertyNames": {"pattern": "^(objects[.]json|terrain[.]json|height[.]png|minimap[.]png|terrain-art-[a-f0-9]{32}[.]png|interior-[0-9]{4}[.]json)$"},
+      "additionalProperties": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+    },
+    "interiors": {
+      "type": "object", "maxProperties": 128,
+      "propertyNames": {"$ref": "#/$defs/reference"},
+      "additionalProperties": {"$ref": "intake-v4.schema.json#/$defs/geometry"}
+    },
+    "interior_review": {
+      "type": "object", "maxProperties": 128,
+      "propertyNames": {"$ref": "#/$defs/reference"},
+      "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 240}
+    }
+  },
+  "anyOf": [
+    {"properties": {"interiors": {"minProperties": 1}}},
+    {"properties": {"interior_review": {"minProperties": 1}}}
+  ],
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v2.schema.json#/then"},
+  "else": {"$ref": "intake-v2.schema.json#/else"}
+}

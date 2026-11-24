@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 14",
+  "description": "Tribes 1 painted terrain with private, explicitly supplied artwork. terrain.json continues to use intake-v13.terrain.schema.json.",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage", "terrain_art"],
+  "properties": {
+    "format": {"const": 14},
+    "profile": {"$ref": "intake-v12.schema.json#/properties/profile"},
+    "source_game": {"$ref": "intake-v12.schema.json#/properties/source_game"},
+    "reader": {"$ref": "intake-v2.schema.json#/properties/reader"},
+    "name": {"$ref": "intake-v2.schema.json#/properties/name"},
+    "profile_sha256": {"$ref": "intake-v2.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v2.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v2.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v2.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v3.schema.json#/properties/environment"},
+    "files": {
+      "type": "object", "maxProperties": 260,
+      "required": ["objects.json", "terrain.json", "height.png"],
+      "propertyNames": {"pattern": "^(objects[.]json|terrain[.]json|height[.]png|minimap[.]png|terrain-art-[a-f0-9]{32}[.]png)$"},
+      "additionalProperties": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+    },
+    "terrain_art": {
+      "type": "object", "minProperties": 1, "maxProperties": 256,
+      "propertyNames": {"pattern": "^(0|[1-9][0-9]{0,2})$"},
+      "additionalProperties": {"$ref": "#/$defs/binding"}
+    }
+  },
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v2.schema.json#/then"},
+  "else": {"$ref": "intake-v2.schema.json#/else"},
+  "$defs": {
+    "binding": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "file": {"type": "string", "pattern": "^terrain-art-[a-f0-9]{32}[.]png$"},
+        "source": {"type": "string", "minLength": 1, "maxLength": 255},
+        "source_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"},
+        "palette": {"type": "string", "minLength": 1, "maxLength": 255},
+        "palette_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 240}
+      },
+      "oneOf": [
+        {"required": ["reason"], "maxProperties": 1},
+        {"required": ["file", "source", "source_sha256"], "maxProperties": 3},
+        {"required": ["file", "source", "source_sha256", "palette", "palette_sha256"], "maxProperties": 5}
+      ]
+    }
+  }
+}

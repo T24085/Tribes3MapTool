@@ -1,0 +1,118 @@
+{
+  "format": 1,
+  "id": "tribes2-ctf",
+  "revision": 1,
+  "groups": {
+    "fog": {
+      "source": "sky"
+    },
+    "sun": {
+      "source": "sun"
+    },
+    "terrain": {
+      "source": "terrainblock"
+    }
+  },
+  "conversions": {
+    "fog.start_cm": {
+      "label": "Fog start",
+      "group": "fog",
+      "unit": "cm",
+      "input_unit": "cm",
+      "formula": "source",
+      "field": "start_cm",
+      "range": [
+        0,
+        2000000
+      ],
+      "display": {
+        "unit": "m",
+        "factor": 100
+      }
+    },
+    "fog.visible_cm": {
+      "label": "Visibility distance",
+      "group": "fog",
+      "unit": "cm",
+      "input_unit": "cm",
+      "formula": "source",
+      "field": "visible_cm",
+      "range": [
+        0,
+        2000000
+      ],
+      "display": {
+        "unit": "m",
+        "factor": 100
+      }
+    },
+    "fog.density": {
+      "label": "Fog density",
+      "group": "fog",
+      "unit": "UE fog density",
+      "input_unit": "cm",
+      "formula": "inverse_span",
+      "start": "fog.start_cm",
+      "end": "fog.visible_cm",
+      "fallback_span": 40000,
+      "numerator": 800,
+      "clamp": [
+        0.002,
+        0.15
+      ],
+      "range": [
+        0,
+        5
+      ],
+      "display": {
+        "unit": "",
+        "factor": 1
+      }
+    },
+    "sun.intensity_scale": {
+      "label": "Sun intensity",
+      "group": "sun",
+      "unit": "multiplier",
+      "formula": "constant",
+      "value": 1,
+      "range": [
+        0,
+        8
+      ],
+      "display": {
+        "unit": "×",
+        "factor": 1
+      }
+    },
+    "sun.ambient_scale": {
+      "label": "Ambient light intensity",
+      "group": "sun",
+      "unit": "multiplier",
+      "formula": "constant",
+      "value": 1,
+      "range": [
+        0,
+        8
+      ],
+      "display": {
+        "unit": "×",
+        "factor": 1
+      }
+    },
+    "terrain.tile_cm": {
+      "label": "Terrain texture repeat",
+      "group": "terrain",
+      "unit": "cm",
+      "formula": "constant",
+      "value": 800,
+      "range": [
+        10,
+        50000
+      ],
+      "display": {
+        "unit": "m",
+        "factor": 100
+      }
+    }
+  }
+}

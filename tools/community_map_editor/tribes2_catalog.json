@@ -1,0 +1,520 @@
+{
+  "format": 1,
+  "profile": "tribes2-ctf",
+  "revision": 1,
+  "fields": {
+    "team": {
+      "label": "Team",
+      "type": "integer",
+      "min": 0,
+      "max": 2
+    },
+    "missiontypeslist": {
+      "label": "Game modes",
+      "type": "text"
+    },
+    "datablock": {
+      "label": "Datablock",
+      "type": "text"
+    },
+    "position": {
+      "label": "Position",
+      "type": "vector",
+      "components": 3,
+      "unit": "source m",
+      "placement": true
+    },
+    "rotation": {
+      "label": "Rotation axis and angle",
+      "type": "vector",
+      "components": 4,
+      "unit": "axis / °",
+      "default": "0 0 1 0",
+      "placement": true
+    },
+    "scale": {
+      "label": "Scale",
+      "type": "vector",
+      "components": 3,
+      "unit": "×",
+      "default": "1 1 1",
+      "placement": true
+    },
+    "locked": {
+      "label": "Locally locked",
+      "type": "boolean"
+    },
+    "providespower": {
+      "label": "Provides power",
+      "type": "boolean"
+    },
+    "terrainfile": {
+      "label": "Terrain file",
+      "type": "text"
+    },
+    "squaresize": {
+      "label": "Terrain grid spacing",
+      "type": "number",
+      "min": 0.001,
+      "max": 10000,
+      "unit": "source m"
+    },
+    "emptysquares": {
+      "label": "Terrain holes",
+      "type": "text"
+    },
+    "interiorfile": {
+      "label": "Interior file",
+      "type": "text"
+    },
+    "shapename": {
+      "label": "Shape file",
+      "type": "text"
+    },
+    "radius": {
+      "label": "Spawn radius",
+      "type": "number",
+      "min": 0,
+      "max": 5000,
+      "unit": "source m"
+    },
+    "stand": {
+      "label": "Flag stand",
+      "type": "text"
+    },
+    "area": {
+      "label": "Playable rectangle",
+      "type": "vector",
+      "components": 4,
+      "unit": "source m"
+    },
+    "flightceiling": {
+      "label": "Flight ceiling",
+      "type": "number",
+      "unit": "source m"
+    },
+    "flightceilingrange": {
+      "label": "Flight ceiling range",
+      "type": "number",
+      "unit": "source m"
+    },
+    "fogdistance": {
+      "label": "Fog start",
+      "type": "number",
+      "min": 0,
+      "max": 1000000,
+      "unit": "source m"
+    },
+    "visibledistance": {
+      "label": "Visibility distance",
+      "type": "number",
+      "min": 0,
+      "max": 1000000,
+      "unit": "source m"
+    },
+    "direction": {
+      "label": "Sun direction",
+      "type": "vector",
+      "components": 3
+    },
+    "ambient": {
+      "label": "Ambient color",
+      "type": "color"
+    },
+    "color": {
+      "label": "RGB color",
+      "type": "color"
+    },
+    "fogcolor": {
+      "label": "Fog color",
+      "type": "color"
+    },
+    "materiallist": {
+      "label": "Sky material list",
+      "type": "text"
+    },
+    "windvelocity": {
+      "label": "Wind velocity",
+      "type": "vector",
+      "components": 3,
+      "unit": "source m/s"
+    },
+    "windeffectprecipitation": {
+      "label": "Wind affects precipitation",
+      "type": "boolean"
+    },
+    "maxnumdrops": {
+      "label": "Maximum drop count",
+      "type": "integer",
+      "min": 0,
+      "max": 1000000
+    },
+    "maxradius": {
+      "label": "Maximum radius",
+      "type": "number",
+      "min": 0,
+      "unit": "source m"
+    },
+    "percentage": {
+      "label": "Precipitation intensity",
+      "type": "number",
+      "min": 0,
+      "max": 100
+    },
+    "initialbarrel": {
+      "label": "Turret barrel",
+      "type": "text"
+    },
+    "audioprofile": {
+      "label": "Interior audio profile",
+      "type": "text"
+    },
+    "audioenvironment": {
+      "label": "Interior audio environment",
+      "type": "text"
+    }
+  },
+  "classes": {
+    "common": {
+      "label": "Mission object",
+      "feature": "metadata",
+      "aliases": [],
+      "fields": [
+        "team",
+        "missiontypeslist",
+        "locked"
+      ]
+    },
+    "world-object": {
+      "label": "World object",
+      "feature": "metadata",
+      "aliases": [],
+      "base": "common",
+      "fields": [
+        "position",
+        "rotation",
+        "scale",
+        "datablock"
+      ]
+    },
+    "groups": {
+      "label": "Mission group",
+      "feature": "metadata",
+      "aliases": [
+        "missiongroup",
+        "simgroup"
+      ],
+      "base": "common",
+      "fields": [
+        "providespower"
+      ]
+    },
+    "terrain": {
+      "label": "Terrain",
+      "feature": "terrain",
+      "aliases": [
+        "terrainblock"
+      ],
+      "base": "world-object",
+      "fields": [
+        "terrainfile",
+        "squaresize",
+        "emptysquares"
+      ]
+    },
+    "spawn": {
+      "label": "Spawn sphere",
+      "feature": "ctf",
+      "aliases": [
+        "spawnsphere"
+      ],
+      "base": "world-object",
+      "fields": [
+        "radius"
+      ],
+      "required": [
+        "position"
+      ]
+    },
+    "item": {
+      "label": "Item",
+      "feature": "items",
+      "aliases": [
+        "item"
+      ],
+      "base": "world-object",
+      "fields": [
+        "stand"
+      ]
+    },
+    "boundary": {
+      "label": "Mission area",
+      "feature": "boundaries",
+      "aliases": [
+        "missionarea"
+      ],
+      "base": "common",
+      "fields": [
+        "area",
+        "flightceiling",
+        "flightceilingrange"
+      ]
+    },
+    "interior": {
+      "label": "Interior",
+      "feature": "buildings",
+      "aliases": [
+        "interiorinstance"
+      ],
+      "base": "world-object",
+      "fields": [
+        "interiorfile",
+        "audioprofile",
+        "audioenvironment"
+      ],
+      "required": [
+        "position",
+        "interiorfile"
+      ],
+      "transform": true
+    },
+    "prop": {
+      "label": "Static mesh",
+      "feature": "props",
+      "aliases": [
+        "tsstatic",
+        "staticshape"
+      ],
+      "base": "world-object",
+      "fields": [
+        "shapename"
+      ],
+      "required": [
+        "position"
+      ],
+      "transform": true
+    },
+    "hardware": {
+      "label": "Base equipment",
+      "feature": "equipment",
+      "aliases": [
+        "turret",
+        "forcefieldbare"
+      ],
+      "base": "world-object",
+      "fields": [
+        "initialbarrel"
+      ],
+      "required": [
+        "position",
+        "datablock"
+      ],
+      "transform": true
+    },
+    "lighting": {
+      "label": "Sun",
+      "feature": "lighting",
+      "aliases": [
+        "sun"
+      ],
+      "base": "world-object",
+      "fields": [
+        "direction",
+        "color",
+        "ambient"
+      ]
+    },
+    "sky": {
+      "label": "Sky and atmosphere",
+      "feature": "sky",
+      "aliases": [
+        "sky"
+      ],
+      "base": "world-object",
+      "fields": [
+        "fogdistance",
+        "visibledistance",
+        "fogcolor",
+        "materiallist",
+        "windvelocity",
+        "windeffectprecipitation"
+      ]
+    },
+    "weather": {
+      "label": "Precipitation",
+      "feature": "weather",
+      "aliases": [
+        "precipitation"
+      ],
+      "base": "world-object",
+      "fields": [
+        "maxnumdrops",
+        "maxradius",
+        "percentage"
+      ]
+    },
+    "navigation": {
+      "label": "Navigation source",
+      "feature": "navigation",
+      "aliases": [
+        "aiobjective",
+        "navigationgraph",
+        "waypoint"
+      ],
+      "base": "world-object"
+    },
+    "sound": {
+      "label": "Sound emitter",
+      "feature": "audio",
+      "aliases": [
+        "audioemitter"
+      ],
+      "base": "world-object"
+    },
+    "camera": {
+      "label": "Source camera",
+      "feature": "metadata",
+      "aliases": [
+        "camera"
+      ],
+      "base": "world-object"
+    }
+  },
+  "features": {
+    "terrain": {
+      "label": "Terrain",
+      "draft": "mapped",
+      "host": "mapped",
+      "detail": "Height, holes and projected terrain materials."
+    },
+    "ctf": {
+      "label": "Flags and spawn points",
+      "draft": "mapped",
+      "host": "native",
+      "detail": "Validated CTF markers bind to native objectives and player starts."
+    },
+    "buildings": {
+      "label": "DIF interiors",
+      "draft": "mapped",
+      "host": "mapped",
+      "detail": "Static mesh geometry, source colors and supported baked lighting."
+    },
+    "props": {
+      "label": "DTS props",
+      "draft": "mapped",
+      "host": "mapped",
+      "detail": "Static models with supported materials."
+    },
+    "lighting": {
+      "label": "Sun and baked interior lighting",
+      "draft": "mapped",
+      "host": "mapped",
+      "detail": "Normal and alarm colors, with checked generator links for approved rooms."
+    },
+    "sky": {
+      "label": "Sky, clouds and fog",
+      "draft": "mapped",
+      "host": "mapped",
+      "detail": "Authored sky art and supported weather layers with approximate fog."
+    },
+    "weather": {
+      "label": "Rain and snow",
+      "draft": "mapped",
+      "host": "mapped",
+      "detail": "Requires the Community Map Materials editor plugin."
+    },
+    "boundaries": {
+      "label": "Boundaries",
+      "draft": "mapped",
+      "host": "mapped",
+      "detail": "Opt-in hard perimeter, ceiling and flag-only inset."
+    },
+    "equipment": {
+      "label": "Generators, radars, turrets and shields",
+      "draft": "mapped",
+      "host": "native",
+      "detail": "Review markers in Unreal. Approved supported actors and circuits use native host equipment."
+    },
+    "stations": {
+      "label": "Inventory and vehicle stations",
+      "draft": "retained",
+      "host": "retained",
+      "detail": "Equipment metadata and source transforms are retained for review."
+    },
+    "items": {
+      "label": "Other mission items",
+      "draft": "retained",
+      "host": "retained",
+      "detail": "Source properties are preserved for later mapping."
+    },
+    "audio": {
+      "label": "Mission audio emitters",
+      "draft": "retained",
+      "host": "retained",
+      "detail": "Emitter properties are recorded in the intake."
+    },
+    "navigation": {
+      "label": "Legacy AI and navigation",
+      "draft": "retained",
+      "host": "retained",
+      "detail": "Source data is available for analysis."
+    },
+    "metadata": {
+      "label": "Source hierarchy and authoring data",
+      "draft": "retained",
+      "host": "retained",
+      "detail": "Source groups, relationships and editor properties remain available."
+    },
+    "unknown": {
+      "label": "Unclassified source objects",
+      "draft": "unsupported",
+      "host": "unsupported",
+      "detail": "Add an authoring definition or conversion mapping."
+    }
+  },
+  "relationships": {
+    "parent": "Parent object",
+    "team": "Resolved team",
+    "power": "Power group",
+    "model": "Source asset"
+  },
+  "layout": {
+    "tabs": [
+      {
+        "id": "all",
+        "label": "All"
+      },
+      {
+        "id": "features",
+        "label": "Feature support"
+      }
+    ],
+    "columns": [
+      {
+        "id": "object",
+        "label": "Source object",
+        "width": 165
+      },
+      {
+        "id": "status",
+        "label": "Build status",
+        "width": 122
+      },
+      {
+        "id": "type",
+        "label": "Class",
+        "width": 114
+      },
+      {
+        "id": "reason",
+        "label": "Conversion",
+        "width": 270
+      }
+    ],
+    "filters": [
+      "query",
+      "review",
+      "feature"
+    ]
+  }
+}

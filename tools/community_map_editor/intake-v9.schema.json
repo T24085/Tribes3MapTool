@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 9",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage"],
+  "properties": {
+    "format": {"const": 9},
+    "profile": {"$ref": "intake-v8.schema.json#/properties/profile"},
+    "reader": {"$ref": "intake-v8.schema.json#/properties/reader"},
+    "name": {"$ref": "intake-v8.schema.json#/properties/name"},
+    "source_game": {"$ref": "intake-v8.schema.json#/properties/source_game"},
+    "profile_sha256": {"$ref": "intake-v8.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v8.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v8.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v8.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v8.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v8.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v8.schema.json#/properties/interior_review"},
+    "shapes": {"$ref": "intake-v8.schema.json#/properties/shapes"},
+    "shape_review": {"$ref": "intake-v8.schema.json#/properties/shape_review"},
+    "files": {
+      "type": "object",
+      "required": ["objects.json", "terrain.json", "height.png", "weather.json", "sky-artwork.json"],
+      "maxProperties": 531,
+      "propertyNames": {
+        "pattern": "^(objects\\.json|terrain\\.json|height\\.png|material-(index|[0-7])\\.png|minimap\\.png|(interior|shape)-[0-9]{4}\\.json|model-textures\\.json|texture_[a-f0-9]{32}\\.png|equipment\\.json|weather\\.json|sky-artwork\\.json|sky_[a-f0-9]{32}\\.png)$"
+      },
+      "additionalProperties": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+    }
+  },
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v2.schema.json#/then"},
+  "else": {"$ref": "intake-v2.schema.json#/else"},
+  "dependentRequired": {
+    "interiors": ["interior_review"],
+    "interior_review": ["interiors"],
+    "shapes": ["shape_review"],
+    "shape_review": ["shapes"]
+  },
+  "$defs": {
+    "sky_artwork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "skies"],
+      "properties": {
+        "format": {"const": 1},
+        "skies": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source_id", "material_list", "source_sha256", "slots"],
+            "properties": {
+              "source_id": {"type": "integer", "minimum": 1},
+              "material_list": {"$ref": "#/$defs/source_path"},
+              "source_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"},
+              "slots": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/slot"}}
+            }
+          }
+        }
+      }
+    },
+    "source_path": {"type": "string", "minLength": 1, "maxLength": 255},
+    "slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference"],
+      "properties": {
+        "reference": {"$ref": "#/$defs/source_path"},
+        "reason": {"enum": ["missing", "unreadable", "ambiguous", "capacity"]},
+        "file": {"type": "string", "pattern": "^sky_[a-f0-9]{32}\\.png$"},
+        "source_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+      },
+      "oneOf": [
+        {"required": ["reason"], "not": {"anyOf": [{"required": ["file"]}, {"required": ["source_sha256"]}]}},
+        {"required": ["file", "source_sha256"], "not": {"required": ["reason"]}}
+      ]
+    }
+  }
+}

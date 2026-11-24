@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Vengeance model texture index for map intake version 30",
+  "type": "object",
+  "minProperties": 1,
+  "maxProperties": 128,
+  "propertyNames": {"pattern": "^interior-[0-9]{4}\\.json$"},
+  "additionalProperties": {
+    "type": "object",
+    "minProperties": 1,
+    "maxProperties": 256,
+    "propertyNames": {"pattern": "^(?:0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])$"},
+    "additionalProperties": {
+      "oneOf": [
+        {"$ref": "#/$defs/binding"},
+        {
+          "type": "object",
+          "required": ["reason"],
+          "properties": {"reason": {"$ref": "model-textures-v29.schema.json#/$defs/review"}},
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "texture": {"$ref": "model-textures-v29.schema.json#/$defs/texture", "unevaluatedProperties": false},
+    "binding": {
+      "$ref": "model-textures-v29.schema.json#/$defs/bindingFields",
+      "properties": {
+        "normal": {"$ref": "#/$defs/texture"},
+        "specular_mask": {"$ref": "#/$defs/texture"}
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

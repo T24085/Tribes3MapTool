@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 24",
+  "description": "Vengeance source terrain with native alpha masks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "profile", "source_game", "name", "reader", "profile_sha256", "sources", "files", "coverage", "minimap", "terrain_paint"],
+  "properties": {
+    "format": {"const": 24},
+    "profile": {"const": "vengeance-ctf"},
+    "source_game": {"const": "Tribes: Vengeance"},
+    "name": {"$ref": "intake-v22.schema.json#/properties/name"},
+    "reader": {"const": "legacy-unreal-intake-v1"},
+    "profile_sha256": {"$ref": "intake-v22.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v22.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v22.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v22.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v22.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v22.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v22.schema.json#/properties/interior_review"},
+    "terrain_paint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vertices", "masks"],
+      "properties": {
+        "vertices": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "items": {"type": "integer", "minimum": 2, "maximum": 16385}
+        },
+        "masks": {
+          "type": "object", "minProperties": 1, "maxProperties": 32,
+          "propertyNames": {"pattern": "^(?:[0-9]|[12][0-9]|3[01])$"},
+          "additionalProperties": {"type": "string", "pattern": "^terrain-alpha-(?:0[0-9]|[12][0-9]|3[01])\\.png$"}
+        }
+      }
+    },
+    "files": {
+      "type": "object",
+      "required": ["objects.json", "terrain.json", "height.png", "minimap.png", "source-scene.json"],
+      "propertyNames": {"anyOf": [
+        {"enum": ["objects.json", "terrain.json", "height.png", "minimap.png", "source-scene.json"]},
+        {"pattern": "^interior-[0-9]{4}\\.json$"},
+        {"pattern": "^terrain-alpha-(?:0[0-9]|[12][0-9]|3[01])\\.png$"}
+      ]},
+      "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    }
+  },
+  "dependentRequired": {"interiors": ["interior_review"], "interior_review": ["interiors"]}
+}

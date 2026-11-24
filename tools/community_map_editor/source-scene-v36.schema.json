@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Version 36 Vengeance timed door event senders in source-scene.json",
+  "description": "Door senders reference the actor exports and the mover's saved Tag. At least one door must have a sender.",
+  "allOf": [{"$ref": "source-scene-v35.schema.json"}],
+  "properties": {
+    "native_brushes": {
+      "not": {"additionalProperties": {"not": {"$ref": "#/$defs/linked_door"}}},
+      "additionalProperties": {
+        "if": {"$ref": "#/$defs/linked_door"},
+        "then": {
+          "required": ["motion"],
+          "properties": {
+            "motion": {
+              "type": "object",
+              "required": ["initial_state"],
+              "properties": {"initial_state": {"pattern": "^[Tt][Rr][Ii][Gg][Gg][Ee][Rr][Oo][Pp][Ee][Nn][Tt][Ii][Mm][Ee][Dd]$"}}
+            },
+            "behavior": {
+              "properties": {
+                "trigger_senders": {
+                  "type": "array", "minItems": 1, "maxItems": 1024,
+                  "items": {"$ref": "source-scene-v35.schema.json#/$defs/sender"}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "linked_door": {
+      "required": ["type", "behavior"],
+      "properties": {
+        "type": {"const": "mover"},
+        "behavior": {"type": "object", "required": ["trigger_senders"]}
+      }
+    }
+  }
+}

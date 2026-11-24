@@ -1,0 +1,398 @@
+"""Prepare a cooked legacy editor draft for a Direct Host staging bundle."""
+
+import argparse
+import json
+from pathlib import Path, PurePosixPath
+import re
+import shutil
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from community_maps import MapDefinition, valid_label
+from map_sync_contract import MINIMAP_MAX_IMAGE, map_catalog, minimap_payload, png_dimensions
+from portable_maps import host_definitions, load_json, merge_map_manifests, owned_path
+from tools.t2_map_release import DRAFT, create_plan, descriptor_paths, publish_directory, regular_row
+from verified_file_cache import MAX_PACKAGE_MANIFEST_BYTES
+
+
+def file_row(root, name):
+    return {'path': name, **regular_row(root, name)}
+
+
+def write_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+
+def draft_layout(request):
+    if (not isinstance(request, dict) or set(request) != {'map', 'markers'}
+            or not isinstance(request['map'], str) or not DRAFT.fullmatch(request['map'])):
+        raise ValueError('Expected the saved CTF build request from the map editor.')
+    markers = request['markers']
+    if not isinstance(markers, dict) or set(markers) != {'T3Spawn1', 'T3Spawn2', 'T3Flag1', 'T3Flag2'}:
+        raise ValueError('The draft needs both teams’ starts and flags.')
+    for kind, points in markers.items():
+        maximum = 24 if kind.startswith('T3Spawn') else 1
+        if not isinstance(points, list) or not 1 <= len(points) <= maximum:
+            raise ValueError(f'Invalid marker count for {kind}.')
+        for point in points:
+            if (not isinstance(point, list) or len(point) != 4 or any(
+                    type(value) not in (int, float) or not -2_000_000 <= value <= 2_000_000 for value in point)):
+                raise ValueError(f'Invalid marker coordinates for {kind}.')
+    starts = [[team, *point] for team in (1, 2) for point in markers[f'T3Spawn{team}']]
+    flags = [[f'Team{side}', *markers[f'T3Flag{team}'][0][:3]] for team, side in ((1, 'A'), (2, 'B'))]
+    return request['map'], starts, flags
+
+
+def objectives_lua(starts, flags):
+    def lua_rows(rows):
+        return '{' + ',\n            '.join(
+            '{' + ', '.join(map(json.dumps, row)) + '}' for row in rows
+        ) + '}'
+
+    return (
+        'return function(factory)\n'
+        '    return function(report, descriptor)\n'
+        '        return factory(report, {\n'
+        '            world = descriptor.world,\n'
+        '            scripted_objectives = true,\n'
+        '            objectives = {\n'
+        f'                starts = {lua_rows(starts)},\n'
+        f'                flags = {lua_rows(flags)},\n'
+        '            },\n'
+        f'        }}, {len(starts)})\n'
+        '    end\n'
+        'end\n'
+    )
+
+
+def copy_member(source, payload, row):
+    name = row['path']
+    dest = payload / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source / name, dest)
+    if file_row(payload, name) != row:
+        raise ValueError(f'File differs from the recorded cook: {name}')
+
+
+def cooked_members(preview, manifest, definition):
+    map_id = definition.id
+    if (manifest.get('authoring_preview') != map_id or manifest.get('community_maps') != [map_id]
+            or not isinstance(manifest.get('files'), list)):
+        raise ValueError('The preview inventory does not match the saved draft request.')
+    level_prefix = f'content/Maps/Community/{map_id}/{definition.level}'
+    terrain_prefix = f'content/Community/{map_id}/Terrain'
+    required = {level_prefix + ext for ext in ('.umap', '.uexp')}
+    required.update(terrain_prefix + ext for ext in ('.uasset', '.uexp'))
+    seen = set()
+    for row in manifest['files']:
+        name = row['path']
+        if not name.startswith('content/'):
+            continue
+        parts = PurePosixPath(name).parts
+        shared_group = parts[2] if len(parts) > 3 and parts[:2] == ('content', 'Community') else None
+        ownership = definition if shared_group is None else MapDefinition(map_id, definition.label, shared_group, definition.level)
+        if (not owned_path(name, ownership) or PurePosixPath(name).as_posix() != name
+                or name.casefold() in seen or row != file_row(preview, name)):
+            raise ValueError(f'Unexpected or changed draft cook member: {name}')
+        seen.add(name.casefold())
+        required.discard(name)
+        yield row, shared_group if shared_group != map_id else None
+    if required:
+        raise ValueError('The draft cook is missing: ' + ', '.join(sorted(required)))
+
+
+def add_minimap(payload, overlay, map_id):
+    overlay = overlay.resolve(strict=True)
+    settings = load_json(overlay / 'map-minimap.json', 16384)
+    inventory = load_json(overlay / 'manifest-minimap.json', 16384)
+    if (overlay / 'minimap.png').stat().st_size > MINIMAP_MAX_IMAGE:
+        raise ValueError('The minimap PNG is larger than the host supports.')
+    original = file_row(overlay, 'minimap.png')
+    target = dict(original, path=f'lua/{map_id}/minimap.png')
+    if (not isinstance(settings, dict) or set(settings) != {'minimap'}
+            or not isinstance(settings['minimap'], dict)
+            or settings['minimap'].get('image') != 'minimap.png'
+            or inventory != {'files': [target]}):
+        raise ValueError('The minimap export does not match this draft ID and image.')
+    minimap_payload(map_id, {'settings': settings['minimap'], 'image': target})
+    image = payload / target['path']
+    shutil.copyfile(overlay / 'minimap.png', image)
+    if file_row(payload, target['path']) != target:
+        raise ValueError('The exported minimap changed during copying.')
+    with image.open('rb') as stream:
+        png_dimensions(stream.read(33))
+    return settings, target
+
+
+EQUIPMENT_RUNTIME = b'-- T3_EDITOR_GROUPED_EQUIPMENT_V1'
+SHIELD_RUNTIME = b'-- T3_EDITOR_GROUPED_SHIELDS_V1'
+
+
+def write_objectives(ctf, target, run, host, existing, preview_manifest, map_id, adapter):
+    source, review = run/'equipment.json', run/'equipment-review.json'
+    if not (source.exists() or review.exists()):
+        target.write_text(ctf, encoding='utf-8', newline='\n')
+        return None, [], []
+    if adapter is None or not adapter.is_file() or not source.is_file() or not review.is_file():
+        raise ValueError('An equipment export needs the source, approved placements and native equipment adapter.')
+    if source.stat().st_size > 16*1024*1024 or review.stat().st_size > 65536:
+        raise ValueError('The editor equipment approval files are too large.')
+    inputs = [file_row(run, path.name) for path in (source, review)]
+    for name in ('lua/objective_layouts.lua', 'lua/network.lua'):
+        row = existing.get(name)
+        if row is None or row['bytes'] > 2*1024*1024 or file_row(host, name) != row:
+            raise ValueError('Choose a verified Direct Host baseline with grouped draft equipment support.')
+        if EQUIPMENT_RUNTIME not in (host/name).read_bytes().splitlines():
+            raise ValueError('The selected Direct Host baseline cannot run grouped draft equipment.')
+    approved = load_json(review, 65536)
+    if not isinstance(approved, dict) or approved.get('map') != map_id or not isinstance(approved.get('placements'), list):
+        raise ValueError('Equipment approval must belong to the exported draft.')
+    equipment = load_json(source, 16*1024*1024)
+    if any(isinstance(row, dict) and 'half_size_cm' in row for row in approved['placements']):
+        module = 'lua/powered_shields.lua'
+        module_row = existing.get(module)
+        if (module_row is None or module_row['bytes'] > 256*1024 or file_row(host, module) != module_row
+                or any(SHIELD_RUNTIME not in (host/name).read_bytes().splitlines()
+                       for name in ('lua/objective_layouts.lua', 'lua/network.lua'))):
+            raise ValueError('Choose a verified Direct Host baseline with grouped draft shield support.')
+    cooked = {row['path'] for row in preview_manifest['files']}
+    for placement in approved['placements']:
+        support = placement.get('support') if isinstance(placement, dict) else None
+        asset = support.get('asset') if isinstance(support, dict) else None
+        if not isinstance(asset, str) or not asset.startswith('/Game/Community/'):
+            raise ValueError('An approved equipment support asset is invalid.')
+        member = 'content/'+asset.removeprefix('/Game/').partition('.')[0]+'.uasset'
+        if member not in cooked:
+            raise ValueError(f'Approved equipment support is missing from the draft cook: {member}')
+    lighting = approved.get('powered_interiors', [])
+    if not isinstance(lighting, list):
+        raise ValueError('Powered interior approval must be a list.')
+    for interior in lighting:
+        pairs = interior.get('materials') if isinstance(interior, dict) else None
+        if not isinstance(pairs, list) or not all(isinstance(row, dict) for row in pairs):
+            raise ValueError('Powered interior material approval is invalid.')
+        for asset in [interior.get('asset'), *(row.get('asset') for row in pairs)]:
+            if not isinstance(asset, str) or not asset.startswith('/Game/Community/'):
+                raise ValueError('A powered interior needs cooked Community mesh and material assets.')
+            member = 'content/'+asset.removeprefix('/Game/').partition('.')[0]+'.uasset'
+            if member not in cooked:
+                raise ValueError(f'Powered interior asset is missing from the draft cook: {member}')
+    with TemporaryDirectory(dir=target.parent) as work:
+        base = Path(work)/'ctf.lua'
+        base.write_text(ctf, encoding='utf-8', newline='\n')
+        result = subprocess.run([sys.executable, '-X', 'utf8', str(adapter), str(base), str(source),
+                                 str(review), str(target)], capture_output=True, text=True,
+                                encoding='utf-8', errors='replace', check=False)
+        if result.returncode or not target.is_file():
+            raise ValueError(result.stderr.strip().splitlines()[-1] if result.stderr.strip()
+                             else 'The native equipment adapter did not produce an objectives script.')
+    if inputs != [file_row(run, path.name) for path in (source, review)]:
+        raise ValueError('The approved equipment changed during export.')
+    objects = {entry['source_id']: entry for entry in equipment['equipment']}
+    placements = [(objects[row['source_id']], row) for row in approved['placements']]
+    used = {entry['power_group'] for entry, _ in placements}
+    groups = [group for group in equipment['power_groups'] if group['source_id'] in used]
+    return inputs[1]['sha256'], placements, groups
+
+
+def playtest_checklist(metadata, starts, flags, equipment, groups):
+    def position(point):
+        return ', '.join(f'{value:g}' for value in point)
+
+    lines = [f"{metadata['label']} ({metadata['id']}) — in-game playtest", '',
+             'Use a private Direct Host and a client on each team. Record pass or fail for each check.',
+             'Coordinates are Unreal X, Y, Z in centimeters. Spawn yaw is in degrees.', '',
+             '[ ] Join from both clients, finish warmup and confirm the match clock starts.',
+             '[ ] Respawn at each authored start. Check floor clearance, facing and blocked exits.']
+    for team, x, y, z, yaw in starts:
+        lines.append(f'    Team {team} start at {position((x, y, z))}, yaw {yaw:g}')
+    lines.extend(['', '[ ] Grab, drop and return each flag. Verify both clients see each state.',
+                  '[ ] Capture once per team with its home flag present. Verify the score and flag reset.'])
+    for team, x, y, z in flags:
+        lines.append(f'    {team} flag stand at {position((x, y, z))}')
+    if equipment:
+        lines.extend(['', '[ ] Check each approved equipment placement for floor contact and obstruction.'])
+        for entry, approved in equipment:
+            role = entry['role'].replace('_', ' ')
+            point = position(approved['anchor_position_cm'])
+            size = ''
+            if 'half_size_cm' in approved:
+                width, height = approved['half_size_cm']
+                size = f' · {2*width:g} × {2*height:g} cm opening'
+            lines.append(f"    Team {entry['team']} {role} #{entry['source_id']} at {point}"
+                         f" (circuit #{entry['power_group']}){size}")
+        if any(entry['role']=='force_shield' for entry, _ in equipment):
+            lines.append('[ ] Confirm powered shields pass friendly players and block enemies from both sides.')
+    if groups:
+        lines.extend(['', '[ ] Disable every generator in each powered circuit. Verify that only its equipment shuts down.',
+                      '[ ] Restore one generator per circuit. Verify that its equipment comes back online.'])
+        for group in groups:
+            generators = ', '.join(f'#{ident}' for ident in group['generators']) or 'always on'
+            lines.append(f"    Team {group['team']} circuit #{group['source_id']}: {generators}")
+    if 'minimap' in metadata:
+        lines.extend(['', '[ ] Check minimap alignment against both flag stands and a distinctive terrain edge.'])
+    lines.extend(['', '[ ] Check skiing and jetting along a base-to-base route and at the edge of the playable area.',
+                  '[ ] Finish the match and verify the result on both clients.', ''])
+    return '\n'.join(lines)
+
+
+def installed_release(host, central, merged, definition, *, replace_existing):
+    map_id = definition.id
+    definitions = host_definitions(merged)
+    for name, row in definitions.items():
+        if name == map_id:
+            continue
+        if (name.casefold() == map_id.casefold() or row.label.casefold() == definition.label.casefold()
+                or row.asset_group.casefold() == map_id.casefold() or (row.shared_group or '').casefold() == map_id.casefold()):
+            raise ValueError('The draft ID, asset group or display label conflicts with another map.')
+    existing = definitions.get(map_id)
+    if existing is None:
+        if replace_existing:
+            raise ValueError('The selected baseline does not have this draft ID to update.')
+        return {}, {}
+    if not replace_existing:
+        raise ValueError('The draft ID is already in the catalog. Select Update this map ID to prepare a replacement.')
+    if (existing.native or existing.asset_group != map_id or existing.level != definition.level
+            or merged['map_runtime'].get(map_id)
+            or any(prefix.casefold() == f'content/community/{map_id.casefold()}/' and set(owners) != {map_id}
+                   for prefix, owners in merged.get('shared_content', {}).items())
+            or any(owned_path(row['path'], definition) for row in central['files'])):
+        raise ValueError('This update requires an independently owned portable draft.')
+    folder = host / 'lua' / map_id
+    metadata = load_json(folder/'map.json', 16384)
+    manifest = load_json(folder/'manifest.json', 2 * 1024 * 1024)
+    if metadata.get('adapter') != 'scripted_ctf' or manifest.get('remove'):
+        raise ValueError('This update requires a standalone scripted CTF draft inventory.')
+    members = {row['path']: row for row in manifest['files']}
+    for name, row in members.items():
+        if file_row(host, name) != row:
+            raise ValueError(f'The installed map failed verification: {name}')
+    return metadata, members
+
+
+def export_draft(run, host, destination, *, label, minimap=None, equipment_adapter=None, replace_existing=False):
+    run = run.resolve(strict=True)
+    host = host.resolve(strict=True)
+    preview = run / 'preview'
+    destination = destination.parent.resolve(strict=True) / destination.name
+    if destination.is_relative_to(host) or destination.is_relative_to(run):
+        raise ValueError('Choose a separate destination outside the host and editor run.')
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(destination)
+    if not valid_label(label):
+        raise ValueError('The display label must contain 1–64 printable characters.')
+
+    map_id, starts, flags = draft_layout(load_json(run / 'build-request.json', 32768))
+    definition = MapDefinition(map_id, label, map_id, f'Arena_{map_id}_P')
+    preview_manifest = load_json(preview / 'package-manifest.json', MAX_PACKAGE_MANIFEST_BYTES)
+    base_path = host / 'package-manifest.json'
+    base_row = file_row(host, base_path.name)
+    central = load_json(base_path, MAX_PACKAGE_MANIFEST_BYTES)
+    if not isinstance(central, dict) or not isinstance(central.get('files'), list):
+        raise ValueError('Invalid Direct Host package manifest.')
+    merged = merge_map_manifests(host, central)
+    previous, old_members = installed_release(host, central, merged, definition, replace_existing=replace_existing)
+    existing = {row['path'].casefold(): row for row in merged['files']}
+    prior_keys = {name.casefold() for name in old_members}
+    if any(name.startswith(f'content/community/{map_id.casefold()}/') and name not in prior_keys for name in existing):
+        raise ValueError('The draft asset group contains files outside this map inventory.')
+    if not previous and ((host/'lua'/map_id).exists() or (host/'lua'/map_id).is_symlink()):
+        raise ValueError('The target already contains this map’s runtime folder.')
+
+    with TemporaryDirectory(dir=destination.parent) as work:
+        result = Path(work) / 'export'
+        payload = result / 'payload'
+        sidecar = payload / 'lua' / map_id
+        sidecar.mkdir(parents=True)
+        members, shared_additions = [], []
+        dependencies = set(previous.get('shared_content', []))
+        for row, group in cooked_members(preview, preview_manifest, definition):
+            name = row['path']
+            old = existing.get(name.casefold())
+            if old is not None and name not in old_members:
+                if group is None or old != row or old != file_row(host, name):
+                    raise ValueError(f'The target contains different bytes or ownership for {name}.')
+            else:
+                if old is None and ((host / name).exists() or (host / name).is_symlink()):
+                    raise ValueError(f'The target contains an uninventoried file: {name}')
+                copy_member(preview, payload, row)
+                (members if group is None else shared_additions).append(row)
+            if group is not None:
+                dependencies.add(group)
+
+        metadata = {'format': 1, 'id': map_id, 'label': label, 'asset_group': map_id,
+                    'level': definition.level, 'native': False, 'adapter': 'scripted_ctf'}
+        if dependencies:
+            metadata['shared_content'] = sorted(dependencies)
+        if minimap is not None:
+            settings, image = add_minimap(payload, minimap, map_id)
+            metadata.update(settings)
+            members.append(image)
+        elif 'minimap' in previous:
+            metadata['minimap'] = previous['minimap']
+        previous_image = previous.get('minimap', {}).get('image')
+        for name, row in old_members.items():
+            if (name.startswith(f'lua/{map_id}/') and name != f'lua/{map_id}/objectives.lua'
+                    and (minimap is None or name != f'lua/{map_id}/{previous_image}')):
+                if (payload/name).exists():
+                    raise ValueError(f'The exported minimap conflicts with an existing map-local file: {name}')
+                copy_member(host, payload, row)
+                members.append(row)
+        equipment_review, equipment, groups = write_objectives(
+            objectives_lua(starts, flags), sidecar/'objectives.lua', run,
+            host, existing, preview_manifest, map_id, equipment_adapter)
+        members.append(file_row(payload, f'lua/{map_id}/objectives.lua'))
+        write_json(sidecar / 'map.json', metadata)
+        write_json(sidecar / 'manifest.json', {'format': 1, 'files': members})
+
+        before_catalog = map_catalog(merged)
+        remaining = [row for row in merged['files'] if row['path'] not in old_members]
+        proposed = dict(merged, files=[*remaining, *shared_additions])
+        after_catalog = map_catalog(merge_map_manifests(payload, proposed))
+        if {key: value for key, value in after_catalog.items() if key != map_id} != {
+                key: value for key, value in before_catalog.items() if key != map_id}:
+            raise ValueError('This release would change another map’s catalog entry.')
+        if shared_additions:
+            write_json(payload / base_path.name, dict(central, files=[*central['files'], *shared_additions]))
+        descriptors = descriptor_paths(map_id)
+        prior_names = set(old_members) | (descriptors if previous else set())
+        next_names = descriptors | {row['path'] for row in (*members, *shared_additions)}
+        if shared_additions:
+            prior_names.add(base_path.name)
+            next_names.add(base_path.name)
+        plan_hash = create_plan(result, host, map_id, prior_names, next_names, before_catalog, after_catalog)
+        if file_row(host, base_path.name) != base_row or merge_map_manifests(host, central) != merged:
+            raise ValueError('The target host inventory changed during export. Export again.')
+        receipt = {
+            'format': 1, 'map': map_id, 'base_inventory_sha256': base_row['sha256'],
+            'release_plan_sha256': plan_hash,
+            'new_shared_files': [row['path'] for row in shared_additions],
+        }
+        if equipment_review is not None:
+            receipt['equipment_review_sha256'] = equipment_review
+        write_json(result / 'export-receipt.json', receipt)
+        (result / 'playtest-checklist.txt').write_text(
+            playtest_checklist(metadata, starts, flags, equipment, groups), encoding='utf-8', newline='\n')
+        publish_directory(result, destination)
+    return destination
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('run', type=Path, help='Editor run-N folder containing build-request.json and preview/')
+    parser.add_argument('host', type=Path, help='Read-only Direct Host match bundle used as the staging baseline')
+    parser.add_argument('destination', type=Path, help='New export folder outside the host bundle and editor run')
+    parser.add_argument('--label', required=True, help='Catalog label, for example My Map (T2 2026)')
+    parser.add_argument('--minimap', type=Path, help='Optional minimap export folder made with the same draft ID')
+    parser.add_argument('--equipment-adapter', type=Path, help='Adapter for approved equipment in the editor run')
+    parser.add_argument('--replace-existing', action='store_true', help='Prepare a new revision of this existing portable map ID')
+    args = parser.parse_args()
+    try:
+        print(export_draft(args.run, args.host, args.destination, label=args.label, minimap=args.minimap,
+                           equipment_adapter=args.equipment_adapter, replace_existing=args.replace_existing))
+    except (OSError, ValueError) as error:
+        parser.exit(1, f'{error}\n')

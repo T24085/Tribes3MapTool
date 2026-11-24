@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 27",
+  "description": "Private Vengeance draft with placed static meshes and optional BSP and terrain artwork.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "profile", "source_game", "name", "reader", "profile_sha256", "sources", "files", "coverage", "minimap", "interiors", "interior_review"],
+  "properties": {
+    "format": {"const": 27},
+    "profile": {"$ref": "intake-v26.schema.json#/properties/profile"},
+    "source_game": {"$ref": "intake-v26.schema.json#/properties/source_game"},
+    "name": {"$ref": "intake-v26.schema.json#/properties/name"},
+    "reader": {"$ref": "intake-v26.schema.json#/properties/reader"},
+    "profile_sha256": {"$ref": "intake-v26.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v26.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v26.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v26.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v26.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v23.schema.json#/properties/interiors", "minProperties": 1},
+    "interior_review": {"$ref": "intake-v26.schema.json#/properties/interior_review"},
+    "terrain_paint": {"$ref": "intake-v26.schema.json#/properties/terrain_paint"},
+    "terrain_art": {"$ref": "intake-v26.schema.json#/properties/terrain_art"},
+    "terrain_uv": {"$ref": "intake-v26.schema.json#/properties/terrain_uv"},
+    "files": {
+      "type": "object",
+      "required": ["objects.json", "terrain.json", "height.png", "minimap.png", "source-scene.json"],
+      "propertyNames": {"$ref": "intake-v26.schema.json#/properties/files/propertyNames"},
+      "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    }
+  },
+  "dependentRequired": {
+    "terrain_art": ["terrain_paint", "terrain_uv"],
+    "terrain_uv": ["terrain_art"]
+  }
+}

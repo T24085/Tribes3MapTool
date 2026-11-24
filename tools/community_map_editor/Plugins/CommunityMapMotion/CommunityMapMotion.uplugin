@@ -1,0 +1,11 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "1.0",
+  "FriendlyName": "Community Map Motion",
+  "Description": "Editor support for baking source map animation into stock Geometry Cache assets.",
+  "CanContainContent": false,
+  "EnabledByDefault": false,
+  "Plugins": [{"Name": "GeometryCache", "Enabled": true}],
+  "Modules": [{"Name": "CommunityMapMotion", "Type": "Editor", "LoadingPhase": "Default"}]
+}

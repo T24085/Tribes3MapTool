@@ -1,0 +1,10 @@
+{
+  "id": "tribes2-ctf", "revision": 2, "centimeters_per_source_meter": 105,
+  "reflect_y": true,
+  "markers": {"spawnsphere": {"*": "spawn"}, "item": {"flag": "flag"}},
+  "groups": ["simgroup", "missiongroup"], "terrain_class": "terrainblock",
+  "environment": {
+    "sun": {"class": "sun", "direction": "direction", "color": "color", "ambient": "ambient"},
+    "fog": {"class": "sky", "start_cm": "fogdistance", "visible_cm": "visibledistance", "color": "fogcolor"}
+  }
+}

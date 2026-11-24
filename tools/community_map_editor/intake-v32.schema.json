@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 32",
+  "description": "Vengeance brush playback and elevator physics in the private source scene.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "profile", "source_game", "name", "reader", "profile_sha256", "sources", "files", "coverage", "minimap", "interiors", "interior_review"],
+  "properties": {
+    "format": {"const": 32},
+    "profile": {"$ref": "intake-v31.schema.json#/properties/profile"},
+    "source_game": {"$ref": "intake-v31.schema.json#/properties/source_game"},
+    "name": {"$ref": "intake-v31.schema.json#/properties/name"},
+    "reader": {"$ref": "intake-v31.schema.json#/properties/reader"},
+    "profile_sha256": {"$ref": "intake-v31.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v31.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v31.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v31.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v31.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v31.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v31.schema.json#/properties/interior_review"},
+    "terrain_paint": {"$ref": "intake-v31.schema.json#/properties/terrain_paint"},
+    "terrain_art": {"$ref": "intake-v31.schema.json#/properties/terrain_art"},
+    "terrain_uv": {"$ref": "intake-v31.schema.json#/properties/terrain_uv"},
+    "files": {"$ref": "intake-v31.schema.json#/properties/files"}
+  },
+  "dependentRequired": {
+    "terrain_art": ["terrain_paint", "terrain_uv"],
+    "terrain_uv": ["terrain_art"]
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Version 35 Vengeance event senders in source-scene.json",
+  "description": "Additions to the private source scene for elevator event sources. The importer also validates the actor exports and receiver tags against the scene.",
+  "type": "object",
+  "required": ["format", "source_game", "actors", "native_brushes"],
+  "properties": {
+    "format": {"const": "legacy-unreal-scene"},
+    "source_game": {"const": "Tribes: Vengeance"},
+    "actors": {"type": "array"},
+    "native_brushes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type", "behavior"],
+        "properties": {"type": {"enum": ["mover", "elevator"]}},
+        "if": {"properties": {"type": {"const": "elevator"}}},
+        "then": {
+          "properties": {
+            "behavior": {
+              "type": "object",
+              "required": ["incoming_trigger", "trigger_senders"],
+              "properties": {
+                "incoming_trigger": {"type": "boolean"},
+                "trigger_senders": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/sender"}}
+              },
+              "if": {"properties": {"incoming_trigger": {"const": true}}},
+              "then": {"properties": {"trigger_senders": {"minItems": 1}}},
+              "else": {"properties": {"trigger_senders": {"maxItems": 0}}}
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "text": {"type": "string", "maxLength": 512},
+    "size_cm": {"type": "number", "exclusiveMinimum": 0, "maximum": 20000},
+    "seconds": {"type": "number", "minimum": 0, "maximum": 3600},
+    "sender": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_export", "source_name", "source_class", "event", "property", "proximity", "review"],
+      "properties": {
+        "source_export": {"type": "integer", "minimum": 1},
+        "source_name": {"$ref": "#/$defs/text"},
+        "source_class": {"$ref": "#/$defs/text"},
+        "event": {"$ref": "#/$defs/text"},
+        "property": {"type": "string", "pattern": "^[a-z0-9_]{0,50}event$"},
+        "review": {"$ref": "#/$defs/text"},
+        "proximity": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/proximity"}]}
+      }
+    },
+    "proximity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["position_cm", "radius_cm", "half_height_cm", "activation", "active", "once", "state", "repeat_seconds",
+                   "delay_seconds", "tag", "collision", "blocking", "touch", "receives_events"],
+      "properties": {
+        "position_cm": {"type": "array", "minItems": 3, "maxItems": 3,
+                        "items": {"type": "number", "minimum": -2000000, "maximum": 2000000}},
+        "radius_cm": {"$ref": "#/$defs/size_cm"},
+        "half_height_cm": {"$ref": "#/$defs/size_cm"},
+        "activation": {"type": "integer", "minimum": 0, "maximum": 255},
+        "active": {"type": "boolean"},
+        "once": {"type": "boolean"},
+        "collision": {"type": "boolean"},
+        "blocking": {"type": "boolean"},
+        "touch": {"type": "boolean"},
+        "receives_events": {"type": "boolean"},
+        "state": {"$ref": "#/$defs/text"},
+        "tag": {"$ref": "#/$defs/text"},
+        "repeat_seconds": {"$ref": "#/$defs/seconds"},
+        "delay_seconds": {"$ref": "#/$defs/seconds"}
+      }
+    }
+  }
+}

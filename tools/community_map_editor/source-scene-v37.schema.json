@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Version 37 Vengeance doors that stay open in source-scene.json",
+  "allOf": [{"$ref": "source-scene-v35.schema.json"}],
+  "properties": {
+    "native_brushes": {
+      "not": {"additionalProperties": {"not": {"$ref": "#/$defs/stays_open"}}},
+      "additionalProperties": {
+        "allOf": [
+          {"$ref": "source-scene-v36.schema.json#/properties/native_brushes/additionalProperties"},
+          {
+            "if": {"$ref": "#/$defs/stays_open"},
+            "then": {
+              "required": ["motion"],
+              "properties": {
+                "type": {"const": "mover"},
+                "behavior": {"properties": {"opens_once": {"const": true}}},
+                "motion": {
+                  "type": "object",
+                  "required": ["initial_state"],
+                  "properties": {
+                    "initial_state": {
+                      "pattern": "^(?:[Bb][Uu][Mm][Pp]|[Tt][Rr][Ii][Gg][Gg][Ee][Rr])[Oo][Pp][Ee][Nn][Tt][Ii][Mm][Ee][Dd]$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "stays_open": {
+      "required": ["behavior"],
+      "properties": {"behavior": {"type": "object", "required": ["opens_once"]}}
+    }
+  }
+}

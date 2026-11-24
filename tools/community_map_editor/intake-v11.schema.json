@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 11",
+  "description": "Tribes 1 mission with a 257 by 257 metric heightfield from authored terrain.",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage"],
+  "properties": {
+    "format": {"const": 11},
+    "profile": {"const": "tribes1-ctf"},
+    "source_game": {"const": "Tribes 1"},
+    "reader": {"$ref": "intake-v2.schema.json#/properties/reader"},
+    "name": {"$ref": "intake-v2.schema.json#/properties/name"},
+    "profile_sha256": {"$ref": "intake-v2.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v2.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v2.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v2.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v3.schema.json#/properties/environment"},
+    "files": {
+      "type": "object",
+      "required": ["objects.json", "terrain.json", "height.png"],
+      "propertyNames": {"enum": ["objects.json", "terrain.json", "height.png", "minimap.png"]},
+      "additionalProperties": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+    }
+  },
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v2.schema.json#/then"},
+  "else": {"$ref": "intake-v2.schema.json#/else"}
+}

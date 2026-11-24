@@ -1,0 +1,74 @@
+"""Source games supported by the versioned neutral CTF intake."""
+
+import re
+
+T1 = "tribes1-ctf"
+T2 = "tribes2-ctf"
+VENGEANCE = "vengeance-ctf"
+ASCEND = "ascend-ctf"
+UNREAL_PROFILES = {"vengeance": VENGEANCE, "ascend": ASCEND}
+NAMES = {T1: "Tribes 1", T2: "Tribes 2", VENGEANCE: "Tribes: Vengeance", ASCEND: "Tribes: Ascend"}
+PREFIX = {T1: "DraftT1", T2: "DraftT2", VENGEANCE: "DraftTV", ASCEND: "DraftTA"}
+BRUSH_PREVIEW_FOLDER = "/Game/Community/VengeanceBrushPreviews"
+BRUSH_PREVIEW_REFERENCE = "unrealmesh:brush."
+PROXIMITY_CHAIN_MODES = {"othertriggerturnson": 1, "othertriggerturnsoff": 2, "othertriggertoggles": 3}
+IMPORT_DRAFT = r"DraftT[12VA][0-9]{3}"
+ANY_DRAFT = r"Draft(?:CTF|Damnation|T[12VA])[0-9]{3}"
+ASCEND_MESH_INTAKE_VERSION = 23
+VENGEANCE_PAINT_INTAKE_VERSION = 24
+VENGEANCE_ART_INTAKE_VERSION = 25
+VENGEANCE_BSP_MATERIALS_VERSION = 26
+VENGEANCE_STATIC_MESH_VERSION = 27
+VENGEANCE_MESH_MATERIALS_VERSION = 28
+VENGEANCE_SHADER_INPUTS_VERSION = 29
+VENGEANCE_SURFACE_DETAIL_VERSION = 30
+VENGEANCE_NATIVE_BRUSH_VERSION = 31
+VENGEANCE_MOVER_PLAYBACK_VERSION = 32
+VENGEANCE_DOOR_VERSION = 33
+VENGEANCE_ELEVATOR_VERSION = 34
+VENGEANCE_ELEVATOR_LINK_VERSION = 35
+VENGEANCE_TRIGGER_DOOR_VERSION = 36
+VENGEANCE_PERMANENT_DOOR_VERSION = 37
+VENGEANCE_TRIGGER_CHAIN_VERSION = 38
+VENGEANCE_BRUSH_VERSIONS = (VENGEANCE_NATIVE_BRUSH_VERSION, VENGEANCE_MOVER_PLAYBACK_VERSION, VENGEANCE_DOOR_VERSION,
+                           VENGEANCE_ELEVATOR_VERSION, VENGEANCE_ELEVATOR_LINK_VERSION, VENGEANCE_TRIGGER_DOOR_VERSION,
+                           VENGEANCE_PERMANENT_DOOR_VERSION, VENGEANCE_TRIGGER_CHAIN_VERSION)
+VENGEANCE_TERRAIN_VERSIONS = (VENGEANCE_PAINT_INTAKE_VERSION, VENGEANCE_ART_INTAKE_VERSION)
+VENGEANCE_MESH_VERSIONS = (VENGEANCE_STATIC_MESH_VERSION, VENGEANCE_MESH_MATERIALS_VERSION)
+VENGEANCE_EXTENDED_SHADER_VERSIONS = (VENGEANCE_SHADER_INPUTS_VERSION, VENGEANCE_SURFACE_DETAIL_VERSION)
+VENGEANCE_MODEL_VERSIONS = (VENGEANCE_BSP_MATERIALS_VERSION, *VENGEANCE_MESH_VERSIONS,
+                           *VENGEANCE_EXTENDED_SHADER_VERSIONS, *VENGEANCE_BRUSH_VERSIONS)
+UNREAL_INTAKE_VERSIONS = (22, ASCEND_MESH_INTAKE_VERSION, *VENGEANCE_TERRAIN_VERSIONS, *VENGEANCE_MODEL_VERSIONS)
+UNREAL_INTAKE_VERSION = UNREAL_INTAKE_VERSIONS[-1]
+
+
+def imported_draft(value):
+    return isinstance(value, str) and re.fullmatch(IMPORT_DRAFT, value) is not None
+
+
+def draft_edition(draft):
+    for profile, label in ((VENGEANCE, "Vengeance"), (ASCEND, "Ascend")):
+        if draft.startswith(PREFIX[profile]):
+            return label + " 2026"
+    return "2026" if draft.startswith(PREFIX[T1]) else "T2 2026"
+
+
+def profiles_for_version(version):
+    if version in (*VENGEANCE_TERRAIN_VERSIONS, *VENGEANCE_MODEL_VERSIONS):
+        return (VENGEANCE,)
+    if version in UNREAL_INTAKE_VERSIONS:
+        return UNREAL_PROFILES.values()
+    return (T1,) if 11 <= version <= 21 else (T2,)
+
+
+def config_name(profile, suffix):
+    if profile not in NAMES:
+        raise ValueError("Unsupported map conversion profile.")
+    return f"{profile.split('-')[0]}_{suffix}.json"
+
+
+def selected_profile(source_profile=None, snapshot=None):
+    value = source_profile or (snapshot or {}).get("profile", {}).get("id", T2)
+    if value not in NAMES:
+        raise ValueError("Unsupported map conversion profile.")
+    return value

@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 10",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage", "interiors", "interior_review"],
+  "properties": {
+    "format": {"const": 10},
+    "profile": {"$ref": "intake-v9.schema.json#/properties/profile"},
+    "reader": {"$ref": "intake-v9.schema.json#/properties/reader"},
+    "name": {"$ref": "intake-v9.schema.json#/properties/name"},
+    "source_game": {"$ref": "intake-v9.schema.json#/properties/source_game"},
+    "profile_sha256": {"$ref": "intake-v9.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v9.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v9.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v9.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v9.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v9.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v9.schema.json#/properties/interior_review"},
+    "shapes": {"$ref": "intake-v9.schema.json#/properties/shapes"},
+    "shape_review": {"$ref": "intake-v9.schema.json#/properties/shape_review"},
+    "files": {
+      "type": "object",
+      "required": ["objects.json", "terrain.json", "height.png", "interior-lighting.json"],
+      "dependentRequired": {"sky-artwork.json": ["weather.json"]},
+      "maxProperties": 1044,
+      "propertyNames": {
+        "pattern": "^(objects[.]json|terrain[.]json|height[.]png|material-(index|[0-7])[.]png|minimap[.]png|(interior|shape)-[0-9]{4}[.]json|model-textures[.]json|texture_[a-f0-9]{32}[.]png|equipment[.]json|weather[.]json|sky-artwork[.]json|sky_[a-f0-9]{32}[.]png|interior-lighting[.]json|lightmap_[a-f0-9]{32}[.]png)$"
+      },
+      "additionalProperties": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+    }
+  },
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v2.schema.json#/then"},
+  "else": {"$ref": "intake-v2.schema.json#/else"},
+  "dependentRequired": {
+    "shapes": ["shape_review"],
+    "shape_review": ["shapes"]
+  },
+  "$defs": {
+    "interior_lighting": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"pattern": "^interior-[0-9]{4}[.]json$"},
+      "additionalProperties": {"$ref": "#/$defs/model"}
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_sha256", "has_alarm", "animated_lights", "atlases", "surfaces", "review"],
+      "properties": {
+        "source_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"},
+        "has_alarm": {"type": "boolean"},
+        "animated_lights": {"type": "integer", "minimum": 0, "maximum": 250000},
+        "animation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tracks", "states", "surface_data", "names_hex", "state_masks_hex"],
+          "properties": {
+            "tracks": {"$ref": "#/$defs/animation_table", "items": {"minItems": 5, "maxItems": 5}},
+            "states": {"$ref": "#/$defs/animation_table", "items": {"minItems": 6, "maxItems": 6}},
+            "surface_data": {"$ref": "#/$defs/animation_table", "items": {"minItems": 3, "maxItems": 3}},
+            "names_hex": {"$ref": "#/$defs/hex_buffer"},
+            "state_masks_hex": {"$ref": "#/$defs/hex_buffer"}
+          }
+        },
+        "atlases": {"type": "array", "maxItems": 512, "items": {"$ref": "#/$defs/atlas"}},
+        "surfaces": {"type": "array", "maxItems": 250000, "items": {"$ref": "#/$defs/surface"}},
+        "review": {
+          "type": "array", "maxItems": 500000,
+          "items": {"type": "string", "minLength": 1, "maxLength": 240}
+        }
+      }
+    },
+    "atlas": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "color": {"$ref": "#/$defs/png"},
+        "direction": {"$ref": "#/$defs/png"}
+      }
+    },
+    "png": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "source_sha256"],
+      "properties": {
+        "file": {"type": "string", "pattern": "^lightmap_[a-f0-9]{32}[.]png$"},
+        "source_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+      }
+    },
+    "surface": {
+      "type": "array", "minItems": 6, "items": false,
+      "description": "Source surface, first neutral triangle, number of triangles, normal atlas, alarm atlas, planar UV projection.",
+      "prefixItems": [
+        {"type": "integer", "minimum": 0},
+        {"type": "integer", "minimum": 0},
+        {"type": "integer", "minimum": 1},
+        {"$ref": "#/$defs/atlas_id"},
+        {"$ref": "#/$defs/atlas_id"},
+        {
+          "type": "array", "minItems": 6, "items": false,
+          "description": "U axis, V axis, U scale, V scale, U offset, V offset. Use untransformed source vertices.",
+          "prefixItems": [
+            {"enum": [0, 1, 2]}, {"enum": [0, 1, 2]},
+            {"$ref": "#/$defs/scale"}, {"$ref": "#/$defs/scale"},
+            {"$ref": "#/$defs/offset"}, {"$ref": "#/$defs/offset"}
+          ]
+        }
+      ]
+    },
+    "atlas_id": {"type": ["integer", "null"], "minimum": 0, "maximum": 511},
+    "animation_table": {
+      "type": "array", "maxItems": 250000,
+      "items": {"type": "array", "items": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647}}
+    },
+    "hex_buffer": {"type": "string", "maxLength": 8388608, "pattern": "^([0-9a-f]{2})*$"},
+    "scale": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+    "offset": {"type": "number", "minimum": -1000000, "maximum": 1000000}
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 12",
+  "description": "Tribes 1 mission with a tiled metric heightfield. terrain.json uses intake-v12.terrain.schema.json. height.png is a 16-bit overview of the full tiled footprint.",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage"],
+  "properties": {
+    "format": {"const": 12},
+    "profile": {"const": "tribes1-ctf"},
+    "source_game": {"const": "Tribes 1"},
+    "reader": {"$ref": "intake-v2.schema.json#/properties/reader"},
+    "name": {"$ref": "intake-v2.schema.json#/properties/name"},
+    "profile_sha256": {"$ref": "intake-v2.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v2.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v2.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v2.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v3.schema.json#/properties/environment"},
+    "files": {"$ref": "intake-v11.schema.json#/properties/files"}
+  },
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v2.schema.json#/then"},
+  "else": {"$ref": "intake-v2.schema.json#/else"}
+}

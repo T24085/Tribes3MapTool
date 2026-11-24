@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tribes 1 DTS pose, collision and motion geometry",
+  "oneOf": [
+    {"$ref": "intake-v19.shape.schema.json"},
+    {
+      "type": "object",
+      "required": ["format", "source", "materials", "vertices_m", "triangles", "animation"],
+      "additionalProperties": false,
+      "properties": {
+        "format": {"const": 6},
+        "source": {"$ref": "intake-v18.shape.schema.json#/properties/source"},
+        "materials": {"$ref": "intake-v18.shape.schema.json#/properties/materials"},
+        "vertices_m": {"$ref": "intake-v18.shape.schema.json#/properties/vertices_m"},
+        "triangles": {"$ref": "intake-v18.shape.schema.json#/properties/triangles"},
+        "collision": {"$ref": "intake-v19.shape.schema.json#/oneOf/1/properties/collision"},
+        "animation": {"$ref": "intake-v20.animation.schema.json"}
+      }
+    }
+  ]
+}

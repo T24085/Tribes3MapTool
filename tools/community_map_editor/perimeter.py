@@ -1,0 +1,444 @@
+"""Author and validate the optional collision perimeter of an imported draft."""
+
+import math
+from typing import NamedTuple
+
+from perimeter_collision import TAG, blocks_pawns, configure_wall, filter_tags, has_wall_collision, probe_profiles, read_channels, validate_channels
+from terrain_grid import height_range
+
+
+THICKNESS = 1000
+CLEARANCE = 100
+SIDES = (("West", "East"), ("South", "North"))
+WALL_SIDES = (*SIDES[0], *SIDES[1])
+OPEN_CEILING = TAG + "OpenCeiling"
+SEALED_FLOOR = TAG + "SealedFloor"
+DEFAULT_CEILING_M = 2000
+DEFAULT_DEPTH_M = 500
+FLAG_CORNERS = ("T3MissionFlagMin", "T3MissionFlagMax")
+FLAG_POLYGON = "T3MissionFlagPolygon"
+FLAG_VERTEX = "T3MissionFlagVertex"
+FLAG_COUNT = "T3MissionFlagVertexCount"
+MAX_VERTICES = 32
+SOLID_POLYGON = TAG + "Polygon"
+POLYGON_REQUIRED = TAG + "PolygonRequired"
+
+
+class PolygonWalls(NamedTuple):
+    vertices: tuple
+    z_min: float
+    z_max: float
+    ceiling: bool
+    floor: bool
+
+
+def mission_extents(bounds, terrain, *, depth_m=DEFAULT_DEPTH_M, height_m=DEFAULT_CEILING_M):
+    lower, upper = bounds
+    z = terrain["origin_cm"][2]
+    low, high = height_range(terrain)
+    scale = terrain["cm_per_m"]
+    return ([*lower, z + low * scale - depth_m * 100],
+            [*upper, z + high * scale + height_m * 100])
+
+
+def wall_boxes(lower, upper, *, ceiling=True, floor=False):
+    middle = [(a + b) / 2 for a, b in zip(lower, upper)]
+    span = [b - a for a, b in zip(lower, upper)]
+    if not all(math.isfinite(distance) and distance > 2 * CLEARANCE for distance in span):
+        raise ValueError("The playable perimeter is too narrow for CTF markers.")
+    ceiling_overlap = THICKNESS if ceiling else 0
+    boxes = {}
+    for axis, labels in enumerate(SIDES):
+        for sign, label in zip((-1, 1), labels):
+            center = [middle[0], middle[1], middle[2] + ceiling_overlap / 2]
+            center[axis] = (lower if sign < 0 else upper)[axis] + sign * THICKNESS / 2
+            size = [span[0] + 2 * THICKNESS, span[1] + 2 * THICKNESS, span[2] + ceiling_overlap]
+            size[axis] = THICKNESS
+            boxes[label] = (center, size)
+    cap_size = [span[0] + 2 * THICKNESS, span[1] + 2 * THICKNESS, THICKNESS]
+    if ceiling:
+        boxes["Ceiling"] = ([middle[0], middle[1], upper[2] + THICKNESS / 2], cap_size)
+    if floor:
+        boxes["Floor"] = ([middle[0], middle[1], lower[2] - THICKNESS / 2], cap_size.copy())
+    return boxes
+
+
+def check_marker_clearance(lower, upper, markers):
+    for label, point in markers:
+        if not all(a + CLEARANCE <= n <= b - CLEARANCE for a, b, n in zip(lower, upper, point)):
+            raise ValueError(f"{label} must be at least one metre inside the mission perimeter.")
+
+
+def plan_walls(bounds, terrain, markers, limits, polygon=None):
+    if limits is None:
+        limits = {"ceiling_m": DEFAULT_CEILING_M, "floor_m": None}
+    if not isinstance(limits, dict) or limits.keys() != {"ceiling_m", "floor_m"}:
+        raise ValueError("Invalid mission boundary height settings.")
+    ceiling, floor = limits["ceiling_m"], limits["floor_m"]
+    for label, distance in (("Ceiling", ceiling), ("Floor", floor)):
+        if distance is not None and (type(distance) not in (int, float) or not 0 <= distance <= 10_000):
+            raise ValueError(f"{label} distance must be between 0 and 10,000 metres.")
+    lower, upper = mission_extents(
+        bounds, terrain, depth_m=DEFAULT_DEPTH_M if floor is None else floor,
+        height_m=DEFAULT_CEILING_M if ceiling is None else ceiling,
+    )
+    if polygon is not None:
+        vertices = parse_polygon(polygon, "Solid perimeter")
+        check_polygon_outline(vertices, "Solid perimeter", bounds)
+        geometry = PolygonWalls(vertices, lower[2], upper[2], ceiling is not None, floor is not None)
+        check_polygon_walls(geometry, markers)
+        return geometry
+    check_marker_clearance(lower, upper, markers)
+    return wall_boxes(lower, upper, ceiling=ceiling is not None, floor=floor is not None)
+
+
+def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limits=None, flag_polygon_m=None,
+                    wall_polygon_m=None, wall_block_channels=None):
+    channels = validate_channels(wall_block_channels)
+    if (wall_limits is not None or wall_polygon_m is not None or channels is not None) and not perimeter:
+        raise ValueError("Enable solid side walls before setting their shape, limits or collision channels.")
+    if flag_inset_m is not None and flag_polygon_m is not None:
+        raise ValueError("Choose either the flag-only inset or a flag-only polygon.")
+    if not perimeter and flag_inset_m is None and flag_polygon_m is None:
+        return None, None
+    if "minimap" not in header or not any(row["status"] == "boundary" for row in rows):
+        raise ValueError("A playable MissionArea is required for a boundary.")
+    bounds = header["minimap"]["image_bounds"]
+    markers = [(row["name"] or row["kind"], row["position_cm"])
+               for row in rows if row["status"] == "marker"] if blocks_pawns(channels) else []
+    flags = [(row["name"] or "Flag", row["position_cm"])
+             for row in rows if row["status"] == "marker" and row["kind"] == "flag"]
+    walls = plan_walls(bounds, terrain, markers, wall_limits, wall_polygon_m) if perimeter else None
+    limit = flag_bounds(bounds, flag_inset_m, flags) if flag_inset_m is not None else None
+    if flag_polygon_m is not None:
+        limit = parse_polygon(flag_polygon_m, "Flag boundary")
+        check_flag_polygon(limit, flags, bounds)
+    if isinstance(walls, PolygonWalls) and limit is not None and blocks_pawns(channels):
+        check_inside_perimeter(walls.vertices, rectangle_outline(limit) if len(limit) == 2 else limit)
+    return walls, limit
+
+
+def flag_bounds(bounds, inset_m, flags):
+    if (type(inset_m) not in (int, float) or not 0 < inset_m <= 100_000):
+        raise ValueError("Enter a positive flag limit inset in metres.")
+    inset = inset_m * 100
+    lower, upper = bounds
+    limit = ([x + inset for x in lower], [x - inset for x in upper])
+    check_flag_bounds(limit, flags)
+    return limit
+
+
+def check_flag_bounds(bounds, flags):
+    lower, upper = bounds
+    if any(not -10_000_000 <= at <= 10_000_000 for at in (*lower, *upper)):
+        raise ValueError("The flag-only limit is outside the supported world coordinates.")
+    if any(b - a <= 2 * CLEARANCE for a, b in zip(lower, upper)):
+        raise ValueError("The flag-only limit leaves too little room. Reduce its inset.")
+    for label, point in flags:
+        if not all(a + CLEARANCE <= n <= b - CLEARANCE for a, b, n in zip(lower, upper, point)):
+            raise ValueError(f"{label} must be at least one metre inside the flag-only limit.")
+
+
+def turn(a, b, p):
+    return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+
+
+def inside_segment(a, b, p):
+    return all(min(left, right) <= value <= max(left, right) for left, right, value in zip(a, b, p))
+
+
+def edges_of(polygon):
+    return list(zip(polygon, (*polygon[1:], polygon[0])))
+
+
+def rectangle_outline(bounds):
+    (left, top), (right, bottom) = bounds
+    return ((left, top), (right, top), (right, bottom), (left, bottom))
+
+
+def intersects(a, b, c, d):
+    sides = (turn(a, b, c), turn(a, b, d), turn(c, d, a), turn(c, d, b))
+    if sides[0] * sides[1] < 0 and sides[2] * sides[3] < 0:
+        return True
+    return any(side == 0 and inside_segment(i, j, p)
+               for side, (i, j, p) in zip(sides, ((a, b, c), (a, b, d), (c, d, a), (c, d, b))))
+
+
+def polygon_contains(edges, p):
+    x, y = p
+    inside = False
+    for a, b in edges:
+        side = turn(a, b, p)
+        if side == 0 and inside_segment(a, b, p):
+            return True
+        if (a[1] > y) != (b[1] > y) and (side > 0) == (b[1] > a[1]):
+            inside = not inside
+    return inside
+
+
+def segment_distance(a, b, p):
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    px, py = p[0] - a[0], p[1] - a[1]
+    ratio = min(1, max(0, (dx * px + dy * py) / (dx * dx + dy * dy)))
+    return math.hypot(px - ratio * dx, py - ratio * dy)
+
+
+def parse_polygon(vertices, label):
+    if not isinstance(vertices, (tuple, list)) or not 3 <= len(vertices) <= MAX_VERTICES:
+        raise ValueError(f"{label} needs between 3 and {MAX_VERTICES} corners.")
+    if any(not isinstance(point, (list, tuple)) or len(point) != 2
+           or any(type(coordinate) not in (int, float) or not -100_000 <= coordinate <= 100_000
+                  for coordinate in point) for point in vertices):
+        raise ValueError(f"{label} vertices must be valid world coordinates in metres.")
+    return tuple((x * 100, y * 100) for x, y in vertices)
+
+
+def check_flag_polygon(polygon, flags, bounds=None):
+    check_polygon_outline(polygon, "Flag polygon", bounds)
+    check_polygon_clearance(polygon, flags, "flag-only limit")
+
+
+def check_polygon_outline(polygon, label, bounds=None):
+    if not 3 <= len(polygon) <= MAX_VERTICES or any(
+        not -10_000_000 <= coordinate <= 10_000_000 for vertex in polygon for coordinate in vertex
+    ):
+        raise ValueError(f"{label} has invalid world coordinates or a missing corner.")
+    if bounds is not None:
+        lower, upper = bounds
+        if any(not all(a < value < b for a, value, b in zip(lower, vertex, upper)) for vertex in polygon):
+            raise ValueError(f"{label} corners must be inside the playable boundary.")
+    edges = edges_of(polygon)
+    if len(set(polygon)) != len(polygon) or any(turn(a, b, polygon[(index + 2) % len(polygon)]) == 0
+                                               for index, (a, b) in enumerate(edges)):
+        raise ValueError(f"{label} corners must be distinct and turn onto a new edge.")
+    for index, (a, b) in enumerate(edges):
+        for c, d in edges[index + 1:]:
+            if a != d and b != c and intersects(a, b, c, d):
+                raise ValueError(f"{label} edges cannot cross.")
+
+
+def check_polygon_clearance(polygon, markers, boundary):
+    edges = edges_of(polygon)
+    for label, point in markers:
+        xy = point[:2]
+        if not polygon_contains(edges, xy) or any(segment_distance(a, b, xy) < CLEARANCE for a, b in edges):
+            raise ValueError(f"{label} must be at least one metre inside the {boundary}.")
+
+
+def check_polygon_walls(walls, markers):
+    if (not all(math.isfinite(v) for v in (walls.z_min, walls.z_max))
+            or walls.z_max - walls.z_min <= 2 * CLEARANCE):
+        raise ValueError("The playable perimeter needs more than two metres of height.")
+    check_polygon_clearance(walls.vertices, markers, "mission perimeter")
+    for label, (_, _, z) in markers:
+        if not walls.z_min + CLEARANCE <= z <= walls.z_max - CLEARANCE:
+            raise ValueError(f"{label} must be at least one metre inside the mission perimeter.")
+
+
+def check_inside_perimeter(outer, inner):
+    edges = edges_of(outer)
+    if (not all(polygon_contains(edges, point) for point in inner)
+            or any(intersects(a, b, c, d) for a, b in edges for c, d in edges_of(inner))):
+        raise ValueError("The whole flag-only limit must be inside the solid perimeter.")
+
+
+def triangulate_polygon(vertices):
+    area = sum(a[0] * b[1] - a[1] * b[0] for a, b in edges_of(vertices))
+    remaining = list(range(len(vertices)))
+    if area < 0:
+        remaining.reverse()
+    triangles = []
+    while len(remaining) > 3:
+        for at, middle in enumerate(remaining):
+            triangle = (remaining[at - 1], middle, remaining[(at + 1) % len(remaining)])
+            ia, ib, ic = triangle
+            a, b, c = vertices[ia], vertices[ib], vertices[ic]
+            if turn(a, b, c) <= 0:
+                continue
+            others = (vertices[index] for index in remaining if index not in triangle)
+            if any(min(turn(a, b, p), turn(b, c, p), turn(c, a, p)) >= 0 for p in others):
+                continue
+            triangles.append(triangle)
+            del remaining[at]
+            break
+        else:
+            raise ValueError("The solid perimeter floor or ceiling could not be triangulated.")
+    triangles.append(tuple(remaining))
+    return triangles
+
+
+def place_flag_bounds(actors, points):
+    import unreal
+
+    rectangular = len(points) == 2
+    for index, (x, y) in enumerate(points, 1):
+        point = actors.spawn_actor_from_class(unreal.TargetPoint, unreal.Vector(x, y, 0))
+        if not point:
+            raise RuntimeError("Could not create a flag-only limit marker.")
+        if rectangular:
+            label = "minimum" if index == 1 else "maximum"
+            tags = [FLAG_CORNERS[index - 1]]
+        else:
+            label = f"vertex {index:02d}"
+            tags = [FLAG_POLYGON, FLAG_VERTEX + str(index), FLAG_COUNT + str(len(points))]
+        point.set_actor_label("Flag-only limit · " + label)
+        point.set_folder_path("TRIBES CTF/Mission perimeter")
+        point.set_editor_property("tags", [unreal.Name(tag) for tag in tags])
+        point.set_actor_enable_collision(False)
+        point.set_actor_hidden_in_game(True)
+
+
+def verify_flag_bounds(actors, flags, hard_perimeter=None):
+    import unreal
+
+    if hard_perimeter and not blocks_pawns(read_channels(
+        actor for actor in actors if actor.actor_has_tag(unreal.Name(TAG))
+    )):
+        hard_perimeter = None
+    corners, vertices, counts = {}, {}, set()
+    for actor in actors:
+        if actor.actor_has_tag(unreal.Name(FLAG_POLYGON)):
+            tags = {str(tag) for tag in actor.tags}
+            indices = [i for i in range(1, MAX_VERTICES + 1) if FLAG_VERTEX + str(i) in tags]
+            sizes = [n for n in range(3, MAX_VERTICES + 1) if FLAG_COUNT + str(n) in tags]
+            if (len(indices) != 1 or len(sizes) != 1 or indices[0] in vertices
+                    or not isinstance(actor, unreal.TargetPoint) or actor.get_actor_enable_collision()):
+                raise ValueError("Flag polygon vertices must be distinct, indexed, non-colliding TargetPoints.")
+            at = actor.get_actor_location()
+            vertices[indices[0]] = (at.x, at.y)
+            counts.add(sizes[0])
+        for tag in FLAG_CORNERS:
+            if not actor.actor_has_tag(unreal.Name(tag)):
+                continue
+            if tag in corners or not isinstance(actor, unreal.TargetPoint) or actor.get_actor_enable_collision():
+                raise ValueError("The flag-only limit needs two distinct, non-colliding TargetPoints.")
+            at = actor.get_actor_location()
+            corners[tag] = (at.x, at.y)
+    if vertices:
+        if corners or len(counts) != 1 or vertices.keys() != set(range(1, next(iter(counts)) + 1)):
+            raise ValueError("The flag polygon is missing vertices or mixed with an inset.")
+        polygon = tuple(vertices[i] for i in range(1, len(vertices) + 1))
+        if isinstance(hard_perimeter, PolygonWalls):
+            check_flag_polygon(polygon, flags)
+            check_inside_perimeter(hard_perimeter.vertices, polygon)
+        else:
+            check_flag_polygon(polygon, flags, hard_perimeter)
+        return
+    if not corners:
+        return
+    if set(corners) != set(FLAG_CORNERS):
+        raise ValueError("Both flag-only limit markers are required.")
+    lower, upper = [corners[tag] for tag in FLAG_CORNERS]
+    check_flag_bounds((lower, upper), flags)
+    if isinstance(hard_perimeter, PolygonWalls):
+        check_inside_perimeter(hard_perimeter.vertices, rectangle_outline((lower, upper)))
+    elif hard_perimeter:
+        walls_min, walls_max = hard_perimeter
+        if not all(a < lo < hi < b for a, lo, hi, b in zip(walls_min, lower, upper, walls_max)):
+            raise ValueError("The flag-only limit must be inside the hard perimeter.")
+
+
+def place_walls(actors, boxes, *, draft=None, block_channels=None):
+    import unreal
+
+    if isinstance(boxes, PolygonWalls):
+        from polygon_walls_unreal import place
+
+        return place(actors, draft, boxes, block_channels)
+    for side, (center, size) in boxes.items():
+        actor = actors.spawn_actor_from_class(unreal.TriggerBox, unreal.Vector(*center))
+        if not actor:
+            raise RuntimeError(f"Could not create the mission perimeter {side.lower()} wall.")
+        actor.set_actor_label(f"Mission perimeter · {side}")
+        actor.set_folder_path("TRIBES CTF/Mission perimeter")
+        tags = [TAG, TAG + side, *filter_tags(block_channels)]
+        if side in WALL_SIDES:
+            if "Ceiling" not in boxes:
+                tags.append(OPEN_CEILING)
+            if "Floor" in boxes:
+                tags.append(SEALED_FLOOR)
+        actor.set_editor_property("tags", [unreal.Name(tag) for tag in tags])
+        component = actor.get_component_by_class(unreal.BoxComponent)
+        component.set_box_extent(unreal.Vector(*(value / 2 for value in size)), False)
+        configure_wall(actor, component, block_channels)
+
+
+def verify_walls(world, actors, markers):
+    import unreal
+
+    walls = [actor for actor in actors if actor.actor_has_tag(unreal.Name(TAG))]
+    polygon = any(actor.actor_has_tag(unreal.Name(SOLID_POLYGON)) for actor in walls)
+    if not polygon and any(actor.actor_has_tag(unreal.Name(POLYGON_REQUIRED)) for actor in actors):
+        raise ValueError("The saved draft is missing its solid perimeter collision actor.")
+    if not walls:
+        return
+    channels = read_channels(walls)
+    pawn_markers = markers if blocks_pawns(channels) else []
+    if polygon:
+        from polygon_walls_unreal import verify
+
+        return verify(world, walls, actors, pawn_markers, channels)
+    actual = {}
+    cap_modes = set()
+    for actor in walls:
+        sides = [
+            side for side in (*WALL_SIDES, "Ceiling", "Floor")
+            if actor.actor_has_tag(unreal.Name(TAG + side))
+        ]
+        if len(sides) != 1 or sides[0] in actual or not isinstance(actor, unreal.TriggerBox):
+            raise ValueError("Each mission perimeter wall or cap must have its own distinct TriggerBox.")
+        side, = sides
+        if side in WALL_SIDES:
+            cap_modes.add((not actor.actor_has_tag(unreal.Name(OPEN_CEILING)),
+                           actor.actor_has_tag(unreal.Name(SEALED_FLOOR))))
+        component = actor.get_component_by_class(unreal.BoxComponent)
+        if not has_wall_collision(actor, component, channels):
+            raise ValueError(f"The mission perimeter {side.lower()} wall lost its collision settings.")
+        center, extent, _ = unreal.SystemLibrary.get_component_bounds(component)
+        actual[side] = ([center.x, center.y, center.z], [2 * extent.x, 2 * extent.y, 2 * extent.z])
+    if len(cap_modes) != 1:
+        raise ValueError("The four perimeter walls must agree on which caps are required.")
+    (ceiling, floor), = cap_modes
+    lower, upper = verified_extents(actual, ceiling=ceiling, floor=floor)
+    check_marker_clearance(lower, upper, pawn_markers)
+
+    # Trace only the generated walls. Terrain or base collisions cannot pass this check.
+    ignore = [actor for actor in actors if actor not in walls]
+    middle = [(a + b) / 2 for a, b in zip(lower, upper)]
+    directions = [(0, -1, "West"), (0, 1, "East"), (1, -1, "South"), (1, 1, "North")]
+    if ceiling:
+        directions.append((2, 1, "Ceiling"))
+    if floor:
+        directions.append((2, -1, "Floor"))
+    for axis, sign, side in directions:
+        end = list(middle)
+        end[axis] = (lower if sign < 0 else upper)[axis] + sign * (THICKNESS + 150)
+        for profile, should_block in probe_profiles(channels):
+            hits = unreal.SystemLibrary.capsule_trace_multi_by_profile(
+                world, unreal.Vector(*middle), unreal.Vector(*end), 42, 96, profile,
+                False, ignore, unreal.DrawDebugTrace.NONE, True,
+            ) or []
+            collisions = [row[9] for row in (hit.to_tuple() for hit in hits) if row[0] and row[9] in walls]
+            expected = any(actor.actor_has_tag(unreal.Name(TAG + side)) for actor in collisions) if should_block else not collisions
+            if not expected:
+                raise ValueError(f"The mission perimeter {side.lower()} wall has an unexpected {profile} collision response.")
+    return lower, upper
+
+
+def verified_extents(actual, *, ceiling=True, floor=False):
+    expected_sides = set(WALL_SIDES)
+    if ceiling:
+        expected_sides.add("Ceiling")
+    if floor:
+        expected_sides.add("Floor")
+    if actual.keys() != expected_sides:
+        raise ValueError("The mission perimeter must have four walls and the configured ceiling and floor.")
+    west, east, south, north = (actual[side] for side in WALL_SIDES)
+    lower = [west[0][0] + west[1][0] / 2, south[0][1] + south[1][1] / 2, west[0][2] - west[1][2] / 2]
+    upper = [east[0][0] - east[1][0] / 2, north[0][1] - north[1][1] / 2,
+             west[0][2] + west[1][2] / 2 - (THICKNESS if ceiling else 0)]
+    for side, expected in wall_boxes(lower, upper, ceiling=ceiling, floor=floor).items():
+        if any(not math.isclose(a, b, rel_tol=0, abs_tol=0.25)
+               for groups in zip(actual[side], expected) for a, b in zip(*groups)):
+            raise ValueError(f"The mission perimeter has a gap or a misaligned {side.lower()} wall.")
+    return lower, upper

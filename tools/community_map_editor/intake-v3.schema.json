@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 3",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage", "environment"],
+  "$defs": {
+    "rgb": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "items": {"type": "number", "minimum": 0, "maximum": 1}
+    },
+    "centimeters": {"type": "number", "minimum": 0, "maximum": 2000000}
+  },
+  "properties": {
+    "format": {"const": 3},
+    "profile": {"$ref": "intake-v2.schema.json#/properties/profile"},
+    "reader": {"$ref": "intake-v2.schema.json#/properties/reader"},
+    "name": {"$ref": "intake-v2.schema.json#/properties/name"},
+    "source_game": {"$ref": "intake-v2.schema.json#/properties/source_game"},
+    "profile_sha256": {"$ref": "intake-v2.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v2.schema.json#/properties/sources"},
+    "files": {"$ref": "intake-v2.schema.json#/properties/files"},
+    "coverage": {"$ref": "intake-v2.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v2.schema.json#/properties/minimap"},
+    "environment": {
+      "type": "object", "minProperties": 1, "additionalProperties": false,
+      "properties": {
+        "sun": {
+          "type": "object", "minProperties": 1, "additionalProperties": false,
+          "properties": {
+            "direction": {
+              "description": "Unit vector in target world X, Y, Z order, pointing along the light rays.",
+              "type": "array", "minItems": 3, "maxItems": 3,
+              "items": {"type": "number", "minimum": -1, "maximum": 1}
+            },
+            "color": {"$ref": "#/$defs/rgb"},
+            "ambient": {"$ref": "#/$defs/rgb"}
+          }
+        },
+        "fog": {
+          "type": "object", "required": ["start_cm"], "additionalProperties": false,
+          "properties": {
+            "start_cm": {"$ref": "#/$defs/centimeters"},
+            "visible_cm": {"$ref": "#/$defs/centimeters"},
+            "color": {"$ref": "#/$defs/rgb"}
+          }
+        }
+      }
+    }
+  },
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v2.schema.json#/then"},
+  "else": {"$ref": "intake-v2.schema.json#/else"}
+}

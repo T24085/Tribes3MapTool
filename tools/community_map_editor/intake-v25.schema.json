@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 25",
+  "description": "Vengeance terrain paint with original color artwork and cached world-space UV projection.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "profile", "source_game", "name", "reader", "profile_sha256", "sources", "files", "coverage", "minimap", "terrain_paint", "terrain_art", "terrain_uv"],
+  "properties": {
+    "format": {"const": 25},
+    "profile": {"$ref": "intake-v24.schema.json#/properties/profile"},
+    "source_game": {"$ref": "intake-v24.schema.json#/properties/source_game"},
+    "name": {"$ref": "intake-v24.schema.json#/properties/name"},
+    "reader": {"$ref": "intake-v24.schema.json#/properties/reader"},
+    "profile_sha256": {"$ref": "intake-v24.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v24.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v24.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v24.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v24.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v24.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v24.schema.json#/properties/interior_review"},
+    "terrain_paint": {"$ref": "intake-v24.schema.json#/properties/terrain_paint"},
+    "terrain_art": {"$ref": "intake-v14.schema.json#/properties/terrain_art"},
+    "terrain_uv": {
+      "type": "object", "maxProperties": 32,
+      "propertyNames": {"pattern": "^(?:[0-9]|[12][0-9]|3[01])$"},
+      "additionalProperties": {
+        "type": "array", "minItems": 2, "maxItems": 2,
+        "items": {
+          "type": "array", "minItems": 4, "maxItems": 4,
+          "items": {"type": "number", "minimum": -1000000, "maximum": 1000000}
+        }
+      }
+    },
+    "files": {
+      "type": "object",
+      "required": ["objects.json", "terrain.json", "height.png", "minimap.png", "source-scene.json"],
+      "propertyNames": {"anyOf": [
+        {"enum": ["objects.json", "terrain.json", "height.png", "minimap.png", "source-scene.json"]},
+        {"pattern": "^interior-[0-9]{4}\\.json$"},
+        {"pattern": "^terrain-alpha-(?:0[0-9]|[12][0-9]|3[01])\\.png$"},
+        {"pattern": "^terrain-art-[a-f0-9]{32}\\.png$"}
+      ]},
+      "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    }
+  },
+  "dependentRequired": {"interiors": ["interior_review"], "interior_review": ["interiors"]}
+}

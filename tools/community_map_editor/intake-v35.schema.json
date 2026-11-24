@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 35",
+  "description": "Vengeance elevator intake with saved event sender records in source-scene.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "profile", "source_game", "name", "reader", "profile_sha256", "sources", "files", "coverage", "minimap", "interiors", "interior_review"],
+  "properties": {
+    "format": {"const": 35},
+    "profile": {"$ref": "intake-v34.schema.json#/properties/profile"},
+    "source_game": {"$ref": "intake-v34.schema.json#/properties/source_game"},
+    "name": {"$ref": "intake-v34.schema.json#/properties/name"},
+    "reader": {"$ref": "intake-v34.schema.json#/properties/reader"},
+    "profile_sha256": {"$ref": "intake-v34.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v34.schema.json#/properties/sources"},
+    "files": {"$ref": "intake-v34.schema.json#/properties/files"},
+    "coverage": {"$ref": "intake-v34.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v34.schema.json#/properties/minimap"},
+    "interiors": {"$ref": "intake-v34.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v34.schema.json#/properties/interior_review"},
+    "environment": {"$ref": "intake-v34.schema.json#/properties/environment"},
+    "terrain_paint": {"$ref": "intake-v34.schema.json#/properties/terrain_paint"},
+    "terrain_art": {"$ref": "intake-v34.schema.json#/properties/terrain_art"},
+    "terrain_uv": {"$ref": "intake-v34.schema.json#/properties/terrain_uv"}
+  },
+  "dependentRequired": {
+    "terrain_art": ["terrain_paint", "terrain_uv"],
+    "terrain_uv": ["terrain_paint", "terrain_art"]
+  }
+}

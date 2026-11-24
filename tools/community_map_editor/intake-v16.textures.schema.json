@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tribes 1 interior material coverage and texture bindings",
+  "type": "object", "minProperties": 1, "maxProperties": 128,
+  "propertyNames": {"pattern": "^interior-[0-9]{4}[.]json$"},
+  "additionalProperties": {
+    "type": "object", "minProperties": 1, "maxProperties": 256,
+    "propertyNames": {"pattern": "^(0|[1-9][0-9]{0,2})$"},
+    "additionalProperties": {
+      "oneOf": [
+        {
+          "type": "object", "required": ["reason"], "additionalProperties": false,
+          "properties": {"reason": {"type": "string", "minLength": 1, "maxLength": 240}}
+        },
+        {
+          "type": "object", "required": ["file", "source", "source_sha256", "size", "mode"],
+          "additionalProperties": false,
+          "dependentRequired": {"palette": ["palette_sha256"], "palette_sha256": ["palette"]},
+          "properties": {
+            "file": {"type": "string", "pattern": "^texture_[a-f0-9]{32}[.]png$"},
+            "source": {"$ref": "#/$defs/basename"},
+            "source_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"},
+            "palette": {"$ref": "#/$defs/basename"},
+            "palette_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"},
+            "size": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "integer", "minimum": 1, "maximum": 4096}},
+            "mode": {"enum": ["opaque", "masked"]}
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {"basename": {"type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^:/\\\\]+$"}}
+}

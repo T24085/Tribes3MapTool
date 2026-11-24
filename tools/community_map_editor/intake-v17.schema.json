@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 17",
+  "description": "Tribes 1 static interiors, source artwork and baked light states in interior-lighting.json.",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage", "interiors", "interior_review"],
+  "properties": {
+    "format": {"const": 17},
+    "profile": {"$ref": "intake-v16.schema.json#/properties/profile"},
+    "source_game": {"$ref": "intake-v16.schema.json#/properties/source_game"},
+    "reader": {"$ref": "intake-v16.schema.json#/properties/reader"},
+    "name": {"$ref": "intake-v16.schema.json#/properties/name"},
+    "profile_sha256": {"$ref": "intake-v16.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v16.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v16.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v16.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v16.schema.json#/properties/environment"},
+    "terrain_art": {"$ref": "intake-v16.schema.json#/properties/terrain_art"},
+    "files": {
+      "type": "object", "maxProperties": 1158,
+      "required": ["objects.json", "terrain.json", "height.png", "model-textures.json", "interior-lighting.json"],
+      "propertyNames": {"pattern": "^(objects[.]json|terrain[.]json|height[.]png|minimap[.]png|terrain-art-[a-f0-9]{32}[.]png|interior-[0-9]{4}[.]json|model-textures[.]json|texture_[a-f0-9]{32}[.]png|interior-lighting[.]json|lightmap_[a-f0-9]{32}[.]png)$"},
+      "additionalProperties": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+    },
+    "interiors": {"$ref": "intake-v16.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v16.schema.json#/properties/interior_review"}
+  },
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v2.schema.json#/then"},
+  "else": {"$ref": "intake-v2.schema.json#/else"}
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES painted terrain, intake version 13",
+  "description": "Each source slot indexes the material in its terrain block. Cutouts are cells where the source flags encode a nonzero empty level. Public layouts use a single flat block and no source paint or cutouts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["origin_cm", "step_cm", "cm_per_m", "y_sign", "material_layers", "tile_grid", "terrain_blocks"],
+  "properties": {
+    "origin_cm": {"$ref": "intake-v12.terrain.schema.json#/properties/origin_cm"},
+    "step_cm": {"$ref": "intake-v12.terrain.schema.json#/properties/step_cm"},
+    "cm_per_m": {"$ref": "intake-v12.terrain.schema.json#/properties/cm_per_m"},
+    "y_sign": {"$ref": "intake-v12.terrain.schema.json#/properties/y_sign"},
+    "tile_grid": {"$ref": "intake-v12.terrain.schema.json#/properties/tile_grid"},
+    "terrain_blocks": {"$ref": "intake-v12.terrain.schema.json#/properties/terrain_blocks"},
+    "material_layers": {
+      "type": "array", "maxItems": 256,
+      "items": {
+        "type": "array", "minItems": 2, "maxItems": 2,
+        "prefixItems": [
+          {"type": "integer", "minimum": 0, "maximum": 255},
+          {"type": "string", "minLength": 1, "maxLength": 255}
+        ]
+      }
+    }
+  }
+}
