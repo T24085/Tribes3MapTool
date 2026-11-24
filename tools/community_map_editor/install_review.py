@@ -94,6 +94,16 @@ def build(engine, scratch, logs):
     return package
 
 
+def install_for_workspace(project, engine, package=None):
+    engine = validate_engine(engine)
+    if package is not None:
+        return install(package.resolve(strict=True), project, engine)
+    logs = project.parent / 'Saved/T3PluginBuilds' / uuid.uuid4().hex[:12]
+    logs.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix='t3-review-build-') as scratch:
+        return install(build(engine, Path(scratch), logs), project, engine)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('config', type=Path, help='The workspace local-settings.json')
@@ -104,16 +114,9 @@ def main():
         project = Path(config['project']).resolve(strict=True)
         if not project.is_file() or project.suffix != '.uproject':
             raise ValueError('Select a workspace with an Unreal project.')
-        engine = validate_engine(Path(config['engine_binaries']))
+        engine = Path(config['engine_binaries'])
         with native_resources():
-            if args.package:
-                destination, backup = install(args.package.resolve(strict=True), project, engine)
-            else:
-                logs = project.parent / 'Saved/T3PluginBuilds' / uuid.uuid4().hex[:12]
-                logs.parent.mkdir(parents=True, exist_ok=True)
-                with TemporaryDirectory(prefix='t3-review-build-') as scratch:
-                    package = build(engine, Path(scratch), logs)
-                    destination, backup = install(package, project, engine)
+            destination, backup = install_for_workspace(project, engine, args.package)
         print(f'Installed Object Review at {destination}.')
         if backup is not None:
             print(f'Previous plugin saved at {backup}.')

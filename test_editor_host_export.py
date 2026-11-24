@@ -136,6 +136,53 @@ class EditorHostExportTests(unittest.TestCase):
             self.assertEqual((old / 'Binaries/Win64' / dll).read_bytes(), b'compiled review module')
             self.assertEqual((destination / 'Binaries/Win64' / dll).read_bytes(), b'new review binary')
 
+    def test_review_menu_handoff_installs_after_exit_and_reopens_the_draft(self):
+        with TemporaryDirectory() as folder:
+            parent = Path(folder).resolve()
+            engine = unreal_installation(parent / 'Unreal', 3)
+            (engine / 'UnrealEditor.modules').write_text('{"BuildId":"test-editor"}', encoding='utf-8')
+            config = launch.read_json(bootstrap.create_workspace(parent, engine))
+            project = Path(config['project'])
+            level = launch.package_path(DRAFT)
+            asset = project.parent / 'Content' / (level.removeprefix('/Game/') + '.umap')
+            asset.parent.mkdir(parents=True)
+            asset.touch()
+            events = []
+
+            def editor(args, cwd, env, owner, budget):
+                if not events:
+                    self.assertEqual(env['T3_EDITOR_MAP_REVIEW'], '0')
+                    Path(env['T3_EDITOR_REVIEW_REQUEST']).write_text(json.dumps({'draft': DRAFT}), encoding='utf-8')
+                    events.append('editor exited')
+                else:
+                    self.assertEqual(events, ['editor exited', 'review installed'])
+                    self.assertEqual(env['T3_EDITOR_MAP_REVIEW'], '1')
+                    self.assertIn(level, args)
+                    self.assertIn('-ExecCmds=T3.MapReview', args)
+                    events.append('draft reopened')
+                return {'status': 'terminal', 'exit_code': 0, 'job_active_processes_at_parent_exit': 0}
+
+            def install(selected, binaries, package):
+                self.assertEqual(events, ['editor exited'])
+                self.assertEqual(selected, project)
+                self.assertEqual(binaries, engine)
+                self.assertIsNone(package)
+                target = project.parent / 'Plugins/CommunityMapReview'
+                directory = target / 'Binaries/Win64'
+                directory.mkdir(parents=True)
+                dll = 'UnrealEditor-CommunityMapReview.dll'
+                (directory / dll).touch()
+                (directory / 'UnrealEditor.modules').write_text(json.dumps({
+                    'BuildId': 'test-editor', 'Modules': {'CommunityMapReview': dll},
+                }), encoding='utf-8')
+                events.append('review installed')
+                return target, None
+
+            with patch.object(launch, 'run_owned_job', side_effect=editor), \
+                    patch.object(install_review, 'install_for_workspace', side_effect=install):
+                launch.run(config)
+            self.assertEqual(events, ['editor exited', 'review installed', 'draft reopened'])
+
     def test_authoring_host_capability_has_to_be_in_the_verified_inventory(self):
         with TemporaryDirectory() as folder:
             root = Path(folder).resolve()

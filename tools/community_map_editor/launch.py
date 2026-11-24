@@ -506,8 +506,6 @@ def run(config, *, smoke=False):
     env['T3_EDITOR_HOST_EXPORT'] = '1' if exporter.is_file() and not smoke else '0'
     env['T3_EDITOR_EQUIPMENT_EXPORT'] = '1' if adapter.is_file() and not smoke else '0'
     install_editor_scripts(project, env)
-    plugin_args = editor_plugin_args(project, engine, smoke=smoke, authoring_only=authoring_only)
-    env['T3_EDITOR_MAP_REVIEW'] = '1' if 'CommunityMapReview' in plugin_args[1].split(',') else '0'
     level = None
     last = root/'last-draft.txt'
     if last.is_file():
@@ -515,6 +513,7 @@ def run(config, *, smoke=False):
         if (project.parent/'Content'/(package_path(ident).removeprefix('/Game/')+'.umap')).is_file():
             level = package_path(ident)
     count = 0
+    open_review = False
     while True:
         count += 1
         attempt = out/f'run-{count}'
@@ -522,13 +521,20 @@ def run(config, *, smoke=False):
         request = attempt/'build-request.json'
         host_request = attempt/'host-build-request.json'
         batch_request = attempt/'host-batch-request.json'
+        review_request = attempt/'review-install-request.json'
+        plugin_args = editor_plugin_args(project, engine, smoke=smoke, authoring_only=authoring_only)
+        env['T3_EDITOR_MAP_REVIEW'] = '1' if 'CommunityMapReview' in plugin_args[1].split(',') else '0'
         env.update(T3_EDITOR_REQUEST=str(request), T3_EDITOR_INTERACTIVE='1',
                    T3_EDITOR_HOST_REQUEST=str(host_request),
                    T3_EDITOR_BATCH_STAGE_REQUEST=str(batch_request),
+                   T3_EDITOR_REVIEW_REQUEST=str(review_request),
                    T3_EDITOR_INITIAL='blank' if level is None else '', T3_EDITOR_LAST_DRAFT=str(last))
         exe = 'UnrealEditor-Cmd.exe' if smoke else 'UnrealEditor.exe'
         args = [str(engine/exe), str(project), *([level] if level else []), '-nop4', '-NoSplash', '-NoSound', '-NoCrashDialog',
                 '-abslog='+str(attempt/'editor.log'), *plugin_args]
+        if open_review and env['T3_EDITOR_MAP_REVIEW'] == '1':
+            args.append('-ExecCmds=T3.MapReview')
+        open_review = False
         if smoke:
             env['T3_EDITOR_INTERACTIVE'] = '0'
             args += ['-unattended', '-nullrhi', '-run=pythonscript', '-script='+str(TOOL/'smoke_editor.py')]
@@ -537,15 +543,40 @@ def run(config, *, smoke=False):
         active = job.get('job_active_processes_after_cleanup', job.get('job_active_processes_at_parent_exit'))
         for_host = host_request.is_file()
         for_batch = batch_request.is_file()
-        requested = request.is_file() or for_host or for_batch
+        for_review = review_request.is_file()
+        requested = sum((request.is_file(), for_host, for_batch, for_review))
         if job['status'] != 'terminal' or active != 0 or (job.get('exit_code') != 0 and not requested):
-            raise RuntimeError('The editor stopped before handing off a draft. See ' + str(attempt/'editor.log'))
+            raise RuntimeError('The editor stopped before handing off its request. See ' + str(attempt/'editor.log'))
         if not requested:
             return
-        if sum((request.is_file(), for_host, for_batch)) > 1:
-            raise ValueError('The editor produced two requests for the same build.')
+        if requested > 1:
+            raise ValueError('The editor produced more than one request.')
         if job.get('exit_code') != 0:
             print('Unreal reported a shutdown error. Continuing with the saved draft.', flush=True)
+        if for_review:
+            payload = read_json(review_request, 1024)
+            if smoke or not isinstance(payload, dict) or set(payload) != {'draft'} or env['T3_EDITOR_MAP_REVIEW'] != '0':
+                raise ValueError('Invalid Object Review installation request.')
+            draft = payload['draft']
+            if draft is not None:
+                if not isinstance(draft, str):
+                    raise ValueError('Invalid Object Review draft identity.')
+                draft = validate_id(draft)
+                saved_level = package_path(draft)
+                if (project.parent/'Content'/(saved_level.removeprefix('/Game/')+'.umap')).is_file():
+                    level = saved_level
+                    last.write_text(draft + '\n', encoding='utf-8')
+            from tools.community_map_editor.install_review import install_for_workspace
+            try:
+                configured = config.get('review_plugin_package')
+                installed, backup = install_for_workspace(project, engine, Path(configured) if configured else None)
+                open_review = True
+                print(f'Installed Object Review at {installed}.', flush=True)
+                if backup is not None:
+                    print(f'Previous plugin saved at {backup}.', flush=True)
+            except (OSError, ValueError, RuntimeError, TypeError, KeyError) as error:
+                print(f'Object Review installation failed. {error}', file=sys.stderr, flush=True)
+            continue
         if for_batch:
             payload = read_json(batch_request, 1024)
             if not isinstance(payload, dict) or set(payload) != {'batch'} or env['T3_EDITOR_HOST_EXPORT'] != '1':

@@ -372,12 +372,39 @@ def open_docked_review():
     from dock_review import review_for_existing_draft
 
     if os.environ.get('T3_EDITOR_MAP_REVIEW') != '1':
-        raise ValueError('Build and install the Community Map Review plugin for this Unreal Editor version.')
+        return request_review_install()
     library = Path(os.environ['T3_CONVERTER_LIBRARY'])
     match = re.search(rf'/Maps/Community/({IMPORT_DRAFT})/Arena_\1_P\.', world().get_path_name())
     if match and not (library/'DraftReviews'/f'{match[1]}.json').is_file():
         review_for_existing_draft(library, match[1])
     unreal.SystemLibrary.execute_console_command(world(), 'T3.MapReview')
+
+
+def request_review_install():
+    destination = os.environ.get('T3_EDITOR_REVIEW_REQUEST')
+    if destination is None:
+        raise ValueError('Open this workspace with the TRIBES Map Editor launcher to install Object Review.')
+    request = Path(destination)
+    if request.exists():
+        raise ValueError('This editor run already requested an Object Review installation.')
+    choice = unreal.EditorDialog.show_message(
+        'Install Docked Object Review',
+        'Save your edits and close Unreal to install Object Review. The launcher will reopen your draft when installation finishes.',
+        unreal.AppMsgType.YES_NO,
+    )
+    if choice != unreal.AppReturnType.YES:
+        return
+    if not SAVING.save_dirty_packages(True, True):
+        raise ValueError('Unreal could not save all map and asset edits.')
+    try:
+        draft = draft_id()
+    except ValueError:
+        draft = None
+    temporary = request.with_suffix('.tmp')
+    with temporary.open('x', encoding='utf-8') as stream:
+        json.dump({'draft': draft}, stream)
+    temporary.rename(request)
+    unreal.SystemLibrary.quit_editor()
 
 
 def show_report(name):
