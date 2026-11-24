@@ -36,21 +36,38 @@ class MissionBoundaryWarningTest(unittest.TestCase):
          panel.AddChildToCanvas=function(_,label)label.parent=panel;return slot end
          local overlay=object('/Engine/Transient.HUD',world)
          overlay.Flags=flag
-         local created,removed=0,0
+         local created,removed,current=0,0,nil
          StaticConstructObject=function(class,owner)
           assert(class==textClass and owner==overlay)
           created=created+1
           local row=object('Label',world)
           row.GetParent=function()return row.parent end
-          row.RemoveFromParent=function()row.parent=nil;removed=removed+1 end
-          row.SetText=function(_,text)assert(text:find('OUT OF BOUNDS',1,true))end
+          row.RemoveFromParent=function()row.parent=nil;removed=removed+1;current=nil end
+          row.SetText=function(_,text)current=text end
           for _,fn in ipairs({'SetShadowOffset','SetVisibility','SetColorAndOpacity','SetShadowColorAndOpacity'})do
            row[fn]=function()end
           end
           return row
          end
+         local noticePath='/Script/Engine.PlayerController:ClientMessage'
          StaticFindObject=function(path)
+          if path==noticePath then
+           local method=object('Function '..path,world)
+           method.ForEachProperty=function(_,callback)
+            for _,p in ipairs({{'S','StrProperty',0},{'Type','NameProperty',16},{'MsgLifeTime','FloatProperty',24}})do
+             callback({GetFullName=function()return p[2]..' '..path..':'..p[1]end,
+                       GetOffset_Internal=function()return p[3]end})
+            end
+           end
+           return method
+          end
           return ({['/Script/UMG.TextBlock']=textClass,['/Script/UMG.CanvasPanel']=canvasClass})[path]
+         end
+         local rpc
+         RegisterHook=function(path,_,callback)
+          assert(path==noticePath)
+          rpc=callback
+          return 1,2
          end
          FText=function(text)return text end
          FName=function(name)return name end
@@ -89,7 +106,7 @@ class MissionBoundaryWarningTest(unittest.TestCase):
          at(-5,0,0);at(5,0,0) -- Touching the notch edge is legal.
          assert(plays==0 and created==0)
          at(5,8,0);at(-5,8,0) -- Cross outside and back between samples.
-         assert(plays==1 and created==1)
+         assert(plays==1 and created==1 and current:find('OUT OF BOUNDS',1,true))
          stamp=14
          at(-5,8,0)
          assert(removed==1)
@@ -106,5 +123,33 @@ class MissionBoundaryWarningTest(unittest.TestCase):
          at(-5,8,14)
          assert(removed==4 and not timer)
          assert(#reports==4 and reports[1]=='MISSION_BOUNDARY_WARNING_READY')
+
+         local flagMin=object('Flag limit',world,{T3MissionFlagMin=true})
+         FindAllOf=function(kind)
+          return ({AmbientSound={},TargetPoint={flagMin},UI_Game_Overlays_C={overlay}})[kind]
+         end
+         local nextPC=object('Next Controller',world)
+         nextPC.PlayerState,nextPC.Pawn=ps,pawn
+         nextPC.IsLocalPlayerController=pc.IsLocalPlayerController
+         service(nextPC,ps)
+         at(0,0,0)
+         local function notice(target,tag)
+          rpc({get=function()return target end},nil,{get=function()
+           return {ToString=function()return tag end}
+          end})
+         end
+         notice(pc,'T3FlagBoundaryDrop')
+         notice(nextPC,'UnrelatedMessage')
+         at(0,0,0)
+         assert(not current and plays==3)
+         notice(nextPC,'T3FlagBoundaryDrop')
+         at(0,0,0)
+         assert(current=='FLAG DROPPED AT THE MISSION BOUNDARY')
+         notice(nextPC,'T3FlagBoundaryReturn')
+         at(0,0,0)
+         assert(current:find('FLAG RETURNED HOME',1,true)==1)
+         stamp=19
+         at(0,0,0)
+         assert(not current and plays==3)
         end
         """)(factory)

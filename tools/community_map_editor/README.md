@@ -924,6 +924,8 @@ The generated actors appear under **TRIBES CTF → Mission perimeter** in the Wo
 
 Enter a **Flag-only inset** to set a second boundary inside the mission area. The flag-only boundary also works independently of the solid walls. The minimap previews it in pink. Players can cross this boundary. The game uses its native drop action and places a carried flag at the carrier's last recorded in-bounds position. When there is no valid position for that carrier, the native return brings the flag home. Both original flag stands must be inside the limit.
 
+The carrier receives a private message after the host processes a boundary drop or return. When the character is attached to a vehicle pawn, the boundary follows the vehicle's position. A verified switch between the carrier and the vehicle preserves the same player's last in-bounds sample.
+
 For an irregular flag limit, choose **Flag-only polygon → Draw on minimap…**. Click 3–32 corners in order, then choose **Use polygon** and **Apply**. Keep the outline inside the gold mission area and each flag stand at least a metre from its edges. Concave outlines work. Use **Undo corner** or **Clear** to revise the shape.
 
 The draft saves non-colliding TargetPoints for the inset corners or numbered polygon vertices. The offline adapter and the updated Direct Host boundary module read those actors. For a hosted polygon, use a Direct Host build with polygon support in `runtime-fixes/mission_flag_limit.lua`, a registered CTF layout, and a verified map package.

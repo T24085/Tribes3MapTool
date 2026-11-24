@@ -34,10 +34,29 @@ return function(factory)
  end
  local pawn=object('Pathfinder Player',world)
  local nextPawn=object('Raider Player',world)
- local pawn_class=object('Class /Script/Valhalla.ValCharacter')
- for _,p in ipairs({pawn,nextPawn})do
-  p.IsA=function(_,kind)return kind==pawn_class end
+ local vehicle=object('Vehicle',world)
+ local pawn_class=object('Class /Script/Engine.Pawn')
+ local character_class=object('Class /Script/Valhalla.ValCharacter')
+ local player_class=object('Class /Script/Engine.PlayerController')
+ for _,p in ipairs({pawn,nextPawn,vehicle})do
+  p.IsA=function(_,kind)return kind==pawn_class or (p~=vehicle and kind==character_class) end
+  p.GetAttachParentActor=function(self)return self.parent end
+  p.GetController=function(self)return self.controller end
  end
+ local function controller(holder)
+  local pc,ps=object('Player Controller',world),object('Player State',world)
+  pc.Pawn,pc.PlayerState=holder,ps
+  holder.controller,holder.PlayerState=pc,ps
+  ps.GetOwner=function()return pc end
+  pc.IsA=function(_,kind)return kind==player_class end
+  pc.messages={}
+  pc.ClientMessage=function(self,text,kind,life)
+   assert(life==4 and text:find('Flag ',1,true)==1)
+   self.messages[#self.messages+1]=kind
+  end
+  return pc
+ end
+ local pilot,other=controller(pawn),controller(nextPawn)
  local flags={}
  for team=1,2 do
   local f=object('Flag '..team,world);f.r_TeamId=team;f.at={X=0,Y=0,Z=0};f.moves=0;f.drops=0
@@ -66,9 +85,15 @@ return function(factory)
   ['/Script/Topaz.TopPickup_Flag:GetFlagState']={{'Querier','ObjectProperty',0},{'ReturnValue','EnumProperty',8}},
   ['/Script/Engine.Actor:K2_SetActorLocation']={{'NewLocation','StructProperty',0},{'bSweep','BoolProperty',24},
     {'SweepHitResult','StructProperty',32},{'bTeleport','BoolProperty',264},{'ReturnValue','BoolProperty',265}},
+  ['/Script/Engine.Actor:GetAttachParentActor']={{'ReturnValue','ObjectProperty',0}},
+  ['/Script/Engine.Pawn:GetController']={{'ReturnValue','ObjectProperty',0}},
+  ['/Script/Engine.PlayerController:ClientMessage']={{'S','StrProperty',0},{'Type','NameProperty',16},
+    {'MsgLifeTime','FloatProperty',24}},
  }
  StaticFindObject=function(path)
-  if path=='/Script/Valhalla.ValCharacter'then return pawn_class end
+  if path=='/Script/Engine.Pawn'then return pawn_class end
+  if path=='/Script/Valhalla.ValCharacter'then return character_class end
+  if path=='/Script/Engine.PlayerController'then return player_class end
   if path=='/Script/Topaz.ETopFlagState'then
    local e=object(path);e.ForEachName=function(_,cb)cb(name('ETopFlagState::Dropped'),4)end;return e
   end
@@ -87,7 +112,14 @@ return function(factory)
  local function tick()local call=assert(pending);pending=nil;call()end
  local function move(p,x,y,z)p.at={X=x,Y=y,Z=z}end
  return {start=function()return service(gm)end,move=move,tick=tick,
-  pawn=pawn,nextPawn=nextPawn,flags=flags,world=world,notices=notices,
+  pawn=pawn,nextPawn=nextPawn,vehicle=vehicle,flags=flags,world=world,notices=notices,
+  pilot=pilot,other=other,
+  enter_vehicle=function()
+   pawn.parent,pawn.controller=vehicle,nil
+   vehicle.controller,vehicle.PlayerState=pilot,pilot.PlayerState
+   pilot.Pawn=vehicle
+  end,
+  fail_notice=function()pilot.ClientMessage=function()error('closed connection')end end,
   points=function(enabled)if not enabled then points={points[3]}end end,
   polygon=function(vertices,size)
    points={}
@@ -124,6 +156,8 @@ class MissionFlagLimitTest(unittest.TestCase):
         self.assertEqual((flag.at.X, flag.at.Y, flag.at.Z), (950, 100, 619))
         self.assertEqual(f.pawn.at.X, 1800)
         self.assertIn("MISSION_FLAG_LIMIT_DROP|team=2", f.notices[2])
+        self.assertEqual(list(f.pilot.messages.values()), ["T3FlagBoundaryDrop"])
+        self.assertEqual(len(f.other.messages), 0)
 
     def test_new_carrier_outside_never_reuses_an_old_carriers_position(self):
         f = self.fixture()
@@ -137,6 +171,41 @@ class MissionFlagLimitTest(unittest.TestCase):
         self.assertTrue(flag.forced)
         self.assertEqual((flag.drops, flag.moves), (1, 0))
         self.assertIn("MISSION_FLAG_LIMIT_RETURN|team=1", f.notices[2])
+        self.assertEqual(list(f.nextPawn.controller.messages.values()), ["T3FlagBoundaryReturn"])
+        self.assertEqual(len(f.pilot.messages), 0)
+
+    def test_vehicle_crossing_preserves_the_players_last_inside_sample(self):
+        for transferred in (False, True):
+            with self.subTest(transferred=transferred):
+                f = self.fixture()
+                flag = f.flags[1]
+                flag.owner = f.pawn
+                f.move(f.pawn, 975, 150, 680)
+                self.assertTrue(f.start())
+                f.enter_vehicle()
+                if transferred:
+                    flag.owner = f.vehicle
+                f.move(f.vehicle, 1450, 157, 705)
+                f.tick()
+                self.assertFalse(flag.forced)
+                self.assertEqual((flag.at.X, flag.at.Y, flag.at.Z), (975, 150, 680))
+                self.assertEqual(list(f.pilot.messages.values()), ["T3FlagBoundaryDrop"])
+                self.assertEqual(len(f.other.messages), 0)
+
+    def test_failed_notification_does_not_stop_boundary_enforcement_or_other_notices(self):
+        f = self.fixture()
+        f.flags[1].owner = f.pawn
+        f.flags[2].owner = f.nextPawn
+        f.move(f.pawn, 900, 500, 400)
+        f.move(f.nextPawn, -900, 500, 410)
+        self.assertTrue(f.start())
+        f.fail_notice()
+        f.move(f.pawn, 1400, 500, 400)
+        f.move(f.nextPawn, -1400, 500, 410)
+        f.tick()
+        self.assertEqual((f.flags[1].drops, f.flags[2].drops), (1, 1))
+        self.assertEqual(list(f.other.messages.values()), ["T3FlagBoundaryDrop"])
+        self.assertIn("MISSION_FLAG_LIMIT_NOTICE_UNAVAILABLE", f.notices[3])
 
     def test_foreign_markers_do_not_activate_the_rule(self):
         f = self.fixture()

@@ -136,9 +136,56 @@ return function(env)
   native('/Script/Topaz.TopPickup_Flag:GetFlagState',{{'Querier','ObjectProperty',0},{'ReturnValue','EnumProperty',8}})
   native('/Script/Engine.Actor:K2_SetActorLocation',{{'NewLocation','StructProperty',0},{'bSweep','BoolProperty',24},
    {'SweepHitResult','StructProperty',32},{'bTeleport','BoolProperty',264},{'ReturnValue','BoolProperty',265}})
-  local pawn_class=StaticFindObject('/Script/Valhalla.ValCharacter')
+  native('/Script/Engine.Actor:GetAttachParentActor',{{'ReturnValue','ObjectProperty',0}})
+  native('/Script/Engine.Pawn:GetController',{{'ReturnValue','ObjectProperty',0}})
+  local pawn_class=StaticFindObject('/Script/Engine.Pawn')
+  local character_class=StaticFindObject('/Script/Valhalla.ValCharacter')
+  local player_class=StaticFindObject('/Script/Engine.PlayerController')
   local states=StaticFindObject('/Script/Topaz.ETopFlagState')
-  assert(valid(pawn_class)and valid(states),'mission_flag_limit_native_types_required')
+  assert(valid(pawn_class)and valid(character_class)and valid(player_class)and valid(states),
+         'mission_flag_limit_native_types_required')
+  local function carrying_pawn(actor)
+   return in_world(actor) and actor:HasAuthority() and actor:IsA(pawn_class)
+  end
+  local function support_pawn(carrier)
+   if carrier:IsA(character_class)then
+    local attached=carrier:GetAttachParentActor()
+    if carrying_pawn(attached) and not attached:IsA(character_class)then return attached end
+   end
+   return carrier
+  end
+  local function player_controller(carrier,support)
+   local player=carrier.PlayerState
+   local pc=carrier:GetController()
+   if not valid(pc) and in_world(player)then pc=player:GetOwner() end
+   if in_world(pc) and pc:HasAuthority() and pc:IsA(player_class)
+      and (same(pc.Pawn,carrier) or (same(pc.Pawn,support) and same(pc.PlayerState,player)))then
+    return pc
+   end
+  end
+  local notice_ready
+  local function send_notice(pc,has_previous)
+   if not pc or notice_ready==false then return end
+   if not notice_ready then
+    local checked,why=pcall(native,'/Script/Engine.PlayerController:ClientMessage',
+                           {{'S','StrProperty',0},{'Type','NameProperty',16},{'MsgLifeTime','FloatProperty',24}})
+    notice_ready=checked
+    if not checked then
+     report('MISSION_FLAG_LIMIT_NOTICE_UNAVAILABLE|'..tostring(why):sub(1,260))
+     return
+    end
+   end
+   local ok,why=pcall(function()
+    if has_previous then
+     pc:ClientMessage('Flag dropped at the mission boundary.',FName('T3FlagBoundaryDrop'),4.0)
+    else
+     pc:ClientMessage('Flag returned home because you were out of bounds.',FName('T3FlagBoundaryReturn'),4.0)
+    end
+   end)
+   if not ok then
+    report('MISSION_FLAG_LIMIT_NOTICE_UNAVAILABLE|'..tostring(why):sub(1,260))
+   end
+  end
   local dropped
   states:ForEachName(function(name,value)
    if name:ToString():match('([^:]+)$')=='Dropped' then dropped=value end
@@ -167,15 +214,23 @@ return function(env)
    for team,flag in ipairs(flags)do
     if not in_world(flag)or not flag:HasAuthority()then return false end
     local carrier=flag:GetOwner()
-    if not in_world(carrier)or not carrier:HasAuthority()or not carrier:IsA(pawn_class)then
+    if not carrying_pawn(carrier)then
      samples[team]=nil
     else
-     local here=point(carrier)
+     local support=support_pawn(carrier)
+     local pc=player_controller(carrier,support)
+     local here=point(support)
      local last=samples[team]
-     local previous=last and last.address==carrier:GetAddress()
-      and last.name==carrier:GetFullName()and last.location or nil
+     local same_carrier=last and same(last.carrier,carrier) and
+      ((not last.pc and not pc) or same(last.pc,pc))
+     -- Carry the last valid point through a verified possession switch to
+     -- or from a vehicle, without inheriting a different player's sample.
+     local seat_transfer=last and same(last.pc,pc) and
+      (same(last.support,carrier) or same(last.carrier,support)
+       or (carrying_pawn(last.carrier) and same(support_pawn(last.carrier),support)))
+     local previous=(same_carrier or seat_transfer) and last.location or nil
      if inside(here)and not(crossed and previous and crossed(previous,here))then
-      samples[team]={address=carrier:GetAddress(),name=carrier:GetFullName(),location=here}
+      samples[team]={carrier=carrier,support=support,pc=pc,location=here}
      else
       samples[team]=nil
       flag:Drop(false,false,previous==nil)
@@ -190,6 +245,7 @@ return function(env)
       else
        report('MISSION_FLAG_LIMIT_RETURN|team='..team..'|reason=no_legal_carrier_sample')
       end
+      send_notice(pc,previous~=nil)
      end
     end
    end
