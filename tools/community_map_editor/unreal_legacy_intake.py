@@ -17,7 +17,8 @@ from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, PL
 from interior_geometry import MAX_GEOMETRY_BYTES
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
-from source_profiles import (ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION, ASCEND_PLACEMENT_ART_VERSION,
+from source_profiles import (ASCEND_CONVEX_COLLISION_VERSION, ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION,
+                             ASCEND_PLACEMENT_ART_VERSION,
                              ASCEND_SIMPLE_COLLISION_VERSION,
                              UNREAL_INTAKE_VERSIONS, UNREAL_PROFILES,
                              VENGEANCE_ART_INTAKE_VERSION, VENGEANCE_BSP_MATERIALS_VERSION,
@@ -479,7 +480,11 @@ def convert_unreal(source, output, metadata=None):
         version = ASCEND_MODEL_ART_VERSION if mesh_artwork else ASCEND_MESH_INTAKE_VERSION
         if mesh_artwork and placement_models:
             version = ASCEND_PLACEMENT_ART_VERSION
-        if any("simple" in mesh["collision"] for mesh in mesh_docs.values()):
+        simple_shapes = [shape for mesh in mesh_docs.values()
+                         for shape in mesh["collision"].get("simple", {}).get("shapes", ())]
+        if any(shape["kind"] == "convex" for shape in simple_shapes):
+            version = ASCEND_CONVEX_COLLISION_VERSION
+        elif simple_shapes:
             version = ASCEND_SIMPLE_COLLISION_VERSION
     if paint.masks:
         version = VENGEANCE_PAINT_INTAKE_VERSION

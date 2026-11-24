@@ -12,8 +12,8 @@ from interior_lighting import LIGHTING_INDEX, LIGHTMAP_FILE, MAX_LIGHTMAP_BYTES,
 from mission_weather import WEATHER_FILE, mission_weather
 from native_terrain_paint import MAX_PAINT_BYTES, MAX_PAINT_LAYERS, MAX_PAINT_PNG_BYTES, PAINT_FILE, decode_mask
 from sky_intake import MAX_SKIES, MAX_SKY_BYTES, MAX_SKY_SLOTS, SKY_INDEX, SKY_PNG, validate_sky_artwork
-from source_profiles import (ASCEND, ASCEND_ART_VERSIONS, ASCEND_PLACEMENT_ART_VERSION, ASCEND_PRIVATE_MESH_VERSIONS,
-                             ASCEND_SIMPLE_COLLISION_VERSION,
+from source_profiles import (ASCEND, ASCEND_ART_VERSIONS, ASCEND_COLLISION_VERSIONS, ASCEND_CONVEX_COLLISION_VERSION,
+                             ASCEND_PLACEMENT_ART_VERSION, ASCEND_PRIVATE_MESH_VERSIONS,
                              BRUSH_PREVIEW_REFERENCE, NAMES, T2,
                              UNREAL_INTAKE_VERSION,
                              UNREAL_INTAKE_VERSIONS, VENGEANCE, VENGEANCE_ART_INTAKE_VERSION,
@@ -51,7 +51,7 @@ def intake_filename(name, version):
                 or INTERIOR_FILE.fullmatch(name)
                 or version in (*VENGEANCE_TERRAIN_VERSIONS, *VENGEANCE_MODEL_VERSIONS) and PAINT_FILE.fullmatch(name)
                 or version in (VENGEANCE_ART_INTAKE_VERSION, *VENGEANCE_MODEL_VERSIONS) and ART_FILE.fullmatch(name)
-                or version in (*VENGEANCE_MODEL_VERSIONS, *ASCEND_ART_VERSIONS, ASCEND_SIMPLE_COLLISION_VERSION)
+                or version in (*VENGEANCE_MODEL_VERSIONS, *ASCEND_ART_VERSIONS, *ASCEND_COLLISION_VERSIONS)
                 and (name == TEXTURE_INDEX or TEXTURE_FILE.fullmatch(name)))
     if 11 <= version <= 21:
         return name in {"objects.json", "terrain.json", "height.png", "minimap.png"} or (
@@ -74,7 +74,7 @@ def max_intake_files(version):
     if version in UNREAL_INTAKE_VERSIONS:
         if version in VENGEANCE_MODEL_VERSIONS:
             return 6 + MAX_INTAKE_INTERIORS + 2 * MAX_PAINT_LAYERS + MAX_TEXTURES
-        if version in (*ASCEND_ART_VERSIONS, ASCEND_SIMPLE_COLLISION_VERSION):
+        if version in (*ASCEND_ART_VERSIONS, *ASCEND_COLLISION_VERSIONS):
             return 6 + MAX_INTAKE_INTERIORS + MAX_TEXTURES
         return (5 + MAX_INTAKE_INTERIORS + (MAX_PAINT_LAYERS if version in VENGEANCE_TERRAIN_VERSIONS else 0)
                 + (MAX_PAINT_LAYERS if version == VENGEANCE_ART_INTAKE_VERSION else 0))
@@ -629,7 +629,8 @@ def load_intake(manifest):
     unreal = header["format"] in UNREAL_INTAKE_VERSIONS
     native_models = header["format"] in VENGEANCE_MODEL_VERSIONS
     ascend_art = header["format"] in ASCEND_ART_VERSIONS
-    ascend_simple_collision = header["format"] == ASCEND_SIMPLE_COLLISION_VERSION
+    ascend_simple_collision = header["format"] in ASCEND_COLLISION_VERSIONS
+    ascend_convex = header["format"] == ASCEND_CONVEX_COLLISION_VERSION
     ascend_placement_art = header["format"] == ASCEND_PLACEMENT_ART_VERSION
     brush_intake = header["format"] in VENGEANCE_BRUSH_VERSIONS
     shader_inputs = header["format"] in VENGEANCE_EXTENDED_SHADER_VERSIONS
@@ -697,7 +698,7 @@ def load_intake(manifest):
         interior_versions += ASCEND_PRIVATE_MESH_VERSIONS
     model_files = validate_model_index(header, inventory, field="interiors", review_field="interior_review",
                                        pattern=INTERIOR_FILE, prefix=interior_prefix, supported=interior_versions,
-                                       required=(4, 15, 16, 17, ASCEND_PLACEMENT_ART_VERSION, ASCEND_SIMPLE_COLLISION_VERSION))
+                                       required=(4, 15, 16, 17, ASCEND_PLACEMENT_ART_VERSION, *ASCEND_COLLISION_VERSIONS))
     model_files.update(validate_model_index(header, inventory, field="shapes", review_field="shape_review",
                                            pattern=SHAPE_FILE, prefix=("tsstatic:", "staticshape:"),
                                            supported=(*range(5, 11), *range(18, 22)),
@@ -733,6 +734,7 @@ def load_intake(manifest):
     vengeance_mesh_files = set()
     brush_files = set()
     has_simple_collision = False
+    has_convex = False
     for name, digest in inventory.items():
         if not intake_filename(name, header["format"]):
             raise ValueError("Unexpected intake filename.")
@@ -770,10 +772,15 @@ def load_intake(manifest):
                 if not compatible or not receipt_matches or model_files[name] != "unrealmesh:" + path.casefold():
                     raise ValueError("Static mesh does not match its Unreal package source.")
                 if model_format == ASCEND_STATIC_MESH:
-                    if "simple" in geometry["collision"]:
+                    simple = geometry["collision"].get("simple")
+                    if simple:
                         if not ascend_simple_collision:
-                            raise ValueError("Ascend simple collision requires intake version 41.")
+                            raise ValueError("Ascend simple collision requires intake version 41 or later.")
                         has_simple_collision = True
+                        if any(shape["kind"] == "convex" for shape in simple["shapes"]):
+                            if not ascend_convex:
+                                raise ValueError("Ascend convex collision requires intake version 42.")
+                            has_convex = True
                     if ascend_art or ascend_simple_collision and has_textures:
                         slots[name] = {str(slot) for slot in material_slots(geometry)}
                 if model_format == VENGEANCE_STATIC_MESH:
@@ -855,6 +862,8 @@ def load_intake(manifest):
         raise ValueError("Vengeance static mesh intake requires placed mesh geometry.")
     if ascend_simple_collision and not has_simple_collision:
         raise ValueError("Ascend collision intake requires authored simple shapes.")
+    if ascend_convex and not has_convex:
+        raise ValueError("Ascend convex collision intake requires an authored hull.")
     if ascend_simple_collision and has_textures and isinstance(docs[TEXTURE_INDEX], dict):
         ascend_placement_art = any(key.startswith("placement-") for key in docs[TEXTURE_INDEX])
     if has_textures and not ascend_placement_art:

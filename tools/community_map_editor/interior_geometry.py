@@ -10,6 +10,7 @@ from t1_dts_motion import validate_motion
 
 
 MAX_GEOMETRY_BYTES = 16 * 1024 * 1024
+MAX_CONVEX_POINTS = 256
 TOOL_MATERIALS = {'null', 'origin', 'trigger', 'forcefield'}
 VENGEANCE_BSP = 8
 ASCEND_STATIC_MESH = 9
@@ -109,6 +110,9 @@ def validate_simple_collision(simple, triangles):
             or not isinstance(simple['shapes'], list) or not 1 <= len(simple['shapes']) <= 128):
         raise ValueError('Invalid Ascend simple collision.')
     for shape in simple['shapes']:
+        if isinstance(shape, dict) and shape.get('kind') == 'convex':
+            validate_convex_hull(shape)
+            continue
         if (not isinstance(shape, dict) or shape.keys() != {'kind', 'center_m', 'axes', 'size_m'}
                 or shape['kind'] not in ('sphere', 'box', 'capsule')
                 or not isinstance(shape['center_m'], list) or len(shape['center_m']) != 3
@@ -129,6 +133,27 @@ def validate_simple_collision(simple, triangles):
         cross = (x[1]*y[2] - x[2]*y[1], x[2]*y[0] - x[0]*y[2], x[0]*y[1] - x[1]*y[0])
         if sum(a * b for a, b in zip(cross, z)) < .999:
             raise ValueError('Invalid Ascend simple collision handedness.')
+
+
+def validate_convex_hull(shape):
+    vertices = shape.get('vertices_m')
+    if (shape.keys() != {'kind', 'vertices_m'} or not valid_vertices(vertices, MAX_CONVEX_POINTS)
+            or len(vertices) < 4 or len({tuple(point) for point in vertices}) != len(vertices)):
+        raise ValueError('Invalid Ascend convex hull vertices.')
+    origin = vertices[0]
+    edges = [tuple(b - a for a, b in zip(origin, point)) for point in vertices[1:]]
+    axis = max(edges, key=squared_length)
+    x, y, z = axis
+    perpendiculars = [(y * c - z * b, z * a - x * c, x * b - y * a) for a, b, c in edges]
+    normal = max(perpendiculars, key=squared_length)
+    length = squared_length(axis) ** .5
+    height = max(abs(sum(a * b for a, b in zip(normal, edge))) for edge in edges)
+    if height <= 1e-8 * length ** 3:
+        raise ValueError('Ascend convex hull has insufficient volume.')
+
+
+def squared_length(vector):
+    return sum(value * value for value in vector)
 
 
 def valid_vertices(vertices, limit):

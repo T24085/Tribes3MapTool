@@ -1,8 +1,10 @@
-"""Read tagged UE3 collision primitives on an Ascend static mesh body."""
+"""Read tagged UE3 collision on an Ascend static mesh body."""
 
 import math
+import struct
 
 from ascend_materials import properties, tag_data, typed_tag
+from interior_geometry import MAX_CONVEX_POINTS
 from unreal_binary_scene import property_tag
 
 
@@ -11,6 +13,7 @@ SHAPES = {
     "boxelems": ("box", ("x", "y", "z")),
     "sphylelems": ("capsule", ("radius", "length")),
 }
+CONVEX_CACHES = {"permutedvertexdata", "facetridata", "edgedirections", "facenormaldirections", "faceplanedata"}
 IDENTITY = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
 
 
@@ -78,6 +81,32 @@ def primitive(kind, dimensions, record, stream, names, units):
     return dict(kind=kind, center_m=center, axes=axes, size_m=sizes)
 
 
+def convex_elements(tag, stream, names, units, remaining):
+    cursor = tag_data(stream, tag)
+    hulls = []
+    for _ in range(cursor.count(remaining)):
+        record = fields(cursor, names)
+        if record.keys() - {"vertexdata", "elembox", *CONVEX_CACHES}:
+            raise ValueError("Unsupported Ascend convex hull fields.")
+        vertex_tag = typed_tag(record.values(), "vertexdata", "ArrayProperty")
+        if not vertex_tag:
+            raise ValueError("Ascend convex hull is missing its authored vertices.")
+        for key in record.keys() & CONVEX_CACHES:
+            typed_tag(record.values(), key, "ArrayProperty")
+        if "elembox" in record:
+            typed_tag(record.values(), "elembox", "StructProperty", "box")
+        vertices = tag_data(stream, vertex_tag)
+        count = vertices.count(MAX_CONVEX_POINTS)
+        if count < 4 or count * 12 != vertices.limit - vertices.offset:
+            raise ValueError("Invalid Ascend convex hull vertex array.")
+        points = [[value / units for value in point]
+                  for point in struct.iter_unpack("<3f", vertices.take(count * 12))]
+        hulls.append(dict(kind="convex", vertices_m=points))
+    if cursor.offset != cursor.limit:
+        raise ValueError("Unexpected Ascend convex hull array length.")
+    return hulls
+
+
 def read_simple_collision(index, mesh_tags, has_triangles, report, stream, objects, units):
     if not index:
         return None
@@ -94,9 +123,6 @@ def read_simple_collision(index, mesh_tags, has_triangles, report, stream, objec
         raise ValueError("Unsupported Ascend aggregate collision fields.")
     if enabled(arrays.values(), "bskipcloseandparallelchecks"):
         raise ValueError("Ascend aggregate collision uses custom contact handling.")
-    convex = typed_tag(arrays.values(), "convexelems", "ArrayProperty")
-    if convex and (convex["size"] != 4 or tag_data(stream, convex).count(128)):
-        raise ValueError("Ascend BodySetup convex collision requires author review.")
     shapes = []
     for name, (kind, dimensions) in SHAPES.items():
         array = typed_tag(arrays.values(), name, "ArrayProperty")
@@ -107,6 +133,9 @@ def read_simple_collision(index, mesh_tags, has_triangles, report, stream, objec
             shapes.append(primitive(kind, dimensions, fields(cursor, names), stream, names, units))
         if cursor.offset != cursor.limit:
             raise ValueError("Unexpected Ascend collision shape array length.")
+    convex = typed_tag(arrays.values(), "convexelems", "ArrayProperty")
+    if convex:
+        shapes.extend(convex_elements(convex, stream, names, units, 128 - len(shapes)))
     if not shapes:
         return None
     if (enabled(tags, "bnocollision") or not enabled(tags, "bblockzeroextent", True)

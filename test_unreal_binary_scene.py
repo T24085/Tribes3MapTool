@@ -119,7 +119,7 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
         assert modern and mesh_artwork
         collision_names = ("RB_BodySetup", "BodySetup", "AggGeom", "KAggregateGeom", "SphereElems", "BoxElems",
                            "SphylElems", "TM", "Matrix", "X", "Y", "Z", "Radius", "Length",
-                           "UseSimpleLineCollision", "bNoRBCollision")
+                           "UseSimpleLineCollision", "bNoRBCollision", "ConvexElems", "VertexData", "FaceTriData")
         strings = tuple(dict.fromkeys((*strings, *collision_names)))
 
     def pack(form, *values):
@@ -582,15 +582,25 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                           ("SphereElems", element((500, 0, 100), (("Radius", 25),))),
                           ("SphylElems", element((750, 0, 100), (("Radius", 20), ("Length", 100)),
                                                  restricted=ascend_body == "mixed-flags")))
-                aggregate = b"".join(prop(key, "ArrayProperty", part) for key, part in shapes) + name("None")
-                body_prop = prop("AggGeom", "StructProperty", aggregate, "KAggregateGeom")
+                aggregate = b"".join(prop(key, "ArrayProperty", part) for key, part in shapes)
+                if ascend_body.startswith("convex-"):
+                    hulls = []
+                    for x in (1000, 1200):
+                        peak = (x + 20, 20, 50) if ascend_body == "convex-invalid" and x == 1200 else (x, 0, 150)
+                        points = (x, 0, 50, x + 80, 0, 50, x, 80, 50, *peak)
+                        hull = prop("VertexData", "ArrayProperty", pack("i12f", 4, *points))
+                        hull += prop("FaceTriData", "ArrayProperty", pack("4i", 3, 0, 1, 2))
+                        hulls.append(hull + name("None"))
+                    aggregate += prop("ConvexElems", "ArrayProperty", pack("i", 2) + b"".join(hulls))
+                body_prop = prop("AggGeom", "StructProperty", aggregate + name("None"), "KAggregateGeom")
                 mesh_index_in_package = len(art_exports) + 1
                 types.append(("Core", "Class", -1, "RB_BodySetup"))
                 tail = mesh[len(object_bytes()):]
                 tail = tail[:28] + pack("i", mesh_index_in_package + 1) + tail[32:]
-                if ascend_body == "simple-only":
+                if ascend_body in ("simple-only", "convex-simple"):
                     tail = tail[:64] + pack("2i", 8, 0) + tail[80:]
-                fields = [prop("UseSimpleLineCollision", "BoolProperty", b"\x00")] if ascend_body == "both" else []
+                fields = ([prop("UseSimpleLineCollision", "BoolProperty", b"\x00")]
+                          if ascend_body in ("both", "convex-both") else [])
                 mesh = object_bytes(*fields) + tail
                 art_exports.append((-2, 0, "OriginalMesh", 0, mesh, 3))
                 art_exports.append((-len(types), mesh_index_in_package, "BodySetup", 0, object_bytes(body_prop), 3))
@@ -1511,6 +1521,38 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 public, _, _ = load_intake(unpack_intake(export_public_layout(manifest, root / "Share.zip"), root / "Public"))
                 self.assertEqual(public["format"], 22)
                 self.assertNotIn(model, public["files"])
+
+    def test_ascend_convex_collision_preserves_separate_hulls_and_rejects_flat_aggregates(self):
+        for case in ("convex-both", "convex-simple", "convex-invalid"):
+            with self.subTest(case=case), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = binary_draft_fixture(root, "ascend", static_mesh="companion", mesh_artwork=True,
+                                             ascend_shader="direct", ascend_component_materials="valid", ascend_body=case)
+                manifest = convert_unreal(source, root / "Intakes")
+                header, _, rows = load_intake(manifest)
+                filename, = header["interiors"].values()
+                collision = json.loads(manifest.with_name(filename).read_bytes())["collision"]
+                self.assertEqual(len(collision["triangles"]), int(case != "convex-simple"))
+                if case == "convex-invalid":
+                    self.assertEqual(header["format"], 40)
+                    self.assertNotIn("simple", collision)
+                    self.assertTrue(any("insufficient volume" in row["reason"] for row in rows))
+                    continue
+                self.assertEqual(header["format"], 42)
+                simple = collision["simple"]
+                self.assertEqual(simple["mode"], "both" if case == "convex-both" else "simple")
+                self.assertEqual([shape["kind"] for shape in simple["shapes"]], ["sphere", "box", "capsule", "convex", "convex"])
+                self.assertEqual([shape["vertices_m"] for shape in simple["shapes"][3:]], [
+                    [[20, 0, 1], [21.6, 0, 1], [20, 1.6, 1], [20, 0, 3]],
+                    [[24, 0, 1], [25.6, 0, 1], [24, 1.6, 1], [24, 0, 3]],
+                ])
+                public, _, _ = load_intake(unpack_intake(export_public_layout(manifest, root / "Share.zip"), root / "Public"))
+                self.assertEqual(public["format"], 22)
+                self.assertNotIn(filename, public["files"])
+                header["format"] = 41
+                manifest.write_text(json.dumps(header), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "requires intake version 42"):
+                    load_intake(manifest)
 
     def test_ascend_reports_cycles_and_nondirect_diffuse(self):
         for mode, reason in (("cycle", "parent chain contains a cycle"), ("masked-output", "not a direct RGB texture sample")):

@@ -398,9 +398,12 @@ both. A mesh's private geometry file records this under
 `collision.simple`, with a `mode` of `simple` or `both` and a list of shapes
 in metres. Capsules store radius and cylinder length.
 
-Convex BodySetup hulls, mixed collision flags, lower-detail models, and
-ambiguous component placements still need author review. Public layout
-exports omit the mesh files and source package receipts.
+[Intake version 42](intake-v42.schema.json) also preserves convex hulls.
+Each hull uses its own saved vertices in metres, so gaps between hulls
+stay open. Unreal rebuilds the derived physics data from those vertices.
+Unusable hulls, mixed collision flags, lower-detail models, and ambiguous
+component placements appear in Object Review. Public layout exports
+omit the mesh files and source package receipts.
 
 ### Import terrain from a native map package
 

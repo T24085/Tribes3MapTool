@@ -48,14 +48,35 @@ def material_slot_label(source_slot, material):
     return f'{source_slot:03}_{label}'
 
 
+def convex_element(vertices_m):
+    points = [tuple(value * 100 for value in point) for point in vertices_m]
+    axes = list(zip(*points))
+
+    def vector_text(point):
+        x, y, z = point
+        return f'(X={x:.17g},Y={y:.17g},Z={z:.17g})'
+
+    vertices = ','.join(map(vector_text, points))
+    lower = vector_text(map(min, axes))
+    upper = vector_text(map(max, axes))
+    # UE 5.3 exposes whole-struct import for the convex data and bounds.
+    item = unreal.KConvexElem()
+    if not item.import_text(f'(VertexData=({vertices}),ElemBox=(Min={lower},Max={upper},IsValid=True))'):
+        raise ValueError('Unreal could not import the authored convex hull.')
+    return item
+
+
 def install_simple_collision(asset, simple):
     body = asset.get_editor_property('body_setup')
     aggregate = unreal.KAggregateGeom()
-    spheres, boxes, capsules = [], [], []
+    spheres, boxes, capsules, hulls = [], [], [], []
     for shape in simple['shapes']:
+        kind = shape['kind']
+        if kind == 'convex':
+            hulls.append(convex_element(shape['vertices_m']))
+            continue
         center = unreal.Vector(*(100 * value for value in shape['center_m']))
         sizes = [100 * value for value in shape['size_m']]
-        kind = shape['kind']
         if kind == 'sphere':
             item = unreal.KSphereElem()
             fields = {'radius': sizes[0]}
@@ -78,7 +99,9 @@ def install_simple_collision(asset, simple):
     aggregate.set_editor_property('sphere_elems', spheres)
     aggregate.set_editor_property('box_elems', boxes)
     aggregate.set_editor_property('sphyl_elems', capsules)
+    aggregate.set_editor_property('convex_elems', hulls)
     body.set_editor_property('agg_geom', aggregate)
+    return bool(hulls)
 
 
 def build_asset(data, digest, package, lighting=None, texture_sizes=None, proxy=None, surface_materials=None,
@@ -138,10 +161,12 @@ def build_asset(data, digest, package, lighting=None, texture_sizes=None, proxy=
         asset.set_editor_property('static_materials', material_slots)
         for index, surface in (surface_materials or {}).items():
             asset.set_material(index, surface)
-        if proxy:
+        convex = simple and install_simple_collision(asset, simple)
+        if convex:
+            # Recreate cooked convex physics even if the complex proxy is unchanged.
+            asset.set_editor_property('complex_collision_mesh', proxy, unreal.PropertyAccessChangeNotifyMode.ALWAYS)
+        elif proxy:
             asset.set_editor_property('complex_collision_mesh', proxy)
-        if simple:
-            install_simple_collision(asset, simple)
         if convex_hull is not None and not unreal.CommunityMapMotionLibrary.set_convex_volume_mesh(
                 asset, [unreal.Vector(*point) for point in convex_hull]):
             raise ValueError("Unreal could not save the exact elevator collision hull.")
