@@ -791,7 +791,8 @@ class DraftImport:
                 if record and any(alarm is not None and alarm != normal for _, _, _, normal, alarm, _ in record['surfaces']):
                     group = scopes.get(row['id'])
                     lighting[row['id']] = (source_hash, group if group in generator_groups else None)
-        native_modes = {path: (geometry["render"], bool(geometry["collision"]["triangles"]), geometry["format"])
+        native_modes = {path: (geometry["render"], bool(geometry["collision"]["triangles"]
+                                                       or geometry["collision"].get("simple")), geometry["format"])
                         for path, (geometry, *_rest) in self.generated.items() if "render" in geometry}
         triggers = {}
         place_static_objects(editor.ACTORS, planned, meshes, material_overrides, lighting, native_modes,

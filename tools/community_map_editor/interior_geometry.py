@@ -86,17 +86,49 @@ def validate_geometry(data):
             raise ValueError('Invalid interior triangle, material, or UV.')
     if 'collision' in data:
         collision = data['collision']
-        if (not isinstance(collision, dict) or set(collision) != {'detail', 'vertices_m', 'triangles'}
+        standard_fields = {'detail', 'vertices_m', 'triangles'}
+        allowed = (standard_fields, standard_fields | {'simple'}) if data['format'] == ASCEND_STATIC_MESH else (standard_fields,)
+        if (not isinstance(collision, dict) or set(collision) not in allowed
                 or type(collision['detail']) is not int or not 0 <= collision['detail'] < 1024
                 or not valid_vertices(collision['vertices_m'], point_limit)
                 or not isinstance(collision['triangles'], list) or not (0 if native and data['render'] else 1) <= len(collision['triangles']) <= 250_000
                 or not all(valid_face(face, len(collision['vertices_m'])) for face in collision['triangles'])):
             raise ValueError('Invalid authored DTS collision detail.')
+        if 'simple' in collision:
+            validate_simple_collision(collision['simple'], collision['triangles'])
     if 'animation' in data:
         validate_motion(data['animation'], source['sequences'])
         if data['format'] == 7 and not animated_only_slots(data):
             raise ValueError('A version 7 DTS shape needs at least one animated-only material slot.')
     return data
+
+
+def validate_simple_collision(simple, triangles):
+    if (not isinstance(simple, dict) or simple.keys() != {'mode', 'shapes'}
+            or simple['mode'] not in ('simple', 'both') or simple['mode'] == 'both' and not triangles
+            or not isinstance(simple['shapes'], list) or not 1 <= len(simple['shapes']) <= 128):
+        raise ValueError('Invalid Ascend simple collision.')
+    for shape in simple['shapes']:
+        if (not isinstance(shape, dict) or shape.keys() != {'kind', 'center_m', 'axes', 'size_m'}
+                or shape['kind'] not in ('sphere', 'box', 'capsule')
+                or not isinstance(shape['center_m'], list) or len(shape['center_m']) != 3
+                or not all(finite(value, 20_000) for value in shape['center_m'])
+                or not isinstance(shape['size_m'], list)
+                or len(shape['size_m']) != {'sphere': 1, 'box': 3, 'capsule': 2}[shape['kind']]
+                or not all(finite(value, 20_000) and (value > 0 or shape['kind'] == 'capsule' and index == 1 and value == 0)
+                           for index, value in enumerate(shape['size_m']))):
+            raise ValueError('Invalid Ascend simple collision dimensions.')
+        axes = shape['axes']
+        if (not isinstance(axes, list) or len(axes) != 3
+                or not all(isinstance(axis, list) and len(axis) == 3 and all(finite(v, 1.0001) for v in axis)
+                           for axis in axes)
+                or any(abs(sum(a * b for a, b in zip(left, right)) - (i == j)) > 1e-4
+                       for i, left in enumerate(axes) for j, right in enumerate(axes))):
+            raise ValueError('Invalid Ascend simple collision axes.')
+        x, y, z = axes
+        cross = (x[1]*y[2] - x[2]*y[1], x[2]*y[0] - x[0]*y[2], x[0]*y[1] - x[1]*y[0])
+        if sum(a * b for a, b in zip(cross, z)) < .999:
+            raise ValueError('Invalid Ascend simple collision handedness.')
 
 
 def valid_vertices(vertices, limit):

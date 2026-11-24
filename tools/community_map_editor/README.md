@@ -390,9 +390,17 @@ as large as the available inline mip. If a cache entry cannot be read,
 Object Review shows the reason and the draft uses available inline
 artwork. The private intake records both cache checksums when it uses a
 cached texture.
-Simple BodySetup collision, lower-detail models, and ambiguous component
-placements still need author review. Public layout exports omit the mesh
-files and source package receipts.
+[Intake version 41](intake-v41.schema.json) preserves tagged sphere, box,
+and capsule collision from a placed mesh's BodySetup. Simple shapes keep
+their centers, orientation, and dimensions. When the source uses simple
+movement collision and per-polygon line collision, the draft preserves
+both. A mesh's private geometry file records this under
+`collision.simple`, with a `mode` of `simple` or `both` and a list of shapes
+in metres. Capsules store radius and cylinder length.
+
+Convex BodySetup hulls, mixed collision flags, lower-detail models, and
+ambiguous component placements still need author review. Public layout
+exports omit the mesh files and source package receipts.
 
 ### Import terrain from a native map package
 

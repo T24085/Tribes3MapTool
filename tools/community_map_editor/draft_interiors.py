@@ -33,7 +33,8 @@ def asset_mesh(data, digest, lighting=None, texture_sizes=None, *, surface_mater
     package = mesh_package(data, digest, brush_preview=brush_preview)
     collision = data.get('collision')
     proxy = None
-    if collision and collision['triangles'] and data.get('render', True):
+    simple = collision.get('simple') if collision else None
+    if collision and collision['triangles'] and data.get('render', True) and (not simple or simple['mode'] == 'both'):
         collision_format = data['format'] if data['format'] in UNREAL_GEOMETRY else 5
         proxy_data = dict(format=collision_format, source=data['source'], vertices_m=collision['vertices_m'], materials=['Collision'],
                           triangles=[[0, *face, 0, 0, 0, 0, 0, 0] for face in collision['triangles']])
@@ -45,6 +46,39 @@ def material_slot_label(source_slot, material):
     name = material.replace('\\', '/').rsplit('/', 1)[-1]
     label = re.sub(r'[^A-Za-z0-9_]', '_', name)[:64]
     return f'{source_slot:03}_{label}'
+
+
+def install_simple_collision(asset, simple):
+    body = asset.get_editor_property('body_setup')
+    aggregate = unreal.KAggregateGeom()
+    spheres, boxes, capsules = [], [], []
+    for shape in simple['shapes']:
+        center = unreal.Vector(*(100 * value for value in shape['center_m']))
+        sizes = [100 * value for value in shape['size_m']]
+        kind = shape['kind']
+        if kind == 'sphere':
+            item = unreal.KSphereElem()
+            fields = {'radius': sizes[0]}
+            spheres.append(item)
+        else:
+            x, y, _ = shape['axes']
+            rotation = unreal.MathLibrary.make_rot_from_xy(unreal.Vector(*x), unreal.Vector(*y))
+            if kind == 'box':
+                item = unreal.KBoxElem()
+                fields = {'x': sizes[0], 'y': sizes[1], 'z': sizes[2]}
+                boxes.append(item)
+            else:
+                item = unreal.KSphylElem()
+                fields = {'radius': sizes[0], 'length': sizes[1]}
+                capsules.append(item)
+            fields['rotation'] = rotation
+        item.set_editor_property('center', center)
+        for name, value in fields.items():
+            item.set_editor_property(name, value)
+    aggregate.set_editor_property('sphere_elems', spheres)
+    aggregate.set_editor_property('box_elems', boxes)
+    aggregate.set_editor_property('sphyl_elems', capsules)
+    body.set_editor_property('agg_geom', aggregate)
 
 
 def build_asset(data, digest, package, lighting=None, texture_sizes=None, proxy=None, surface_materials=None,
@@ -76,10 +110,16 @@ def build_asset(data, digest, package, lighting=None, texture_sizes=None, proxy=
             material_id=len(slots))
         suffix = f'_N{normal}_A{alarm}' if light_uv else ''
         slots.append(material_slot_label(source_slot, material) + suffix)
-    has_collision = 'collision' not in data or bool(data['collision']['triangles'])
+    collision = data.get('collision')
+    simple = collision.get('simple') if collision else None
+    has_collision = collision is None or bool(collision['triangles'] or simple)
+    mode = unreal.CollisionTraceFlag.CTF_USE_COMPLEX_AS_SIMPLE
+    if simple:
+        mode = (unreal.CollisionTraceFlag.CTF_USE_SIMPLE_AND_COMPLEX if simple['mode'] == 'both'
+                else unreal.CollisionTraceFlag.CTF_USE_SIMPLE_AS_COMPLEX)
     options = unreal.GeometryScriptCreateNewStaticMeshAssetOptions(
         enable_recompute_normals=True, enable_recompute_tangents=True, enable_collision=has_collision,
-        collision_mode=unreal.CollisionTraceFlag.CTF_USE_COMPLEX_AS_SIMPLE)
+        collision_mode=mode)
     asset, status = unreal.GeometryScript_NewAssetUtils.create_new_static_mesh_asset_from_mesh(mesh, package, options)
     if not isinstance(asset, unreal.StaticMesh) or status != unreal.GeometryScriptOutcomePins.SUCCESS:
         raise ValueError('Unreal could not build the source model mesh.')
@@ -100,6 +140,8 @@ def build_asset(data, digest, package, lighting=None, texture_sizes=None, proxy=
             asset.set_material(index, surface)
         if proxy:
             asset.set_editor_property('complex_collision_mesh', proxy)
+        if simple:
+            install_simple_collision(asset, simple)
         if convex_hull is not None and not unreal.CommunityMapMotionLibrary.set_convex_volume_mesh(
                 asset, [unreal.Vector(*point) for point in convex_hull]):
             raise ValueError("Unreal could not save the exact elevator collision hull.")

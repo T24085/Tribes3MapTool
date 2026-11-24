@@ -18,6 +18,7 @@ from interior_geometry import MAX_GEOMETRY_BYTES
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
 from source_profiles import (ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION, ASCEND_PLACEMENT_ART_VERSION,
+                             ASCEND_SIMPLE_COLLISION_VERSION,
                              UNREAL_INTAKE_VERSIONS, UNREAL_PROFILES,
                              VENGEANCE_ART_INTAKE_VERSION, VENGEANCE_BSP_MATERIALS_VERSION,
                              VENGEANCE_DOOR_VERSION, VENGEANCE_ELEVATOR_LINK_VERSION, VENGEANCE_ELEVATOR_VERSION,
@@ -287,7 +288,8 @@ def convert_unreal(source, output, metadata=None):
         else:
             rtc = AscendTextureCache(source.resolve(strict=True).parent)
             artwork = PackageMaterials(companions, partial(resolve_ascend_material, rtc=rtc), "Ascend")
-            read_meshes = partial(read_ascend_meshes, artwork=artwork)
+            collision_review = {}
+            read_meshes = partial(read_ascend_meshes, artwork=artwork, collision_review=collision_review)
         with open_package(source, game) as (report, stream):
             scene = actor_scene(report, stream, units)
             assignments = project_markers(scene, settings["teams"])
@@ -398,6 +400,8 @@ def convert_unreal(source, output, metadata=None):
                 row["reason"] = "Imported static mesh geometry, collision and available source artwork."
             else:
                 row["reason"] = "Imported static mesh geometry and collision. Assign destination materials as needed."
+            if game == "ascend" and reference in collision_review:
+                row["reason"] += " · " + collision_review[reference]
         elif reference in mesh_issues:
             row["reason"] += " · " + mesh_issues[reference]
     placement_models = {}
@@ -466,7 +470,7 @@ def convert_unreal(source, output, metadata=None):
                 "vengeance_bsp.py", "vengeance_materials.py", "vengeance_normal_maps.py", "vengeance_static_mesh.py", "vengeance_terrain.py",
                 "vengeance_terrain_layers.py", "vengeance_brushes.py", "vengeance_mover_plan.py", "vengeance_triggers.py"))
         else:
-            scripts.extend(Path(__file__).with_name(name) for name in ("ascend_static_mesh.py", "ascend_materials.py",
+            scripts.extend(Path(__file__).with_name(name) for name in ("ascend_static_mesh.py", "ascend_collision.py", "ascend_materials.py",
                                                                       "ascend_texture_cache.py"))
     if native:
         scripts.append(Path(__file__).with_name("unreal_native_terrain.py"))
@@ -475,6 +479,8 @@ def convert_unreal(source, output, metadata=None):
         version = ASCEND_MODEL_ART_VERSION if mesh_artwork else ASCEND_MESH_INTAKE_VERSION
         if mesh_artwork and placement_models:
             version = ASCEND_PLACEMENT_ART_VERSION
+        if any("simple" in mesh["collision"] for mesh in mesh_docs.values()):
+            version = ASCEND_SIMPLE_COLLISION_VERSION
     if paint.masks:
         version = VENGEANCE_PAINT_INTAKE_VERSION
     terrain_art = any("file" in item for item in paint.artwork.values())

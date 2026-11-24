@@ -4,6 +4,7 @@ from hashlib import sha256
 from pathlib import Path
 import struct
 
+from ascend_collision import read_simple_collision
 from interior_geometry import ASCEND_STATIC_MESH, validate_geometry
 from unreal_binary_scene import read_properties
 from unreal_package_reader import Cursor
@@ -96,9 +97,11 @@ def decode_lod(cursor, objects, units_per_m):
 
 def read_mesh(report, stream, export, objects, units_per_m, decoder_sha):
     summary = report["summary"]
-    _, _, _, start = read_properties(stream, summary, export, report["names"], objects)
+    tags, _, _, start = read_properties(stream, summary, export, report["names"], objects)
     cursor = Cursor(stream, start, export["serial_offset"] + export["serial_bytes"], summary["endian"])
-    cursor.take(56)  # Mesh bounds, BodySetup reference and kDOP root bounds.
+    cursor.take(28)  # FBoxSphereBounds
+    body = cursor.index(True)
+    cursor.take(24)  # kDOP root bounds
     bulk_array(cursor, 6, MAX_TRIANGLES * 2)
     kdop = bulk_array(cursor, 8, MAX_TRIANGLES)
     version, lods = cursor.fields("2i")
@@ -109,19 +112,29 @@ def read_mesh(report, stream, export, objects, units_per_m, decoder_sha):
                  if len({a, b, c}) == 3]
     source = dict(name=report["source"]["name"], sha256=report["source"]["sha256"],
                   decoder_sha256=decoder_sha, export=export["index"], object_path=export["object_path"])
-    geometry = validate_geometry(dict(format=ASCEND_STATIC_MESH, source=source, materials=materials,
-                                      vertices_m=vertices, triangles=triangles, render=True,
-                                      collision=dict(detail=0, vertices_m=vertices, triangles=collision)))
-    return geometry, slots
+    geometry = dict(format=ASCEND_STATIC_MESH, source=source, materials=materials,
+                    vertices_m=vertices, triangles=triangles, render=True,
+                    collision=dict(detail=0, vertices_m=vertices, triangles=collision))
+    issue = None
+    try:
+        simple = read_simple_collision(body, tags, bool(collision), report, stream, objects, units_per_m)
+        if simple:
+            geometry["collision"]["simple"] = simple
+            validate_geometry(geometry)
+    except ValueError as error:
+        geometry["collision"].pop("simple", None)
+        issue = str(error)
+    return validate_geometry(geometry), slots, issue
 
 
-def read_placed_meshes(report, stream, units_per_m, references, *, companion=False, artwork=None):
+def read_placed_meshes(report, stream, units_per_m, references, *, companion=False, artwork=None, collision_review=None):
     """Decode only exact StaticMesh references that the draft can actually place."""
     objects = {row["index"]: row for row in report["imports"] + report["exports"]}
     model_refs = {}
     models = {}
     issues = {}
-    decoder_sha = sha256(Path(__file__).read_bytes()).hexdigest()
+    script = Path(__file__)
+    decoder_sha = sha256(script.read_bytes() + script.with_name("ascend_collision.py").read_bytes()).hexdigest()
     package = Path(report["source"]["name"]).stem.casefold()
     for export in report["exports"]:
         if export["class_name"].casefold() != "staticmesh" or export["serial_bytes"] <= 0:
@@ -133,7 +146,9 @@ def read_placed_meshes(report, stream, units_per_m, references, *, companion=Fal
         try:
             if ref in model_refs or ref in issues:
                 raise ValueError("Multiple exports resolve to the same Ascend mesh path.")
-            geometry, slots = read_mesh(report, stream, export, objects, units_per_m, decoder_sha)
+            geometry, slots, review = read_mesh(report, stream, export, objects, units_per_m, decoder_sha)
+            if review and collision_review is not None:
+                collision_review[ref] = review
             model_refs[ref] = geometry
             models[ref] = (ref.removeprefix("unrealmesh:"), geometry, slots)
         except ValueError as error:

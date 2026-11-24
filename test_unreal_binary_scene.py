@@ -86,7 +86,7 @@ def vengeance_mesh_buffers():
 def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_terrain=False, bad_terrain_flag=False,
                          bsp_world=False, static_mesh=None, external_height=False, painted=False, source_artwork=False,
                          bsp_artwork=False, mesh_artwork=False, shader_inputs=False, surface_detail=False, brush_mover=False,
-                         ascend_shader=None, ascend_component_materials=None):
+                         ascend_shader=None, ascend_component_materials=None, ascend_body=None):
     exported, settings = unreal_draft_fixture(root, game)
     modern = game == "ascend"
     source = exported.with_suffix(".fmap" if modern else ".tvm")
@@ -115,6 +115,12 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
     if ascend_component_materials:
         assert modern and ascend_shader == "direct"
         strings = tuple(dict.fromkeys((*strings, "Materials")))
+    if ascend_body:
+        assert modern and mesh_artwork
+        collision_names = ("RB_BodySetup", "BodySetup", "AggGeom", "KAggregateGeom", "SphereElems", "BoxElems",
+                           "SphylElems", "TM", "Matrix", "X", "Y", "Z", "Radius", "Length",
+                           "UseSimpleLineCollision", "bNoRBCollision")
+        strings = tuple(dict.fromkeys((*strings, *collision_names)))
 
     def pack(form, *values):
         return struct.pack("<" + form, *values)
@@ -562,8 +568,35 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                 mesh = object_bytes() + ascend_mesh_lod((1, 2))
                 art_exports = [(-3, 0, "FixtureStone", 0, object_bytes(parameters("Base_Color")), 3),
                                (-3, 0, "FixtureGlass", 0, object_bytes(parameters("Normal")), 3)]
+            if ascend_body:
+                def element(center, sizes, *, angle=False, restricted=False):
+                    axes = (0, 1, 0, 0, -1, 0, 0, 0) if angle else (1, 0, 0, 0, 0, 1, 0, 0)
+                    matrix = pack("16f", *axes, 0, 0, 1, 0, *center, 1)
+                    fields = [prop("TM", "StructProperty", matrix, "Matrix")]
+                    fields.extend(prop(key, "FloatProperty", pack("f", size)) for key, size in sizes)
+                    if restricted:
+                        fields.append(prop("bNoRBCollision", "BoolProperty", b"\x01"))
+                    return pack("i", 1) + b"".join(fields) + name("None")
+
+                shapes = (("BoxElems", element((250, 0, 100), (("X", 100), ("Y", 40), ("Z", 40)), angle=True)),
+                          ("SphereElems", element((500, 0, 100), (("Radius", 25),))),
+                          ("SphylElems", element((750, 0, 100), (("Radius", 20), ("Length", 100)),
+                                                 restricted=ascend_body == "mixed-flags")))
+                aggregate = b"".join(prop(key, "ArrayProperty", part) for key, part in shapes) + name("None")
+                body_prop = prop("AggGeom", "StructProperty", aggregate, "KAggregateGeom")
+                mesh_index_in_package = len(art_exports) + 1
+                types.append(("Core", "Class", -1, "RB_BodySetup"))
+                tail = mesh[len(object_bytes()):]
+                tail = tail[:28] + pack("i", mesh_index_in_package + 1) + tail[32:]
+                if ascend_body == "simple-only":
+                    tail = tail[:64] + pack("2i", 8, 0) + tail[80:]
+                fields = [prop("UseSimpleLineCollision", "BoolProperty", b"\x00")] if ascend_body == "both" else []
+                mesh = object_bytes(*fields) + tail
+                art_exports.append((-2, 0, "OriginalMesh", 0, mesh, 3))
+                art_exports.append((-len(types), mesh_index_in_package, "BodySetup", 0, object_bytes(body_prop), 3))
+            else:
+                art_exports.append((-2, 0, "OriginalMesh", 0, mesh, 3))
             companion = source.with_name("Fixture.upk")
-            art_exports.append((-2, 0, "OriginalMesh", 0, mesh, 3))
             companion.write_bytes(build_package(game, strings, types, art_exports))
             settings["asset_packages"] = [companion.name, color.name]
             source.with_suffix(".import.json").write_text(json.dumps(settings), encoding="utf-8")
@@ -1444,6 +1477,40 @@ class UnrealBinarySceneTests(unittest.TestCase):
                     index = json.loads(manifest.with_name(TEXTURE_INDEX).read_bytes())
                     model, = header["interiors"].values()
                     self.assertEqual(index[f"placement-{deck['id']}"], {"0": index[model]["1"]})
+
+    def test_ascend_simple_collision_keeps_authored_shapes_and_triangle_query_modes(self):
+        for case in ("simple-only", "both", "mixed-flags"):
+            with self.subTest(case=case), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = binary_draft_fixture(root, "ascend", static_mesh="companion", mesh_artwork=True,
+                                             ascend_shader="direct", ascend_component_materials="valid", ascend_body=case)
+                if case == "simple-only":
+                    settings = source.with_suffix(".import.json")
+                    config = json.loads(settings.read_text(encoding="utf-8"))
+                    config["asset_packages"].remove("MeshColor.upk")
+                    settings.write_text(json.dumps(config), encoding="utf-8")
+                manifest = convert_unreal(source, root / "Intakes")
+                header, _, rows = load_intake(manifest)
+                model, = header["interiors"].values()
+                geometry = json.loads(manifest.with_name(model).read_bytes())
+                collision = geometry["collision"]
+                if case == "mixed-flags":
+                    self.assertEqual(header["format"], 40)
+                    self.assertNotIn("simple", collision)
+                    self.assertTrue(any("mixed query or physics settings" in row["reason"] for row in rows))
+                    continue
+                self.assertEqual(header["format"], 41)
+                self.assertEqual(bool(collision["triangles"]), case == "both")
+                self.assertEqual(TEXTURE_INDEX in header["files"], case == "both")
+                simple = collision["simple"]
+                self.assertEqual(simple["mode"], "both" if case == "both" else "simple")
+                sphere, box, capsule = simple["shapes"]
+                self.assertEqual(sphere["kind"], "sphere")
+                self.assertEqual(box["axes"], [[0, 1, 0], [-1, 0, 0], [0, 0, 1]])
+                self.assertEqual(capsule["size_m"], [20 / 50, 100 / 50])
+                public, _, _ = load_intake(unpack_intake(export_public_layout(manifest, root / "Share.zip"), root / "Public"))
+                self.assertEqual(public["format"], 22)
+                self.assertNotIn(model, public["files"])
 
     def test_ascend_reports_cycles_and_nondirect_diffuse(self):
         for mode, reason in (("cycle", "parent chain contains a cycle"), ("masked-output", "not a direct RGB texture sample")):
