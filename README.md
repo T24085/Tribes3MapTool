@@ -4,6 +4,12 @@ This is the in-development Windows source for the TRIBES 3 community map editor.
 
 ## Get started
 
+1. Install Unreal Engine 5.3 and Python 3.13 with the Windows Python launcher.
+2. Install Pillow with `py -3.13 -m pip install Pillow`.
+3. [Download the GitHub ZIP](https://github.com/T24085/Tribes3MapTool/archive/refs/heads/main.zip), extract it, and double-click **Start TRIBES 3 Map Tool.bat** in the extracted folder.
+
+The launcher creates or reopens your authoring workspace under `%LOCALAPPDATA%\Tribes3MapTool`.
+
 Tribes 2 intakes can preserve private PCM WAVs and authored ambient
 emitter settings. Compatible one-shots and continuous loops play through
 standard Unreal ambient sound actors. Fixed repeats within the draft
@@ -24,12 +30,9 @@ Version 50 intakes also retain the collision and room data used by
 outside-only audio. Connected playback requires compatible Direct Host
 and Starter builds. See the [editor guide](tools/community_map_editor/README.md).
 
-For the Windows ZIP, extract the archive and double-click **Start TRIBES 3 Map Editor.bat**. The launcher creates or reopens the workspace under `%LOCALAPPDATA%\Tribes3MapTool`.
-
-Install Python 3.13 and Unreal Engine 5.3, then run these commands from this checkout with your own workspace parent.
+To create a workspace in a different location, run the bootstrap command from this checkout with your own workspace parent.
 
 ```powershell
-py -3.13 -m pip install Pillow
 py -3.13 tools/community_map_editor/bootstrap.py "D:/Maps" --launch
 ```
 
