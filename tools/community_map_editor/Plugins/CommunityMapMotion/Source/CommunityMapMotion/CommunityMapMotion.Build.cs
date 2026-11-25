@@ -7,7 +7,8 @@ public class CommunityMapMotion : ModuleRules
         PCHUsage = PCHUsageMode.NoPCHs;
         PrivateDependencyModuleNames.AddRange(new[] {
             "Core", "CoreUObject", "Engine", "AssetRegistry", "GeometryCache",
-            "BlueprintGraph", "UnrealEd", "KismetCompiler", "LevelSequence", "MovieScene", "PhysicsCore", "Chaos"
+            "BlueprintGraph", "UnrealEd", "KismetCompiler", "LevelSequence", "MovieScene", "PhysicsCore", "Chaos",
+            "MetasoundEditor", "MetasoundEngine", "MetasoundFrontend", "MetasoundGraphCore"
         });
     }
 }

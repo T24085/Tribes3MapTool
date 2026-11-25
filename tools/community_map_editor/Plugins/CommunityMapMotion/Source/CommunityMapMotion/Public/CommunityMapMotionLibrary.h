@@ -6,6 +6,7 @@
 
 class UGeometryCache;
 class UMaterialInterface;
+class UMetaSoundSource;
 class ALevelSequenceActor;
 class UStaticMesh;
 class USoundCue;
@@ -86,5 +87,9 @@ public:
 
     UFUNCTION(BlueprintCallable, Category = "Community Map Motion")
     static bool ConfigureAmbientRepeat(USoundCue* Cue, USoundWave* Wave, int32 RepeatCount,
+        float MinGapSeconds, float MaxGapSeconds);
+
+    UFUNCTION(BlueprintCallable, Category = "Community Map Motion")
+    static bool ConfigureAmbientMetaSound(UMetaSoundSource* Source, USoundWave* Wave, int32 RepeatCount,
         float MinGapSeconds, float MaxGapSeconds);
 };

@@ -51,24 +51,35 @@ def import_wave(folder, source, clip, looping, *, layout=None, schedule=None):
     return sound
 
 
-def repeat_cue(folder, wave_asset, schedule):
+def repeat_sound(folder, wave_asset, schedule, channels):
     count, minimum, maximum = schedule
-    name = "SC_" + wave_asset.get_name() + "_" + schedule_key(schedule)
-    cue = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
-        name, folder, unreal.SoundCue.static_class(), unreal.SoundCueFactoryNew())
-    if cue is None or not unreal.CommunityMapMotionLibrary.configure_ambient_repeat(
-            cue, wave_asset, count, minimum, maximum):
+    bridge = unreal.CommunityMapMotionLibrary
+    use_meta = hasattr(bridge, "configure_ambient_meta_sound")
+    suffix = wave_asset.get_name() + "_" + schedule_key(schedule)
+    tools = unreal.AssetToolsHelpers.get_asset_tools()
+    if use_meta:
+        name = "MS_" + suffix
+        sound = tools.create_asset(name, folder, unreal.MetaSoundSource, unreal.MetaSoundSourceFactory())
+        if sound is not None:
+            output = unreal.MetaSoundOutputAudioFormat
+            sound.set_editor_property("output_format", output.STEREO if channels == 2 else output.MONO)
+        configure = bridge.configure_ambient_meta_sound
+    else:
+        name = "SC_" + suffix
+        sound = tools.create_asset(name, folder, unreal.SoundCue, unreal.SoundCueFactoryNew())
+        configure = bridge.configure_ambient_repeat
+    if sound is None or not configure(sound, wave_asset, count, minimum, maximum):
         raise RuntimeError(f"Could not build ambient repeat sound {name}.")
     if count == -1:
-        cue.set_editor_property("virtualization_mode", unreal.VirtualizationMode.PLAY_WHEN_SILENT)
-    if not unreal.EditorAssetLibrary.save_loaded_asset(cue, False):
+        sound.set_editor_property("virtualization_mode", unreal.VirtualizationMode.PLAY_WHEN_SILENT)
+    if not unreal.EditorAssetLibrary.save_loaded_asset(sound, False):
         raise RuntimeError(f"Could not save ambient repeat sound {name}.")
-    return cue
+    return sound
 
 
 def place_audio(actors, draft, source, planned):
     folder = f"/Game/Community/{draft}/Audio"
-    sounds, cues, placed = {}, {}, set()
+    sounds, repeats, placed = {}, {}, set()
     for emitter, clip, layout in planned:
         settings = emitter["settings"]
         spatial = settings["spatial"]
@@ -80,10 +91,10 @@ def place_audio(actors, draft, source, planned):
             sounds[key] = import_wave(folder, source, clip, looping, layout=layout, schedule=schedule)
         sound = sounds[key]
         if schedule is not None and layout is None:
-            cue_key = (key, schedule)
-            if cue_key not in cues:
-                cues[cue_key] = repeat_cue(folder, sound, schedule)
-            sound = cues[cue_key]
+            repeat_key = (key, schedule)
+            if repeat_key not in repeats:
+                repeats[repeat_key] = repeat_sound(folder, sound, schedule, clip["pcm"]["channels"])
+            sound = repeats[repeat_key]
         source_id = emitter["source_id"]
         actor = actors.spawn_actor_from_class(unreal.AmbientSound, unreal.Vector(*emitter["position_cm"]))
         if not actor:

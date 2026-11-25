@@ -1105,15 +1105,19 @@ continuous loops with zero repeat delay. Fixed schedules up to 8 MiB
 each and 24 MiB combined build into PCM SoundWaves, with silence measured
 in samples between plays. These schedules build without an editor
 plugin. Variable delay ranges and fixed schedules beyond the PCM
-budget use stock Sound Cues made by the updated
+budget use stock MetaSound sources made by the updated
 [Community Map Motion editor plugin](Plugins/CommunityMapMotion).
 A count of `0` plays once, a positive count adds that many repeats,
-and `-1` repeats indefinitely. Both asset types cook and play without
-the authoring plugin.
+and `-1` repeats indefinitely. MetaSound preserves the original mono or
+stereo channels and schedules repeats in the audio mixer. The launcher
+enables Unreal's built-in MetaSound plugin when opening or cooking a
+draft. The cooked map plays without Community Map Motion. Drafts made
+with older builds of Community Map Motion still open and play their
+Sound Cues.
 Spatial emitters use mono sound and spherical linear attenuation between
 the authored full-volume and cutoff distances. A WAV used for both
 one-shot and continuous playback gets two SoundWave assets. Identical
-audio schedules can share a cue. Object Review keeps directional,
+audio schedules can share a sound asset. Object Review keeps directional,
 outside-only, and profile-based emitters available for review.
 Shared layouts omit the sound index, WAVs, and source audio references.
 

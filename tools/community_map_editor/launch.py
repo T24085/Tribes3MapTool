@@ -248,7 +248,7 @@ def package_preview(parent, cooked, target, ident, markers, *, host_export=False
 
 PLUGINS = ['-NoEnginePlugins', '-EnablePlugins=PythonScriptPlugin,EditorScriptingUtilities,'
            'CommunityNativeWorldSettings,TextureFormatOodle,WorldPartitionHLODUtilities,Water,GeometryScripting,'
-           'GeometryCache,LevelSequenceEditor,SequencerScripting']
+           'GeometryCache,LevelSequenceEditor,SequencerScripting,Metasound']
 EDITOR_PLUGINS = [PLUGINS[0], PLUGINS[1]+',ContentBrowserAssetDataSource,ContentBrowserClassDataSource']
 
 

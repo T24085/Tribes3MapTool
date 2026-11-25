@@ -3,9 +3,12 @@
   "Version": 1,
   "VersionName": "1.0",
   "FriendlyName": "Community Map Motion",
-  "Description": "Editor support for baking source map animation into stock Geometry Cache assets.",
+  "Description": "Editor support for baking source map animation and ambient repeat audio into stock Unreal assets.",
   "CanContainContent": false,
   "EnabledByDefault": false,
-  "Plugins": [{"Name": "GeometryCache", "Enabled": true}],
+  "Plugins": [
+    {"Name": "GeometryCache", "Enabled": true},
+    {"Name": "Metasound", "Enabled": true}
+  ],
   "Modules": [{"Name": "CommunityMapMotion", "Type": "Editor", "LoadingPhase": "Default"}]
 }
