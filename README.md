@@ -43,6 +43,8 @@ recovered on the first native auto-revive. Blue stayed online throughout.
 The fixture used native damage and a 40-second revive timer. The updated
 station runtime applied a queued loadout after a friendly hold and
 preserved the queued loadout when that player entered the enemy station.
+Losing the last online generator cancelled a hold already in progress.
+A fresh friendly entry applied the queued loadout after power recovered.
 Station-bearing exports require the updated Direct Host runtime.
 [Equipment authoring guide](tools/community_map_editor/README.md#review-equipment-and-power-groups)
 

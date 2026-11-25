@@ -562,7 +562,7 @@ def run(config, *, smoke=False, authoring_smoke=False):
         if headless:
             env['T3_EDITOR_INTERACTIVE'] = '0'
             script = 'smoke_authoring.py' if authoring_smoke else 'smoke_editor.py'
-            args += ['-unattended', '-nullrhi', '-run=pythonscript', '-script='+str(TOOL/script)]
+            args += ['-unattended', '-nullrhi', '-run=pythonscript', '-script='+(TOOL/script).as_posix()]
         print('Opening the TRIBES Map Editor. Logs:', attempt, flush=True)
         job = run_owned_job(args, project.parent, env, attempt/'editor-owner', 1000 if headless else None)
         active = job.get('job_active_processes_after_cleanup', job.get('job_active_processes_at_parent_exit'))
