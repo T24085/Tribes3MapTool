@@ -7,13 +7,16 @@ if not exist "%entry%" (
     pause
     exit /b 1
 )
-py -3.13 --version >nul 2>nul
+set "pythonLauncher=py.exe"
+if exist "%SystemRoot%\py.exe" set "pythonLauncher=%SystemRoot%\py.exe"
+if exist "%LOCALAPPDATA%\Programs\Python\Launcher\py.exe" set "pythonLauncher=%LOCALAPPDATA%\Programs\Python\Launcher\py.exe"
+"%pythonLauncher%" -3.13 --version >nul 2>nul
 if errorlevel 1 (
     echo Install Python 3.13 with the Windows Python launcher, then open the Map Tool again.
     if "%~1"=="" pause
     exit /b 1
 )
-py -3.13 -B "%entry%" %*
+"%pythonLauncher%" -3.13 -B "%entry%" %*
 set "result=%errorlevel%"
 if "%result%"=="0" exit /b 0
 echo.
