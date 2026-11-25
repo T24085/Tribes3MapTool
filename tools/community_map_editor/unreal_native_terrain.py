@@ -122,14 +122,18 @@ def ascend_heightfield(actor, node, scene, stream, endian):
     return (width, height), raw, flags, origin, (sx, sy, sz / HEIGHT_UNITS), HEIGHT_MIDPOINT, provenance
 
 
+def terrain_candidates(scene, selected=None):
+    source_class = "terraininfo" if scene["profile"] == "vengeance" else "terrain"
+    return [actor for actor in scene["actors"]
+            if (actor["source_class"] or "").rsplit(".", 1)[-1].casefold() == source_class
+            and (selected is None or selected.casefold() in
+                 ((actor["name"] or "").casefold(), actor["object_path"].casefold()))]
+
+
 def decode_terrain(scene, report, stream, selected, *, companions=None, rtc=None):
     vengeance = report["summary"]["game"] == "vengeance"
-    source_class = "terraininfo" if vengeance else "terrain"
     endian = report["summary"]["endian"]
-    candidates = [actor for actor in scene["actors"]
-                  if (actor["source_class"] or "").rsplit(".", 1)[-1].casefold() == source_class
-                  and (selected is None or selected.casefold() in
-                       ((actor["name"] or "").casefold(), actor["object_path"].casefold()))]
+    candidates = terrain_candidates(scene, selected)
     if len(candidates) != 1:
         raise ValueError("Select one native terrain actor in the import settings, or supply a heightmap.")
     actor, = candidates

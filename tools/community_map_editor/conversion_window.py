@@ -20,6 +20,7 @@ from mission_audio import audio_review
 from mission_equipment import mission_equipment, power_context
 from mission_weather import cloud_layers, mission_weather, precipitation_emitters
 from model_textures import load_texture_index
+from native_import_window import show_native_import
 from object_catalog import applicable_mappings, build_rows, classify, load_catalog
 from object_review_window import ObjectReview
 from perimeter import (DEFAULT_BOUNDARY_OPTIONS, DEFAULT_CEILING_M, DEFAULT_DEPTH_M, PolygonWalls, WARNING_AUDIENCES,
@@ -884,7 +885,8 @@ def run(library, meshes=(), drafts=()):
                         path = convert_legacy(src, library, terrain_source, mission_member=choices.get() or None,
                                               artwork=state.get("artwork_source"), interiors=state.get("interior_source"))
                     elif source_profile in UNREAL_PROFILES.values():
-                        path = convert_unreal(src, library, state["unreal_metadata"])
+                        path = convert_unreal(src, library, state["unreal_metadata"],
+                                              native_settings=state.get("unreal_native_settings"))
                     else:
                         path = convert(src, library, choices.get() or None, terrain_source,
                                        dif_decoder=dif_decoder, dif_assets=dif_assets,
@@ -941,7 +943,17 @@ def run(library, meshes=(), drafts=()):
 
     def import_unreal(path, parent):
         metadata = path.with_suffix(".import.json")
-        if not metadata.is_file():
+        native_settings = None
+        if not metadata.is_file() and path.suffix.casefold() in NATIVE_PACKAGE_TYPES:
+            selection = show_native_import(parent, path)
+            if selection is None:
+                return False
+            if isinstance(selection, Path):
+                metadata = selection
+            else:
+                native_settings = selection
+                metadata = None
+        elif not metadata.is_file():
             settings_path = filedialog.askopenfilename(
                 parent=parent, title="Select Unreal map import settings",
                 filetypes=[("Import settings", "*.json")],
@@ -949,10 +961,11 @@ def run(library, meshes=(), drafts=()):
             if not settings_path:
                 return False
             metadata = Path(settings_path)
-        settings, _ = read_unreal_settings(metadata)
+        settings = native_settings if native_settings is not None else read_unreal_settings(metadata)[0]
         clear()
         heightmap = settings.get("heightmap")
         state.update(source=path, source_profile=UNREAL_PROFILES[settings["game"]], unreal_metadata=metadata,
+                     unreal_native_settings=native_settings,
                      terrain_source=metadata.with_name(heightmap) if heightmap else None)
         return decode()
 

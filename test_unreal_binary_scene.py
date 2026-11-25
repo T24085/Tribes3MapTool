@@ -17,6 +17,7 @@ from intake_contract import UNREAL_SCENE, load_intake, load_intake_geometry
 from interior_geometry import render_sections
 from minimap import grayscale_png
 from model_textures import TEXTURE_INDEX, load_texture_index
+from native_import_window import marker_choices, native_settings, suggested_teams
 from native_terrain_paint import NativeTerrainPaint, decode_mask
 from public_layout import export_public_layout
 from t2_reader import unpack_intake
@@ -25,6 +26,7 @@ from terrain_art import SOURCE_ART, available_art
 from terrain_layers import FALLBACK, PALETTE_SURFACES, layer_choices
 from unreal_binary_scene import read_binary_scene
 from unreal_legacy_intake import convert_unreal
+from unreal_native_terrain import terrain_candidates
 from unreal_package_reader import inspect_package
 from vengeance_normal_maps import BC5, CXV8U8, DXT5N, normal_png
 
@@ -1835,6 +1837,45 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 self.assertEqual(deck_node["entries"][-1]["property_issues"], [])
                 review = next(row for row in rows if row["name"] == "Unmapped")
                 self.assertEqual(review["status"], "review")
+
+    def test_native_import_choices_create_intakes_without_a_settings_file(self):
+        for game in ("ascend", "vengeance"):
+            with self.subTest(game=game), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = binary_draft_fixture(root, game, native_terrain=True,
+                                              spawn_base="terrain" if game == "ascend" else None)
+                sidecar = source.with_suffix(".import.json")
+                sidecar.unlink()
+                scene = read_binary_scene(source, game, 50)
+                terrain, = terrain_candidates(scene)
+                index = terrain["line"] if game == "ascend" else None
+                flags, spawns = marker_choices(scene["actors"], index, False)
+                teams = suggested_teams(flags, spawns)
+                self.assertEqual([len(team["spawns"]) for team in teams], [1, 1])
+                settings = native_settings(scene, terrain, 50, teams, [])
+                manifest = convert_unreal(source, root / "Intakes", native_settings=settings)
+                header, _, rows = load_intake(manifest)
+                saved = json.loads((manifest.parent / UNREAL_SCENE).read_bytes())
+                self.assertEqual(saved["import_settings"], settings)
+                self.assertEqual(header["sources"][1]["name"], sidecar.name)
+                self.assertEqual(sum(row["status"] == "marker" for row in rows), 4)
+                self.assertFalse(sidecar.exists())
+                teams[1]["spawns"] = list(teams[0]["spawns"])
+                with self.assertRaisesRegex(ValueError, "cannot be assigned twice"):
+                    native_settings(scene, terrain, 50, teams, [])
+
+    def test_native_setup_prefers_vengeance_stands_and_preserves_team_links(self):
+        flags = [dict(role=role, object_path=f"{faction}{kind}", source_class=f"GameClasses.Capture{kind}{faction}",
+                      transform={"position_m": [position, 0, 0]})
+                 for faction, position in (("Beagle", 0), ("Imperial", 100))
+                 for role, kind in (("flag", "Flag"), ("capture-point", "Stand"))]
+        teams = [dict(line=index, source_class=f"GameClasses.TeamInfo{faction}")
+                 for index, faction in ((1, "Beagle"), (2, "Imperial"))]
+        spawns = [dict(object_path=f"Start{link}", transform={"position_m": [x, 0, 0]}, links={"team": link})
+                  for link, x in ((1, 100), (2, 0))]
+        self.assertEqual(suggested_teams(flags, spawns, teams),
+                         [dict(flag="BeagleStand", spawns=["Start1"]),
+                          dict(flag="ImperialStand", spawns=["Start2"])])
 
     def test_ascend_player_start_on_selected_terrain_preserves_its_world_transform(self):
         with TemporaryDirectory() as directory:

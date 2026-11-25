@@ -243,10 +243,15 @@ py -3.13 tools/community_map_editor/unreal_package_reader.py "D:\Maps\MyMap.fmap
 
 Package inventory supports uncompressed files and standard UE3 zlib
 chunks. Select **Import as draft…** to read the level's actor roster and
-recover serialized transforms, links, and mesh references. Supply the
-import settings described below, named for the source package (for example,
-`MyMap.import.json` beside `MyMap.tvm`). The actor review retains object and
-property offsets. Placement requires an explicit independent actor location.
+recover serialized transforms, links, and mesh references. If the package
+has no adjacent `MyMap.import.json`, the editor opens a setup dialog. Select
+the native terrain, review or change each team's flag stand and spawns, and
+select optional companion files beside the source map. The dialog favors
+Vengeance's saved team links when available and otherwise suggests spawns
+by distance. **Use settings file…** opens an existing recipe, including a
+recipe that supplies its own heightmap. Settings entered in the dialog are
+recorded in the private intake. The actor review retains object and property
+offsets.
 Bind an existing project mesh to a recovered reference through the draft's
 mapping controls.
 

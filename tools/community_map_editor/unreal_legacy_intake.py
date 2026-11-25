@@ -55,6 +55,22 @@ def encoded(record):
     return json.dumps(record, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
 
 
+def terrain_based_start(actor, kind, ascend_terrain):
+    # UE3 team starts serialize a world Location with a Base reference to the terrain.
+    return (ascend_terrain is not None and kind == "spawn"
+            and (actor["source_class"] or "").casefold() == "utgame.utteamplayerstart"
+            and "attachparent" not in actor["references"] and actor["links"].get("base") == ascend_terrain)
+
+
+def usable_marker(actor, kind, ascend_terrain=None):
+    transform = actor["transform"]
+    unresolved_component = (any(item["transform"] is not None for item in actor["components"])
+                            and any("root component" in reason for reason in actor["review"]))
+    attached = actor["references"].keys() & {"base", "attachparent"}
+    return (transform is not None and transform["authored"] and not unresolved_component
+            and (not attached or terrain_based_start(actor, kind, ascend_terrain)))
+
+
 def project_markers(scene, teams):
     by_name = defaultdict(list)
     for actor in scene["actors"]:
@@ -70,31 +86,23 @@ def project_markers(scene, teams):
     if not isinstance(teams, list) or len(teams) != 2:
         raise ValueError("Provide the flag and spawns for each of the two CTF teams.")
     markers = {}
-    native_terrain = scene.get("native_terrain") if scene["profile"] == "ascend" else None
+    ascend_terrain = scene.get("native_terrain", {}).get("export_index") if scene["profile"] == "ascend" else None
 
     def marker(name, team, kind):
         if not isinstance(name, str) or len(matches := by_name.get(name.casefold(), ())) != 1:
             raise ValueError(f"Select one unambiguous source actor for each {kind}.")
         actor, = matches
-        transform = actor["transform"]
-        references = actor["references"]
-        # UE3 team starts serialize a world Location with a Base reference to the terrain.
-        terrain_start = (native_terrain is not None and kind == "spawn"
-                         and (actor["source_class"] or "").casefold() == "utgame.utteamplayerstart"
-                         and "attachparent" not in references
-                         and actor["links"].get("base") == native_terrain["export_index"])
-        if (transform is None or not transform["authored"] or actor["components"] and any(
-                item["transform"] is not None for item in actor["components"])
-                and any("root component" in reason for reason in actor["review"])
-                or references.keys() & {"base", "attachparent"} and not terrain_start):
+        if not usable_marker(actor, kind, ascend_terrain):
             raise ValueError(f"Choose a {kind} with an independent actor transform.")
         if actor["line"] in markers:
             raise ValueError("One source actor cannot be assigned twice.")
+        transform = actor["transform"]
         x, y, z, w = transform["rotation_xyzw"]
         yaw = math.degrees(math.atan2(2 * (w*z + x*y), 1 - 2 * (y*y + z*z)))
         markers[actor["line"]] = dict(team=team, kind=kind, yaw=yaw,
                                        position_cm=[value * 100 for value in transform["position_m"]],
-                                       reason=("Saved world position on the imported terrain" if terrain_start else
+                                       reason=("Saved world position on the imported terrain"
+                                               if terrain_based_start(actor, kind, ascend_terrain) else
                                                "Author-assigned CTF marker"))
 
     for team, entry in enumerate(teams, 1):
@@ -237,7 +245,10 @@ def project_rows(scene, markers, heightmap, *, placement_components=None):
 
 def read_unreal_settings(metadata):
     description = bounded(metadata, 64 * 1024)
-    settings = json.loads(description)
+    return validate_unreal_settings(json.loads(description)), description
+
+
+def validate_unreal_settings(settings):
     if (not isinstance(settings, dict) or not REQUIRED <= settings.keys()
             or type(settings["format"]) is not int or settings["format"] != 1
             or not isinstance(settings["game"], str) or settings["game"] not in UNREAL_PROFILES):
@@ -258,7 +269,7 @@ def read_unreal_settings(metadata):
     elif (optional - {"terrain_actor"} or "terrain_actor" in optional
           and (not isinstance(settings["terrain_actor"], str) or not 1 <= len(settings["terrain_actor"]) <= 512)):
         raise ValueError("Choose native terrain or supply a complete heightmap frame.")
-    return settings, description
+    return settings
 
 
 def companion_paths(source, names):
@@ -272,10 +283,18 @@ def companion_paths(source, names):
     return paths
 
 
-def convert_unreal(source, output, metadata=None):
+def convert_unreal(source, output, metadata=None, *, native_settings=None):
     source = Path(source)
+    if metadata is not None and native_settings is not None:
+        raise ValueError("Choose an import settings file or the editor's native settings.")
     metadata = Path(metadata) if metadata is not None else source.with_suffix(".import.json")
-    settings, description = read_unreal_settings(metadata)
+    if native_settings is None:
+        settings, description = read_unreal_settings(metadata)
+    else:
+        settings = validate_unreal_settings(native_settings)
+        if "heightmap" in settings:
+            raise ValueError("A supplied heightmap requires a settings file beside the image.")
+        description = encoded(settings)
     game = settings["game"]
     binary = source.suffix.casefold() in NATIVE_PACKAGE_TYPES
     native = "heightmap" not in settings
@@ -538,6 +557,8 @@ def convert_unreal(source, output, metadata=None):
         else:
             timed_doors = any("bump_type" in brush["behavior"] for brush in brushes)
             version = VENGEANCE_DOOR_VERSION if timed_doors else VENGEANCE_MOVER_PLAYBACK_VERSION
+    if native_settings is not None:
+        scene["import_settings"] = settings
     files[UNREAL_SCENE] = encoded(scene)
     receipts = {}
     for receipt in companion_receipts:
@@ -553,6 +574,8 @@ def convert_unreal(source, output, metadata=None):
                              for path, data in extra_sources), *receipts.values()],
                   coverage=dict(Counter(row["status"] for row in rows)),
                   files={name: sha256(data).hexdigest() for name, data in files.items()})
+    if native_settings is not None:
+        header["sources"][1]["origin"] = "Editor import settings"
     if interiors:
         header.update(interiors=interiors, interior_review={})
     if paint.masks:

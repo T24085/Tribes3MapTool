@@ -34,7 +34,8 @@ COMMON_CLASSES = {
 }
 VENGEANCE_CLASSES = {
     'mpflag': 'flag', 'mpflagcapturepoint': 'capture-point', 'teaminfo': 'team', 'baseinfo': 'base',
-    'multiplayerstart': 'spawn', 'baseinfodefault': 'base', 'light': 'light', 'spotlight': 'light',
+    'multiplayerstart': 'spawn', 'mpstartdefault': 'spawn', 'baseinfodefault': 'base',
+    'light': 'light', 'spotlight': 'light',
     **{f'captureflag{team}': 'flag' for team in ('beagle', 'phoenix', 'imperial')},
     **{f'capturestand{team}': 'capture-point' for team in ('beagle', 'phoenix', 'imperial')},
 }
