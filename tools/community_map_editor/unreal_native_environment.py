@@ -3,8 +3,9 @@
 import math
 
 from intake_contract import finite
-from unreal_legacy_reader import descendants
+from native_local_lights import ASCEND_LIGHT_CLASSES
 from unreal_package_reader import Cursor
+from unreal_legacy_reader import descendants
 
 
 FLOAT = ("FloatProperty", None, "f")
@@ -121,6 +122,37 @@ def vengeance_fog(nodes, stream, endian, cm_per_unit):
     return result, "Matching zone distance fog mapped to a global draft fog approximation."
 
 
+def ascend_local_light(actor, node, stream, endian, cm_per_unit, kind):
+    if not actor["transform"] or actor["references"].keys() & {"attachparent", "base"} or any(
+            "root component" in note for note in actor["review"]):
+        raise ValueError("Local light needs an independent source transform.")
+    target = component(node, kind + "lightcomponent")
+    values = fields(target, stream, endian, {
+        "radius": FLOAT, "brightness": FLOAT, "lightcolor": COLOR, "falloffexponent": FLOAT,
+        "castshadows": BOOL, "benabled": BOOL, "innerconeangle": FLOAT, "outerconeangle": FLOAT,
+    })
+    if not values.get("benabled", True):
+        raise ValueError("Local light is disabled in the source.")
+    radius = bounded_scalar(values, "radius", 1e-6, 2e6 / cm_per_unit)
+    if radius is None:
+        raise ValueError("Local light radius needs its source archetype.")
+    result = dict(kind=kind, radius_cm=radius * cm_per_unit,
+                  brightness=bounded_scalar(values, "brightness", 0, 8) if "brightness" in values else 1)
+    if kind == "spot":
+        inner = bounded_scalar(values, "innerconeangle", 0, 89)
+        outer = bounded_scalar(values, "outerconeangle", 1, 89)
+        if inner is None or outer is None or inner > outer:
+            raise ValueError("Spotlight needs valid saved inner and outer cone angles.")
+        result.update(inner_angle=inner, outer_angle=outer)
+    if "lightcolor" in values:
+        result["color"] = rgb(values["lightcolor"])
+    if "falloffexponent" in values:
+        result["falloff"] = bounded_scalar(values, "falloffexponent", 1e-6, 64)
+    if "castshadows" in values:
+        result["cast_shadows"] = values["castshadows"]
+    return result, "Imported editable local light. Baked shadows and lightmaps remain in review."
+
+
 def read_environment(scene, stream, endian):
     nodes = {node["line"]: node for node in descendants(scene["scene"][0])}
     by_class = {}
@@ -209,6 +241,24 @@ def read_environment(scene, stream, endian):
         fog = record(fogs, fog_settings)
         if fog:
             result["fog"] = fog
+    local_lights = {}
+    for actor in scene["actors"]:
+        source_class = (actor["source_class"] or "").casefold()
+        node = nodes[actor["line"]]
+        if modern and (kind := ASCEND_LIGHT_CLASSES.get(source_class)):
+            light = record([actor], lambda: ascend_local_light(actor, node, stream, endian, cm_per_unit, kind))
+            if light:
+                local_lights[str(actor["line"])] = light
+        elif not modern and source_class in {"engine.light", "engine.spotlight"}:
+            def legacy_light():
+                fields(node, stream, endian, {"lightradius": FLOAT, "lightbrightness": FLOAT, "lighthue": BYTE,
+                                              "lightsaturation": BYTE, "lighttype": BYTE, "lighteffect": BYTE,
+                                              "lightcone": BYTE, "bcorona": BOOL})
+                return {}, "Legacy local light retained for radius, attenuation and effect conversion."
+
+            record([actor], legacy_light)
     if notes:
         scene["environment_review"] = notes
+    if local_lights:
+        scene["local_lights"] = local_lights
     return result

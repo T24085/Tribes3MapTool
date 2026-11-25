@@ -6,11 +6,11 @@ import re
 if __package__:
     from .conversion_rules import read
     from .profile_exchange import active_profile
-    from .source_profiles import NAMES, T1, UNREAL_PROFILES, VENGEANCE, config_name, selected_profile
+    from .source_profiles import ASCEND, NAMES, T1, UNREAL_PROFILES, VENGEANCE, config_name, selected_profile
 else:
     from conversion_rules import read
     from profile_exchange import active_profile
-    from source_profiles import NAMES, T1, UNREAL_PROFILES, VENGEANCE, config_name, selected_profile
+    from source_profiles import ASCEND, NAMES, T1, UNREAL_PROFILES, VENGEANCE, config_name, selected_profile
 
 
 DEFAULT = Path(__file__).with_name("tribes2_catalog.json")
@@ -181,6 +181,8 @@ def load_catalog(library=None, *, snapshot=None, recorded=False, document=None, 
                     document["features"]["lighting"]["detail"] = "Default and alarm lightmaps with mission overlays. Timed tracks need review."
                 elif source_profile in UNREAL_PROFILES.values():
                     document["profile"] = source_profile
+                    document["features"]["lighting"].update(
+                        label="Map lighting", detail="Saved global lighting and supported local light actors.")
                     classes = {}
                     for key, label, feature in (
                         ("unrealterrain", "Metric heightfield", "terrain"),
@@ -190,6 +192,9 @@ def load_catalog(library=None, *, snapshot=None, recorded=False, document=None, 
                     ):
                         classes[key] = dict(label=label, aliases=[key], feature=feature,
                                             transform=key == "unrealmeshactor")
+                    if source_profile == ASCEND:
+                        classes["unreallight"] = dict(label="Placed light", aliases=["unreallight"],
+                                                     feature="lighting", transform=True)
                     if source_profile == VENGEANCE:
                         features = document["features"]
                         features["trigger-links"] = dict(label="Trigger links", draft="retained", host="retained",

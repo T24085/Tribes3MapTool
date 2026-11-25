@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 54",
+  "description": "Private Ascend intake with independently placed local lights in objects.json. The scene_format selects the geometry contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "scene_format", "profile", "source_game", "name", "reader", "profile_sha256",
+               "sources", "files", "coverage", "minimap"],
+  "properties": {
+    "format": {"const": 54},
+    "scene_format": {"enum": [22, 23, 39, 40, 41, 42, 51, 52]},
+    "profile": {"const": "ascend-ctf"},
+    "source_game": {"const": "Tribes: Ascend"},
+    "reader": {"const": "legacy-unreal-intake-v1"},
+    "name": {"$ref": "intake-v53.schema.json#/properties/name"},
+    "profile_sha256": {"$ref": "intake-v53.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v53.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v53.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v53.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v53.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v53.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v53.schema.json#/properties/interior_review"},
+    "terrain_paint": {"$ref": "intake-v52.schema.json#/properties/terrain_paint"},
+    "terrain_art": {"$ref": "intake-v52.schema.json#/properties/terrain_art"},
+    "terrain_uv": {"$ref": "intake-v52.schema.json#/properties/terrain_uv"},
+    "files": {
+      "allOf": [
+        {"$ref": "intake-v53.schema.json#/properties/files"},
+        {"required": ["source-scene.json"]}
+      ]
+    }
+  },
+  "dependentRequired": {
+    "interiors": ["interior_review"], "interior_review": ["interiors"],
+    "terrain_art": ["terrain_uv"], "terrain_uv": ["terrain_art"]
+  },
+  "$defs": {
+    "local_light": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "radius_cm", "brightness"],
+      "properties": {
+        "kind": {"enum": ["point", "spot"]},
+        "radius_cm": {"type": "number", "exclusiveMinimum": 0, "maximum": 2000000},
+        "brightness": {"type": "number", "minimum": 0, "maximum": 8},
+        "color": {"$ref": "intake-v3.schema.json#/$defs/rgb"},
+        "falloff": {"type": "number", "exclusiveMinimum": 0, "maximum": 64},
+        "cast_shadows": {"type": "boolean"},
+        "inner_angle": {"type": "number", "minimum": 0, "maximum": 89},
+        "outer_angle": {"type": "number", "minimum": 1, "maximum": 89}
+      },
+      "if": {"properties": {"kind": {"const": "spot"}}},
+      "then": {"required": ["inner_angle", "outer_angle"]},
+      "else": {"not": {"anyOf": [{"required": ["inner_angle"]}, {"required": ["outer_angle"]}]}}
+    }
+  }
+}

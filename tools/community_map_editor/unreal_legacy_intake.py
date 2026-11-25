@@ -12,7 +12,8 @@ import re
 from ascend_materials import placed_materials as ascend_placed_materials, resolve_material as resolve_ascend_material
 from ascend_static_mesh import read_placed_meshes as read_ascend_meshes
 from ascend_texture_cache import AscendTextureCache
-from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, NATIVE_ENVIRONMENT_VERSION, PLAYABLE_BOUNDS,
+from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, NATIVE_ENVIRONMENT_VERSION,
+                             NATIVE_LOCAL_LIGHTS_VERSION, PLAYABLE_BOUNDS,
                              UNREAL_READER, UNREAL_SCENE, bounded, finite, validate_minimap)
 from interior_geometry import MAX_GEOMETRY_BYTES
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
@@ -121,6 +122,7 @@ def project_rows(scene, markers, heightmap, *, placement_components=None):
     nodes = {item["line"]: item for item in descendants(root)}
     native = scene.get("native_terrain")
     environment_notes = scene.get("environment_review", {})
+    lights = scene.get("local_lights", {})
     event_receivers = defaultdict(list)
     chains = scene.get("trigger_chains", {})
     brushes = scene.get("native_brushes", {})
@@ -163,6 +165,11 @@ def project_rows(scene, markers, heightmap, *, placement_components=None):
                     row["properties"][key] = str(value)
         if line in markers:
             row.update(markers[line], status="marker", conversion_class="unrealctfmarker")
+        elif light := lights.get(str(line)):
+            transform = actor["transform"]
+            row.update(conversion_class="unreallight", local_light=light, transform=dict(
+                position_cm=[value * 100 for value in transform["position_m"]],
+                rotation_xyzw=transform["rotation_xyzw"], scale=[1, 1, 1]))
         elif brush := brushes.get(str(line)):
             row.update(conversion_class="unrealmeshactor", model_reference=brush["reference"], transform=brush["transform"],
                        reason="Imported brush for editor review. Gameplay behavior needs conversion.")
@@ -512,6 +519,7 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
         scripts.extend(Path(__file__).with_name(name) for name in ("unreal_binary_scene.py", "unreal_package_reader.py",
                                                                   "model_textures.py"))
         scripts.append(Path(__file__).with_name("unreal_native_environment.py"))
+        scripts.append(Path(__file__).with_name("native_local_lights.py"))
         if game == "vengeance":
             scripts.extend(Path(__file__).with_name(name) for name in (
                 "vengeance_bsp.py", "vengeance_materials.py", "vengeance_normal_maps.py", "vengeance_static_mesh.py", "vengeance_terrain.py",
@@ -587,7 +595,11 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
     if native_settings is not None:
         header["sources"][1]["origin"] = "Editor import settings"
     if environment:
-        header.update(format=NATIVE_ENVIRONMENT_VERSION, scene_format=version, environment=environment)
+        header["environment"] = environment
+    if any("local_light" in row for row in rows):
+        header.update(format=NATIVE_LOCAL_LIGHTS_VERSION, scene_format=version)
+    elif environment:
+        header.update(format=NATIVE_ENVIRONMENT_VERSION, scene_format=version)
     if interiors:
         header.update(interiors=interiors, interior_review={})
     if paint.masks:

@@ -269,6 +269,14 @@ matching enabled distance fog with UE height fog. Distinct zone fog
 settings stay in Object Review. Saved inputs appear in the source
 properties, and conversion-rule overrides still take priority.
 
+[Intake version 54](intake-v54.schema.json) adds private, editable Ascend
+point lights and spotlights with saved positions, color, radius, and
+spotlight cones. Explicit falloff, brightness, and shadow inputs are
+carried into the draft when provided. The Unreal light uses the saved
+brightness as a multiplier of the destination light's default intensity.
+Vengeance local lights and baked lighting stay in Object Review. Public
+layout exports omit individual light placements.
+
 For Vengeance version 130/27, the importer reads the compiled level BSP
 into an editable static mesh alongside the terrain. The mesh retains
 material slots and the original texture coordinates in texel units. The

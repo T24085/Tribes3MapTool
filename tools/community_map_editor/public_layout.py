@@ -109,7 +109,7 @@ def public_objects(rows, *, legacy=False):
             entry.update({key: row[key] for key in ("kind", "position_cm", "yaw")}, team=int(row["team"]))
             entry["name"] = f"Team {entry['team']} {entry['kind']} {ident}"
         conversion = row.get("conversion_class")
-        if conversion and conversion != "unrealtriggerevent":
+        if conversion and conversion not in {"unrealtriggerevent", "unreallight"}:
             entry["conversion_class"] = conversion
         if reference and reference.startswith("unrealmesh:"):
             entry["model_reference"] = aliases.setdefault(reference, f"unrealmesh:model-{len(aliases) + 1:05d}")

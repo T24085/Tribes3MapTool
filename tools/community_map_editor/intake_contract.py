@@ -43,12 +43,14 @@ MAX_INTAKE_INTERIOR_BYTES = 96 * 1024 * 1024
 PLAYABLE_BOUNDS = "playable_bounds_cm"
 BOUNDARY_RECIPE = "draft_boundary_recipe"
 NATIVE_ENVIRONMENT_VERSION = 53
-LATEST_INTAKE_VERSION = max(NATIVE_ENVIRONMENT_VERSION, UNREAL_INTAKE_VERSION, *T2_DIF_VERSIONS,
+NATIVE_LOCAL_LIGHTS_VERSION = 54
+NATIVE_SCENE_ENVELOPES = {NATIVE_ENVIRONMENT_VERSION, NATIVE_LOCAL_LIGHTS_VERSION}
+LATEST_INTAKE_VERSION = max(*NATIVE_SCENE_ENVELOPES, UNREAL_INTAKE_VERSION, *T2_DIF_VERSIONS,
                             *T2_GENERATOR_SCOPE_VERSIONS)
 T1_SHAPE_INTAKE_VERSION = {4: 18, 5: 19, 6: 20, 7: 21}
 EQUIPMENT_FILE = "equipment.json"
 UNREAL_SCENE = "source-scene.json"
-UNREAL_CLASSES = {"unrealterrain", "unrealbounds", "unrealctfmarker", "unrealmeshactor", "unrealtriggerevent"}
+UNREAL_CLASSES = {"unrealterrain", "unrealbounds", "unrealctfmarker", "unrealmeshactor", "unrealtriggerevent", "unreallight"}
 UNREAL_READER = "legacy-unreal-intake-v1"
 PUBLIC_LAYOUT_READER = "t2-public-layout-v1"
 MAX_MANIFEST_BYTES = 192 * 1024
@@ -389,10 +391,13 @@ def intake_scene_format(header):
     version = header.get("format") if isinstance(header, dict) else None
     if type(version) is not int or not 1 <= version <= LATEST_INTAKE_VERSION:
         raise ValueError("Unsupported intake format.")
-    if version == NATIVE_ENVIRONMENT_VERSION:
+    if version in NATIVE_SCENE_ENVELOPES:
         scene = header.get("scene_format")
-        if type(scene) is not int or scene not in UNREAL_INTAKE_VERSIONS or "environment" not in header:
-            raise ValueError("Invalid versioned native environment intake.")
+        if (type(scene) is not int or scene not in UNREAL_INTAKE_VERSIONS
+                or version == NATIVE_ENVIRONMENT_VERSION and "environment" not in header
+                or version == NATIVE_LOCAL_LIGHTS_VERSION and
+                (header.get("profile") != ASCEND or header.get("reader") != UNREAL_READER)):
+            raise ValueError("Invalid versioned native scene intake.")
         return scene
     if "scene_format" in header:
         raise ValueError("Unexpected scene format for this intake.")
@@ -411,7 +416,7 @@ def intake_header(manifest):
     return header
 
 
-def validate_unreal_row(row):
+def validate_unreal_row(row, *, allow_local_lights=False):
     conversion_class = row.get("conversion_class")
     if "conversion_class" in row and (not isinstance(conversion_class, str) or conversion_class not in UNREAL_CLASSES):
         raise ValueError("Invalid Unreal conversion class.")
@@ -440,6 +445,12 @@ def validate_unreal_row(row):
     if conversion_class == "unrealtriggerevent" and (row["status"] != "review" or placement is not None
             or row["source_class"].casefold() != "engine.trigger"):
         raise ValueError("An Unreal trigger record must be a review-only Engine.Trigger actor.")
+    if conversion_class == "unreallight" or "local_light" in row:
+        from native_local_lights import validate_local_light
+
+        if not allow_local_lights or conversion_class != "unreallight":
+            raise ValueError("Local light records require a compatible native intake.")
+        validate_local_light(row)
 
 
 def validate_brush_records(scene, rows, references, *, version):
@@ -673,7 +684,8 @@ def load_mission_audio(manifest, inventory):
 def load_intake(manifest):
     manifest = Path(manifest).resolve(strict=True)
     header = intake_header(manifest)
-    native_environment = header["format"] == NATIVE_ENVIRONMENT_VERSION
+    native_environment = header["format"] in NATIVE_SCENE_ENVELOPES
+    native_lights = header["format"] == NATIVE_LOCAL_LIGHTS_VERSION
     if native_environment:
         # Geometry consumers use the existing scene and inventory contract.
         header["format"] = header.pop("scene_format")
@@ -1082,8 +1094,8 @@ def load_intake(manifest):
             raise ValueError("Invalid object record or parent relationship.")
         ids.add(row["id"])
         if unreal:
-            validate_unreal_row(row)
-        elif row.keys() & {"conversion_class", "transform", "model_reference"}:
+            validate_unreal_row(row, allow_local_lights=native_lights)
+        elif row.keys() & {"conversion_class", "transform", "model_reference", "local_light"}:
             raise ValueError("Unreal scene placement requires intake version 22.")
         if row["status"] == "marker":
             if (
@@ -1094,6 +1106,8 @@ def load_intake(manifest):
                 or not finite(row["yaw"], 360)
             ):
                 raise ValueError("Invalid objective marker.")
+    if native_lights and not any("local_light" in row for row in rows):
+        raise ValueError("The native local light intake needs at least one light.")
     if ascend_placement_art:
         placements = {}
         for row in rows:

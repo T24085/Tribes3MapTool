@@ -116,7 +116,7 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                          bsp_world=False, static_mesh=None, external_height=False, painted=False, source_artwork=False,
                          bsp_artwork=False, mesh_artwork=False, shader_inputs=False, surface_detail=False, brush_mover=False,
                          ascend_shader=None, ascend_component_materials=None, ascend_body=None, spawn_base=None,
-                         environment=False):
+                         environment=False, local_lights=False):
     exported, settings = unreal_draft_fixture(root, game)
     modern = game == "ascend"
     source = exported.with_suffix(".fmap" if modern else ".tvm")
@@ -141,6 +141,9 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                              "Sunlight", "ZoneInfo", "bDistanceFog", "DistanceFogStart", "DistanceFogEnd",
                              "DistanceFogColor", "Brightness", "LightBrightness", "AmbientBrightness")
         strings = tuple(dict.fromkeys((*strings, *environment_names)))
+    if local_lights:
+        strings += ("PointLight", "PointLightComponent", "SpotLight", "SpotLightComponent", "Radius", "CastShadows",
+                    "FalloffExponent", "InnerConeAngle", "OuterConeAngle")
     if spawn_base:
         strings += ("UTGame", "UTTeamPlayerStart", "AttachParent")
     if modern and painted:
@@ -820,9 +823,14 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
         exports[terrain_export] = (*exports[terrain_export][:4], object_bytes(*terrain_fields) + terrain_arrays, 3)
     if environment:
         assert not bsp_world
+        if local_lights:
+            imports.append(("Core", "Package", 0, "Engine"))
+            light_package = -len(imports)
+        else:
+            light_package = -1
 
         def light(kind, fields, owner=outer, *, component=False, prefix=b""):
-            imports.append(("Core", "Class", -1, kind))
+            imports.append(("Core", "Class", light_package, kind))
             exports.append((-len(imports), owner, kind, 0, prefix + object_bytes(*fields, component=component), 3))
             return len(exports)
 
@@ -843,6 +851,17 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                 ("FogMaxOpacity", .75), ("StartDistance", 1500))]
             fields.append(prop("LightInscatteringColor", "StructProperty", bytes((64, 128, 255, 0)), "Color"))
             light("ExponentialHeightFogComponent", fields, actors[-1], component=True)
+            if local_lights:
+                for kind in ("PointLight", "SpotLight"):
+                    actors.append(light(kind, [vector("Location", -250, 0, 175), rotation]))
+                    params = [prop(key, "FloatProperty", pack("f", value)) for key, value in (
+                        ("Radius", 450), ("Brightness", .5), ("FalloffExponent", 5))]
+                    params.append(prop("LightColor", "StructProperty", bytes((32, 64, 250, 0)), "Color"))
+                    params.append(prop("CastShadows", "BoolProperty", b"\x01"))
+                    if kind == "SpotLight":
+                        params.extend(prop(key, "FloatProperty", pack("f", value))
+                                      for key, value in (("InnerConeAngle", 10), ("OuterConeAngle", 35)))
+                    light(kind + "Component", params, actors[-1], component=True)
         else:
             actors.append(light("Sunlight", [rotation, prop("LightBrightness", "FloatProperty", pack("f", 153))]))
             fields = [prop("bDistanceFog", "BoolProperty", b"\x01"), prop("AmbientBrightness", "ByteProperty", b"\x55"),
@@ -1933,6 +1952,31 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 manifest.write_text(json.dumps(on_disk), encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "Invalid intake sun"):
                     load_intake(manifest)
+
+    def test_ascend_local_lights_keep_placement_and_spot_cone(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "ascend", environment=True, local_lights=True)
+            manifest = convert_unreal(source, root / "Intakes")
+            on_disk = json.loads(manifest.read_bytes())
+            self.assertEqual((on_disk["format"], on_disk["scene_format"]), (54, 22))
+            _, _, rows = load_intake(manifest)
+            light_rows = [row for row in rows if row.get("conversion_class") == "unreallight"]
+            self.assertEqual([row["source_class"] for row in light_rows], ["Engine.PointLight", "Engine.SpotLight"])
+            for row in light_rows:
+                self.assertEqual(row["transform"]["position_cm"], [-500, 0, 350])
+                self.assertEqual(row["local_light"]["radius_cm"], 900)
+                self.assertEqual(row["local_light"]["falloff"], 5)
+                self.assertTrue(row["local_light"]["cast_shadows"])
+            self.assertEqual(light_rows[1]["local_light"]["inner_angle"], 10)
+            self.assertEqual(light_rows[1]["local_light"]["outer_angle"], 35)
+            shared = export_public_layout(manifest, root / "Public.zip")
+            _, _, public_rows = load_intake(unpack_intake(shared, root / "Public"))
+            self.assertFalse(any("local_light" in row for row in public_rows))
+            on_disk["format"] = 53
+            manifest.write_text(json.dumps(on_disk), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "compatible native intake"):
+                load_intake(manifest)
 
     def test_native_import_choices_create_intakes_without_a_settings_file(self):
         for game in ("ascend", "vengeance"):

@@ -449,6 +449,33 @@ def plan_native_brushes(folder, header, rows, manual):
     return tracks, active_references, lifts, relays
 
 
+def place_local_lights(actors, rows):
+    for row in rows:
+        if row["status"] == "excluded" or "local_light" not in row:
+            continue
+        light, transform = row["local_light"], row["transform"]
+        spotlight = light["kind"] == "spot"
+        actor = actors.spawn_actor_from_class(
+            unreal.SpotLight if spotlight else unreal.PointLight,
+            unreal.Vector(*transform["position_cm"]),
+            unreal.Quat(*transform["rotation_xyzw"]).rotator(),
+        )
+        actor.set_actor_label(row["name"])
+        component = actor.light_component
+        component.set_mobility(unreal.ComponentMobility.MOVABLE)
+        component.set_use_inverse_squared_falloff(False)
+        component.set_attenuation_radius(light["radius_cm"])
+        component.set_intensity(component.get_editor_property("intensity") * light["brightness"])
+        component.set_editor_property("cast_shadows", light.get("cast_shadows", False))
+        if "color" in light:
+            component.set_light_color(unreal.LinearColor(*light["color"], 1))
+        if "falloff" in light:
+            component.set_light_falloff_exponent(light["falloff"])
+        if spotlight:
+            component.set_outer_cone_angle(light["outer_angle"])
+            component.set_inner_cone_angle(light["inner_angle"])
+
+
 def place_environment(actors, settings, values=None):
     if values is None:
         profile = profile_config()
@@ -895,6 +922,7 @@ class DraftImport:
 
     def lighting(self, _):
         place_environment(self.editor.ACTORS, self.environment, self.values)
+        place_local_lights(self.editor.ACTORS, self.rows)
 
     def weather(self, _):
         header, terrain, rows, editor, ident = self.header, self.terrain, self.rows, self.editor, self.ident
