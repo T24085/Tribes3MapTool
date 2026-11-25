@@ -250,6 +250,11 @@ property offsets. Placement requires an explicit independent actor location.
 Bind an existing project mesh to a recovered reference through the draft's
 mapping controls.
 
+In native Ascend maps, an authored `UTGame.UTTeamPlayerStart` can use the
+imported terrain as its `Base`. Assign it in the appropriate team's
+`spawns` list to use its serialized world position and yaw. Starts attached
+to other actors require a manual placement review.
+
 For Vengeance version 130/27, the importer reads the compiled level BSP
 into an editable static mesh alongside the terrain. The mesh retains
 material slots and the original texture coordinates in texel units. The

@@ -70,23 +70,32 @@ def project_markers(scene, teams):
     if not isinstance(teams, list) or len(teams) != 2:
         raise ValueError("Provide the flag and spawns for each of the two CTF teams.")
     markers = {}
+    native_terrain = scene.get("native_terrain") if scene["profile"] == "ascend" else None
 
     def marker(name, team, kind):
         if not isinstance(name, str) or len(matches := by_name.get(name.casefold(), ())) != 1:
             raise ValueError(f"Select one unambiguous source actor for each {kind}.")
         actor, = matches
         transform = actor["transform"]
+        references = actor["references"]
+        # UE3 team starts serialize a world Location with a Base reference to the terrain.
+        terrain_start = (native_terrain is not None and kind == "spawn"
+                         and (actor["source_class"] or "").casefold() == "utgame.utteamplayerstart"
+                         and "attachparent" not in references
+                         and actor["links"].get("base") == native_terrain["export_index"])
         if (transform is None or not transform["authored"] or actor["components"] and any(
                 item["transform"] is not None for item in actor["components"])
                 and any("root component" in reason for reason in actor["review"])
-                or actor["references"].keys() & {"base", "attachparent"}):
+                or references.keys() & {"base", "attachparent"} and not terrain_start):
             raise ValueError(f"Choose a {kind} with an independent actor transform.")
         if actor["line"] in markers:
             raise ValueError("One source actor cannot be assigned twice.")
         x, y, z, w = transform["rotation_xyzw"]
         yaw = math.degrees(math.atan2(2 * (w*z + x*y), 1 - 2 * (y*y + z*z)))
         markers[actor["line"]] = dict(team=team, kind=kind, yaw=yaw,
-                                       position_cm=[value * 100 for value in transform["position_m"]])
+                                       position_cm=[value * 100 for value in transform["position_m"]],
+                                       reason=("Saved world position on the imported terrain" if terrain_start else
+                                               "Author-assigned CTF marker"))
 
     for team, entry in enumerate(teams, 1):
         if (not isinstance(entry, dict) or set(entry) != {"flag", "spawns"}
@@ -138,8 +147,7 @@ def project_rows(scene, markers, heightmap, *, placement_components=None):
                    status="review", reason=" · ".join(actor["review"]) or "Source actor retained for review",
                    properties={item["key"]: item["value"] for item in raw["entries"] if "key" in item})
         if line in markers:
-            row.update(markers[line], status="marker", reason="Author-assigned CTF marker",
-                       conversion_class="unrealctfmarker")
+            row.update(markers[line], status="marker", conversion_class="unrealctfmarker")
         elif brush := brushes.get(str(line)):
             row.update(conversion_class="unrealmeshactor", model_reference=brush["reference"], transform=brush["transform"],
                        reason="Imported brush for editor review. Gameplay behavior needs conversion.")
@@ -295,12 +303,6 @@ def convert_unreal(source, output, metadata=None):
             read_meshes = partial(read_ascend_meshes, artwork=artwork, collision_review=collision_review)
         with open_package(source, game) as (report, stream):
             scene = actor_scene(report, stream, units)
-            assignments = project_markers(scene, settings["teams"])
-            references = {row["model_reference"] for row in project_rows(scene, assignments, settings.get("heightmap"))
-                          if "model_reference" in row}
-            mesh_docs, mesh_issues = read_meshes(report, stream, units, references)
-            imported_meshes = {"unrealmesh:" + row["object_path"].casefold(): row["object_path"].split(".", 1)[0]
-                               for row in report["imports"] if row["class_name"].casefold() == "staticmesh"}
             if native:
                 terrain, raw, paint = decode_terrain(
                     scene, report, stream, settings.get("terrain_actor"), companions=companions,
@@ -309,6 +311,12 @@ def convert_unreal(source, output, metadata=None):
                 if height_package:
                     paint.packages[height_package["name"]] = height_package
                 companion_receipts.extend(dict(receipt, origin=name) for name, receipt in sorted(paint.packages.items()))
+            assignments = project_markers(scene, settings["teams"])
+            references = {row["model_reference"] for row in project_rows(scene, assignments, settings.get("heightmap"))
+                          if "model_reference" in row}
+            mesh_docs, mesh_issues = read_meshes(report, stream, units, references)
+            imported_meshes = {"unrealmesh:" + row["object_path"].casefold(): row["object_path"].split(".", 1)[0]
+                               for row in report["imports"] if row["class_name"].casefold() == "staticmesh"}
             read_bsp = read_bsp_models if game == "vengeance" else read_ascend_bsp_models
             models, issues = read_bsp(report, stream, units)
             if issues:

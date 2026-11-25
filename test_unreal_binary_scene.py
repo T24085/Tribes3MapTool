@@ -112,7 +112,7 @@ def vengeance_mesh_buffers():
 def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_terrain=False, bad_terrain_flag=False,
                          bsp_world=False, static_mesh=None, external_height=False, painted=False, source_artwork=False,
                          bsp_artwork=False, mesh_artwork=False, shader_inputs=False, surface_detail=False, brush_mover=False,
-                         ascend_shader=None, ascend_component_materials=None, ascend_body=None):
+                         ascend_shader=None, ascend_component_materials=None, ascend_body=None, spawn_base=None):
     exported, settings = unreal_draft_fixture(root, game)
     modern = game == "ascend"
     source = exported.with_suffix(".fmap" if modern else ".tvm")
@@ -129,6 +129,8 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                        "RelayToggle", "RelayOn", "RelayOff", "DoorRelayOn", "DoorRelayOff", "DoorEnable", "DoorDisable",
                        "DoorToggleSpare")
     strings = (*STRINGS, *sector_names, *door_names)
+    if spawn_base:
+        strings += ("UTGame", "UTTeamPlayerStart", "AttachParent")
     if modern and painted:
         paint_names = ("Name", "StrProperty", "ArrayProperty", "Layers", "Setup", "AlphaMapIndex", "Hidden",
                        "TerrainLayerSetup", "TerrainMaterial", "LayerSetup", "PaintMaterial", "Materials", "MappingScale")
@@ -269,6 +271,15 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
         imports.append(("Core", "Class", -1, "Terrain"))
         terrain_export = len(exports)
         exports.append((-len(imports), 1, "Terrain_1", 0, data, 3))
+        if spawn_base:
+            imports.append(("Core", "Package", 0, "UTGame"))
+            imports.append(("Core", "Class", -len(imports), "UTTeamPlayerStart"))
+            spawn_fields = [vector("Location", -100, 200, 150),
+                            vector("Rotation", 0, 16384, 0, structure="Rotator"),
+                            reference("Base", 6 if spawn_base == "mesh" else terrain_export + 1)]
+            if spawn_base == "attach-parent":
+                spawn_fields.append(reference("AttachParent", 6))
+            exports[1] = (-len(imports), 1, "BlueSpawn", 0, object_bytes(*spawn_fields, stateful=1), 0x02000003)
     if legacy_ground:
         width, height = 512, 256
         count = width * height
@@ -1824,6 +1835,27 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 self.assertEqual(deck_node["entries"][-1]["property_issues"], [])
                 review = next(row for row in rows if row["name"] == "Unmapped")
                 self.assertEqual(review["status"], "review")
+
+    def test_ascend_player_start_on_selected_terrain_preserves_its_world_transform(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "ascend", native_terrain=True, spawn_base="terrain")
+            manifest = convert_unreal(source, root / "Intakes")
+            _, _, rows = load_intake(manifest)
+            start, = (row for row in rows if row["name"] == "BlueSpawn")
+            self.assertEqual(start["status"], "marker")
+            self.assertEqual(start["source_class"], "UTGame.UTTeamPlayerStart")
+            self.assertEqual(start["position_cm"], [-200, 400, 300])
+            self.assertAlmostEqual(start["yaw"], 90)
+            self.assertEqual(start["properties"]["Base"], "PersistentLevel.Terrain_1")
+
+    def test_ascend_player_start_with_other_attachment_requires_review(self):
+        for spawn_base in ("mesh", "attach-parent"):
+            with self.subTest(spawn_base=spawn_base), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = binary_draft_fixture(root, "ascend", native_terrain=True, spawn_base=spawn_base)
+                with self.assertRaisesRegex(ValueError, "independent actor transform"):
+                    convert_unreal(source, root / "Intakes")
 
     def test_truncated_and_attached_flag_exports_cannot_become_ctf_markers(self):
         for option in ("corrupt", "attached"):
