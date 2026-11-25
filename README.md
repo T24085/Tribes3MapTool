@@ -40,8 +40,10 @@ Direct Host export kept both packages and each original generator link.
 A joined loopback match verified both stations spawned. Red stayed online
 with one generator left, shut down with both generators offline, and
 recovered on the first native auto-revive. Blue stayed online throughout.
-The fixture used native damage and a 40-second revive timer. Loadout
-changes and enemy rejection still need a player interaction test.
+The fixture used native damage and a 40-second revive timer. The updated
+station runtime applied a queued loadout after a friendly hold and
+preserved the queued loadout when that player entered the enemy station.
+Station-bearing exports require the updated Direct Host runtime.
 [Equipment authoring guide](tools/community_map_editor/README.md#review-equipment-and-power-groups)
 
 The Tribes 2 DIF importer preserves secondary detail meshes in version 43

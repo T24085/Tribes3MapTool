@@ -33,7 +33,7 @@ def main():
     print(f'Map Tool workspace {settings.parent}', flush=True)
     command = [sys.executable, '-B', str(Path(__file__).with_name('launch.py')), str(settings)]
     if options.smoke:
-        command.append('--smoke')
+        command.append('--authoring-smoke')
     return subprocess.call(command)
 
 

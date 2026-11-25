@@ -474,7 +474,7 @@ def run_stage_batch(project, engine, preview_base, env, exporter, adapter, ident
     return summary
 
 
-def run(config, *, smoke=False):
+def run(config, *, smoke=False, authoring_smoke=False):
     project = Path(config['project']).resolve(strict=True)
     engine = Path(config['engine_binaries']).resolve(strict=True)
     root = project.parent.parent
@@ -489,6 +489,9 @@ def run(config, *, smoke=False):
         raise ValueError('Offline playtest needs a game-compatible project and all three offline playtest paths.')
     if smoke and not preview:
         raise ValueError('The full smoke test needs an offline playtest configuration.')
+    if authoring_smoke and not authoring_only:
+        raise ValueError('The authoring smoke test requires an authoring-only workspace.')
+    headless = smoke or authoring_smoke
     parent, game_source, workspace = (
         (Path(config[key]).resolve(strict=True) for key in preview_keys) if preview else (None, None, None))
     if not authoring_only:
@@ -524,8 +527,8 @@ def run(config, *, smoke=False):
     adapter = Path(config.get('direct_host_equipment_adapter', exporter.with_name('attach_t2_equipment.py'))).resolve()
     env['T3_EDITOR_AUTHORING_ONLY'] = '1' if authoring_only else '0'
     env['T3_EDITOR_PLAYTEST'] = '1' if preview else '0'
-    env['T3_EDITOR_HOST_EXPORT'] = '1' if exporter.is_file() and not smoke else '0'
-    env['T3_EDITOR_EQUIPMENT_EXPORT'] = '1' if adapter.is_file() and not smoke else '0'
+    env['T3_EDITOR_HOST_EXPORT'] = '1' if exporter.is_file() and not headless else '0'
+    env['T3_EDITOR_EQUIPMENT_EXPORT'] = '1' if adapter.is_file() and not headless else '0'
     install_editor_scripts(project, env)
     level = None
     last = root/'last-draft.txt'
@@ -543,24 +546,25 @@ def run(config, *, smoke=False):
         host_request = attempt/'host-build-request.json'
         batch_request = attempt/'host-batch-request.json'
         review_request = attempt/'review-install-request.json'
-        plugin_args = editor_plugin_args(project, engine, smoke=smoke, authoring_only=authoring_only)
+        plugin_args = editor_plugin_args(project, engine, smoke=headless, authoring_only=authoring_only)
         env['T3_EDITOR_MAP_REVIEW'] = '1' if 'CommunityMapReview' in plugin_args[1].split(',') else '0'
         env.update(T3_EDITOR_REQUEST=str(request), T3_EDITOR_INTERACTIVE='1',
                    T3_EDITOR_HOST_REQUEST=str(host_request),
                    T3_EDITOR_BATCH_STAGE_REQUEST=str(batch_request),
                    T3_EDITOR_REVIEW_REQUEST=str(review_request),
                    T3_EDITOR_INITIAL='blank' if level is None else '', T3_EDITOR_LAST_DRAFT=str(last))
-        exe = 'UnrealEditor-Cmd.exe' if smoke else 'UnrealEditor.exe'
+        exe = 'UnrealEditor-Cmd.exe' if headless else 'UnrealEditor.exe'
         args = [str(engine/exe), str(project), *([level] if level else []), '-nop4', '-NoSplash', '-NoSound', '-NoCrashDialog',
                 '-abslog='+str(attempt/'editor.log'), *plugin_args]
         if open_review and env['T3_EDITOR_MAP_REVIEW'] == '1':
             args.append('-ExecCmds=T3.MapReview')
         open_review = False
-        if smoke:
+        if headless:
             env['T3_EDITOR_INTERACTIVE'] = '0'
-            args += ['-unattended', '-nullrhi', '-run=pythonscript', '-script='+str(TOOL/'smoke_editor.py')]
+            script = 'smoke_authoring.py' if authoring_smoke else 'smoke_editor.py'
+            args += ['-unattended', '-nullrhi', '-run=pythonscript', '-script='+str(TOOL/script)]
         print('Opening the TRIBES Map Editor. Logs:', attempt, flush=True)
-        job = run_owned_job(args, project.parent, env, attempt/'editor-owner', 1000 if smoke else None)
+        job = run_owned_job(args, project.parent, env, attempt/'editor-owner', 1000 if headless else None)
         active = job.get('job_active_processes_after_cleanup', job.get('job_active_processes_at_parent_exit'))
         for_host = host_request.is_file()
         for_batch = batch_request.is_file()
@@ -568,6 +572,10 @@ def run(config, *, smoke=False):
         requested = sum((request.is_file(), for_host, for_batch, for_review))
         if job['status'] != 'terminal' or active != 0 or (job.get('exit_code') != 0 and not requested):
             raise RuntimeError('The editor stopped before handing off its request. See ' + str(attempt/'editor.log'))
+        if authoring_smoke:
+            if requested or not (attempt/'authoring-smoke.json').is_file():
+                raise RuntimeError('The editor did not verify an authoring draft. See ' + str(attempt/'editor.log'))
+            return
         if not requested:
             return
         if requested > 1:
@@ -661,11 +669,13 @@ def run(config, *, smoke=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('config', type=Path)
-    parser.add_argument('--smoke', action='store_true', help=argparse.SUPPRESS)
+    checks = parser.add_mutually_exclusive_group()
+    checks.add_argument('--smoke', action='store_true', help=argparse.SUPPRESS)
+    checks.add_argument('--authoring-smoke', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     try:
-        with native_resources(timeout_ms=60000 if args.smoke else 0):
-            run(read_json(args.config, 16384), smoke=args.smoke)
+        with native_resources(timeout_ms=60000 if args.smoke or args.authoring_smoke else 0):
+            run(read_json(args.config, 16384), smoke=args.smoke, authoring_smoke=args.authoring_smoke)
     except NativeResourceBusy as error:
         print(error, file=sys.stderr)
         return 75
