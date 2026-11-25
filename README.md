@@ -35,8 +35,11 @@ interaction capsule and powered component.
 The original Damnation draft saved one approved station per team at the
 measured floor height. Unreal cooked the map-specific Blueprint and the
 Direct Host export kept both packages and each original generator link.
-The playtest checklist includes friendly use, enemy rejection and circuit
-outage and recovery. Joined player interaction remains under qualification.
+A joined loopback match verified both stations spawned. Red stayed online
+with one generator left, shut down with both generators offline, and
+recovered on the first native auto-revive. Blue stayed online throughout.
+The fixture used native damage and a 40-second revive timer. Loadout
+changes and enemy rejection still need a player interaction test.
 [Equipment authoring guide](tools/community_map_editor/README.md#review-equipment-and-power-groups)
 
 The Tribes 2 DIF importer preserves secondary detail meshes in version 43
