@@ -16,12 +16,13 @@ TOOL_MATERIALS = {'null', 'origin', 'trigger', 'forcefield'}
 VENGEANCE_BSP = 8
 ASCEND_STATIC_MESH = 9
 VENGEANCE_STATIC_MESH = 10
+ASCEND_BSP = 11
 UNREAL_STATIC_MESHES = {ASCEND_STATIC_MESH, VENGEANCE_STATIC_MESH}
-UNREAL_GEOMETRY = {VENGEANCE_BSP, *UNREAL_STATIC_MESHES}
+UNREAL_GEOMETRY = {VENGEANCE_BSP, ASCEND_BSP, *UNREAL_STATIC_MESHES}
 
 
 def validate_geometry(data):
-    if not isinstance(data, dict) or type(data.get('format')) is not int or not 1 <= data['format'] <= VENGEANCE_STATIC_MESH:
+    if not isinstance(data, dict) or type(data.get('format')) is not int or not 1 <= data['format'] <= ASCEND_BSP:
         raise ValueError('Unsupported Tribes geometry.')
     native = data['format'] in UNREAL_GEOMETRY
     fields = {'format', 'source', 'materials', 'vertices_m', 'triangles'}
@@ -54,6 +55,8 @@ def validate_geometry(data):
             source_fields.add('object_path')
         if data['format'] == ASCEND_STATIC_MESH:
             extensions = 'fmap|udk|upk'
+        if data['format'] == ASCEND_BSP:
+            extensions = 'fmap|udk'
         if (not isinstance(source, dict) or set(source) != source_fields
                 or not isinstance(source['name'], str)
                 or not re.fullmatch(rf'[^/\\:\x00-\x1f]{{1,240}}\.(?:{extensions})', source['name'], re.I)

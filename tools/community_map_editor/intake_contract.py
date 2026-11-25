@@ -14,7 +14,8 @@ from mission_audio import (AUDIO_INDEX, AUDIO_MEMBER, MAX_AUDIO_BYTES, MAX_AUDIO
 from mission_weather import WEATHER_FILE, mission_weather
 from native_terrain_paint import MAX_PAINT_BYTES, MAX_PAINT_LAYERS, MAX_PAINT_PNG_BYTES, PAINT_FILE, decode_mask
 from sky_intake import MAX_SKIES, MAX_SKY_BYTES, MAX_SKY_SLOTS, SKY_INDEX, SKY_PNG, validate_sky_artwork
-from source_profiles import (ASCEND, ASCEND_ART_VERSIONS, ASCEND_COLLISION_VERSIONS, ASCEND_CONVEX_COLLISION_VERSION,
+from source_profiles import (ASCEND, ASCEND_ART_VERSIONS, ASCEND_BSP_INTAKE_VERSION,
+                             ASCEND_COLLISION_VERSIONS, ASCEND_CONVEX_COLLISION_VERSION,
                              ASCEND_PLACEMENT_ART_VERSION, ASCEND_PRIVATE_MESH_VERSIONS,
                              BRUSH_PREVIEW_REFERENCE, NAMES, T2, T2_ACOUSTIC_COLLISION_VERSION, T2_ACOUSTIC_VERSIONS,
                              T2_AUDIO_PROFILES_VERSION, T2_AUDIO_VERSIONS,
@@ -657,6 +658,7 @@ def load_intake(manifest):
     unreal = header["format"] in UNREAL_INTAKE_VERSIONS
     native_models = header["format"] in VENGEANCE_MODEL_VERSIONS
     ascend_art = header["format"] in ASCEND_ART_VERSIONS
+    ascend_bsp = header["format"] == ASCEND_BSP_INTAKE_VERSION
     ascend_simple_collision = header["format"] in ASCEND_COLLISION_VERSIONS
     ascend_convex = header["format"] == ASCEND_CONVEX_COLLISION_VERSION
     ascend_placement_art = header["format"] == ASCEND_PLACEMENT_ART_VERSION
@@ -731,7 +733,8 @@ def load_intake(manifest):
         interior_versions += ASCEND_PRIVATE_MESH_VERSIONS
     model_files = validate_model_index(header, inventory, field="interiors", review_field="interior_review",
                                        pattern=INTERIOR_FILE, prefix=interior_prefix, supported=interior_versions,
-                                       required=(4, 15, 16, 17, ASCEND_PLACEMENT_ART_VERSION, *ASCEND_COLLISION_VERSIONS))
+                                       required=(4, 15, 16, 17, ASCEND_PLACEMENT_ART_VERSION,
+                                                 *ASCEND_COLLISION_VERSIONS, ASCEND_BSP_INTAKE_VERSION))
     model_files.update(validate_model_index(header, inventory, field="shapes", review_field="shape_review",
                                            pattern=SHAPE_FILE, prefix=("tsstatic:", "staticshape:"),
                                            supported=(*range(5, 11), *range(18, 22), *T2_DIF_VERSIONS,
@@ -772,6 +775,7 @@ def load_intake(manifest):
     mask_metadata, paint_bytes, paint_samples = {}, 0, 0
     vengeance_mesh_files = set()
     brush_files = set()
+    ascend_bsp_files = set()
     has_simple_collision = False
     has_convex = False
     has_dif_lods = False
@@ -783,7 +787,7 @@ def load_intake(manifest):
         if not intake_filename(name, header["format"]):
             raise ValueError("Unexpected intake filename.")
         if name in model_files:
-            from interior_geometry import ASCEND_STATIC_MESH, VENGEANCE_BSP, VENGEANCE_STATIC_MESH, material_slots
+            from interior_geometry import ASCEND_BSP, ASCEND_STATIC_MESH, VENGEANCE_BSP, VENGEANCE_STATIC_MESH, material_slots
 
             geometry, size = load_intake_geometry(manifest.parent, name, digest)
             has_dif_lods |= 'lods' in geometry
@@ -799,6 +803,16 @@ def load_intake(manifest):
             if model_bytes > MAX_INTAKE_INTERIOR_BYTES:
                 raise ValueError("Oversized intake model geometry.")
             model_format = geometry["format"]
+            if model_format == ASCEND_BSP:
+                source = geometry["source"]
+                receipt = header["sources"][0]
+                if (not ascend_bsp or model_files[name] != f"unrealmesh:bsp.{source['export']}"
+                        or any(source[key] != receipt[key] for key in ("name", "sha256"))):
+                    raise ValueError("BSP model does not match the Ascend package source.")
+                ascend_bsp_files.add(name)
+                if geometry["render"]:
+                    slots[name] = {str(slot) for slot in material_slots(geometry)}
+                continue
             if model_format == VENGEANCE_BSP:
                 source = geometry["source"]
                 receipt = header["sources"][0]
@@ -827,14 +841,14 @@ def load_intake(manifest):
                 if model_format == ASCEND_STATIC_MESH:
                     simple = geometry["collision"].get("simple")
                     if simple:
-                        if not ascend_simple_collision:
+                        if not (ascend_simple_collision or ascend_bsp):
                             raise ValueError("Ascend simple collision requires intake version 41 or later.")
                         has_simple_collision = True
                         if any(shape["kind"] == "convex" for shape in simple["shapes"]):
-                            if not ascend_convex:
+                            if not (ascend_convex or ascend_bsp):
                                 raise ValueError("Ascend convex collision requires intake version 42.")
                             has_convex = True
-                    if ascend_art or ascend_simple_collision and has_textures:
+                    if ascend_art or (ascend_simple_collision or ascend_bsp) and has_textures:
                         slots[name] = {str(slot) for slot in material_slots(geometry)}
                 if model_format == VENGEANCE_STATIC_MESH:
                     vengeance_mesh_files.add(name)
@@ -928,13 +942,15 @@ def load_intake(manifest):
         raise ValueError("Ascend collision intake requires authored simple shapes.")
     if ascend_convex and not has_convex:
         raise ValueError("Ascend convex collision intake requires an authored hull.")
-    if ascend_simple_collision and has_textures and isinstance(docs[TEXTURE_INDEX], dict):
+    if ascend_bsp and not ascend_bsp_files:
+        raise ValueError("Ascend BSP intake requires compiled level geometry.")
+    if (ascend_simple_collision or ascend_bsp) and has_textures and isinstance(docs[TEXTURE_INDEX], dict):
         ascend_placement_art = any(key.startswith("placement-") for key in docs[TEXTURE_INDEX])
     if has_textures and not ascend_placement_art:
-        legacy_art = legacy_textures or native_models or ascend_art or ascend_simple_collision
+        legacy_art = legacy_textures or native_models or ascend_art or ascend_simple_collision or ascend_bsp
         validate_bindings(docs[TEXTURE_INDEX], slots, inventory,
                           legacy_sizes=texture_sizes if legacy_art else None,
-                          receipts=receipts, native_bsp=native_models or ascend_art or ascend_simple_collision,
+                          receipts=receipts, native_bsp=native_models or ascend_art or ascend_simple_collision or ascend_bsp,
                           shader_inputs=shader_inputs or brush_intake,
                           surface_detail=surface_detail or brush_intake, require_extended=not brush_intake)
         if vengeance_mesh_art and not any("file" in binding for filename in vengeance_mesh_files

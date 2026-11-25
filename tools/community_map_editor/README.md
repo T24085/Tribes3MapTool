@@ -423,6 +423,13 @@ Unusable hulls, mixed collision flags, lower-detail models, and ambiguous
 component placements appear in Object Review. Public layout exports
 omit the mesh files and source package receipts.
 
+[Intake version 51](intake-v51.schema.json) imports a version 805 Ascend
+level's compiled BSP as editable static geometry. It keeps the saved
+texture coordinates and material slots. The collision mesh includes
+invisible solid surfaces and skips portals and nonblocking surfaces.
+Unsupported model layouts appear in Object Review. Public layouts omit
+the BSP mesh files.
+
 ### Import terrain from a native map package
 
 Omit `heightmap`, `origin_m`, `step_m`, `height_range_m`, and `raster_y` to

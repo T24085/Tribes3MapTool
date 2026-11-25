@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 
 import unreal
 
-from interior_geometry import (ASCEND_STATIC_MESH, UNREAL_GEOMETRY, UNREAL_STATIC_MESHES, VENGEANCE_BSP,
+from interior_geometry import (ASCEND_BSP, ASCEND_STATIC_MESH, UNREAL_GEOMETRY, UNREAL_STATIC_MESHES, VENGEANCE_BSP,
                                VENGEANCE_STATIC_MESH, animated_only_slots, dif_detail_lighting, dif_detail_mesh,
                                load_geometry, material_sections, render_sections, visible_material)
 from source_profiles import BRUSH_PREVIEW_FOLDER
@@ -16,7 +16,7 @@ from source_profiles import BRUSH_PREVIEW_FOLDER
 
 FOLDERS = {1: '/Game/Community/T2Interiors', 2: '/Game/Community/T2Shapes', 3: '/Game/Community/T1Interiors',
            VENGEANCE_BSP: '/Game/Community/VengeanceBSP', ASCEND_STATIC_MESH: '/Game/Community/AscendMeshes',
-           VENGEANCE_STATIC_MESH: '/Game/Community/VengeanceMeshes'}
+           VENGEANCE_STATIC_MESH: '/Game/Community/VengeanceMeshes', ASCEND_BSP: '/Game/Community/AscendBSP'}
 HASH_TAG = 'T3InteriorGeometryHash'
 MAX_UNREAL_LODS = 8
 DIF_REFERENCE_HEIGHT = 720
@@ -26,7 +26,7 @@ def mesh_package(data, digest, *, brush_preview=False):
     source = (data['source']['object_path'].rsplit('.', 1)[-1] if data['format'] in UNREAL_STATIC_MESHES
               else data['source']['name'][:-4])
     stem = re.sub(r'[^A-Za-z0-9_]', '_', source)[:42]
-    family = {VENGEANCE_BSP: 'TV', VENGEANCE_STATIC_MESH: 'TV', ASCEND_STATIC_MESH: 'TA'}.get(
+    family = {VENGEANCE_BSP: 'TV', VENGEANCE_STATIC_MESH: 'TV', ASCEND_STATIC_MESH: 'TA', ASCEND_BSP: 'TA'}.get(
         data['format'], 'T1' if data['format'] >= 3 else 'T2')
     folder = BRUSH_PREVIEW_FOLDER if brush_preview else FOLDERS.get(data['format'], '/Game/Community/T1Shapes')
     return f'{folder}/SM_{family}_{stem}_{digest[:16]}'

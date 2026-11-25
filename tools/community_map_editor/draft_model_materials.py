@@ -9,7 +9,7 @@ import unreal
 
 from dif_light_animation import mask_texture
 from intake_contract import bounded
-from interior_geometry import ASCEND_STATIC_MESH, VENGEANCE_BSP, VENGEANCE_STATIC_MESH, material_sections
+from interior_geometry import ASCEND_BSP, ASCEND_STATIC_MESH, VENGEANCE_BSP, VENGEANCE_STATIC_MESH, material_sections
 from interior_lighting import model_lighting
 from mesh_mappings import source_reference
 from model_textures import has_shader_inputs, load_texture_index, placement_key, shader_signature, validate_png
@@ -411,7 +411,7 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
             elif not name:
                 continue
             else:
-                if geometry['format'] == ASCEND_STATIC_MESH:
+                if geometry['format'] in (ASCEND_STATIC_MESH, ASCEND_BSP):
                     destination = '/Game/Community/AscendMeshTextures'
                 else:
                     destination = vengeance_destination or (LEGACY_DESTINATION if legacy else DESTINATION)

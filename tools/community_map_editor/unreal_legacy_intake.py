@@ -17,7 +17,8 @@ from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, PL
 from interior_geometry import MAX_GEOMETRY_BYTES
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
-from source_profiles import (ASCEND_CONVEX_COLLISION_VERSION, ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION,
+from source_profiles import (ASCEND_BSP_INTAKE_VERSION, ASCEND_CONVEX_COLLISION_VERSION,
+                             ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION,
                              ASCEND_PLACEMENT_ART_VERSION,
                              ASCEND_SIMPLE_COLLISION_VERSION,
                              UNREAL_INTAKE_VERSIONS, UNREAL_PROFILES,
@@ -37,6 +38,7 @@ from unreal_legacy_reader import attributes, descendants, read_unreal_export
 from unreal_native_terrain import decode_terrain
 from unreal_package_reader import GAMES as NATIVE_PACKAGE_TYPES, open_package
 from vengeance_bsp import read_bsp_models
+from ascend_bsp import read_bsp_models as read_ascend_bsp_models
 from vengeance_brushes import read_native_brushes
 from vengeance_materials import resolve_material as resolve_vengeance_material
 from vengeance_static_mesh import read_placed_meshes as read_vengeance_meshes
@@ -306,12 +308,13 @@ def convert_unreal(source, output, metadata=None):
                 if height_package:
                     paint.packages[height_package["name"]] = height_package
                 companion_receipts.extend(dict(receipt, origin=name) for name, receipt in sorted(paint.packages.items()))
+            read_bsp = read_bsp_models if game == "vengeance" else read_ascend_bsp_models
+            models, issues = read_bsp(report, stream, units)
+            if issues:
+                scene["bsp_review"] = issues
+            artwork.read_package({f"unrealmesh:bsp.{geometry['source']['export']}": (f"{level} BSP", geometry, slots)
+                                  for level, geometry, slots in models}, report, stream)
             if game == "vengeance":
-                models, issues = read_bsp_models(report, stream, units)
-                if issues:
-                    scene["bsp_review"] = issues
-                artwork.read_package({f"unrealmesh:bsp.{geometry['source']['export']}": (f"{level} BSP", geometry, slots)
-                                      for level, geometry, slots in models}, report, stream)
                 root, = [node for node in scene["scene"] if node.get("block", "").casefold() == "map"]
                 blocks = {node["line"]: node for node in descendants(root)}
                 brushes, brush_models, brush_issues, trigger_chains = read_native_brushes(
@@ -420,13 +423,17 @@ def convert_unreal(source, output, metadata=None):
     for level, geometry, _ in models:
         reference = f"unrealmesh:bsp.{geometry['source']['export']}"
         if reference in interiors:
-            raise ValueError(f"Vengeance static mesh path conflicts with the BSP reference {reference}.")
+            raise ValueError(f"Static mesh path conflicts with the BSP reference {reference}.")
         filename = f"interior-{len(interiors) + 1:04d}.json"
+        data = encoded(geometry)
+        mesh_bytes += len(data)
+        if len(data) > MAX_GEOMETRY_BYTES or mesh_bytes > MAX_INTAKE_INTERIOR_BYTES:
+            raise ValueError("Oversized Unreal draft mesh geometry.")
         interiors[reference] = filename
-        files[filename] = encoded(geometry)
+        files[filename] = data
         bsp_references.append(reference)
         rows.append(dict(id=len(rows) + 1, parent=None, source_class="Model", name=f"{level} BSP",
-                         status="review", reason="Compiled Vengeance BSP geometry",
+                         status="review", reason=f"Compiled {artwork.profile} BSP geometry",
                          properties={}, conversion_class="unrealmeshactor", model_reference=reference,
                          transform=dict(position_cm=[0, 0, 0], rotation_xyzw=[0, 0, 0, 1], scale=[1, 1, 1])))
     for issue in scene.get("bsp_review", ()):
@@ -440,7 +447,8 @@ def convert_unreal(source, output, metadata=None):
                                  for binding in artwork.bindings.get(reference, {}).values())
         surface_detail = any(binding.keys() & SURFACE_DETAIL for reference in interiors
                              for binding in artwork.bindings.get(reference, {}).values())
-        texture_models = interiors if mesh_artwork or extended_materials or brush_models else bsp_references
+        all_models = mesh_artwork or extended_materials or brush_models or (game == "ascend" and bsp_references)
+        texture_models = interiors if all_models else bsp_references
         texture_index = {interiors[reference]: artwork.bindings[reference] for reference in texture_models
                          if reference in artwork.bindings}
         texture_index.update((key, artwork.bindings[key]) for key in placement_models)
@@ -472,7 +480,7 @@ def convert_unreal(source, output, metadata=None):
                 "vengeance_terrain_layers.py", "vengeance_brushes.py", "vengeance_mover_plan.py", "vengeance_triggers.py"))
         else:
             scripts.extend(Path(__file__).with_name(name) for name in ("ascend_static_mesh.py", "ascend_collision.py", "ascend_materials.py",
-                                                                      "ascend_texture_cache.py"))
+                                                                      "ascend_texture_cache.py", "ascend_bsp.py", "vengeance_bsp.py"))
     if native:
         scripts.append(Path(__file__).with_name("unreal_native_terrain.py"))
     version = UNREAL_INTAKE_VERSIONS[0]
@@ -486,6 +494,8 @@ def convert_unreal(source, output, metadata=None):
             version = ASCEND_CONVEX_COLLISION_VERSION
         elif simple_shapes:
             version = ASCEND_SIMPLE_COLLISION_VERSION
+    if models and game == "ascend":
+        version = ASCEND_BSP_INTAKE_VERSION
     if paint.masks:
         version = VENGEANCE_PAINT_INTAKE_VERSION
     terrain_art = any("file" in item for item in paint.artwork.values())

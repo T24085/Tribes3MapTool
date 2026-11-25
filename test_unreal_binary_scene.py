@@ -68,6 +68,32 @@ def ascend_mesh_lod(materials):
     return data + struct.pack("<5i6H2i", 0, 0, len(positions), 2, 6, *range(6), 2, 0)
 
 
+def ascend_bsp_payload(materials, *, corrupt=False):
+    def bulk(size, records):
+        return struct.pack('<2i', size, len(records)) + b''.join(records)
+
+    vectors = [struct.pack('<3f', *values) for values in ((0, 0, 1), (0.1, 0, 0), (0, 0.1, 0))]
+    points, nodes, surfaces, vertices, render = [], [], [], [], []
+    for surface, flags in enumerate((0, 8, 1, 0x04000000)):
+        first, x, z = len(points), 100 + 250 * surface, 350 + 35 * surface
+        node = bytearray(64)
+        struct.pack_into('<2i', node, 16, first, surface)
+        node[54] = 4
+        nodes.append(node)
+        surfaces.append(struct.pack('<iI6i5f2i', materials[surface % 2], flags, first, 0, 1, 2,
+                                    -1, 0, 0, 0, 1, z, 32, 0, 0))
+        for i, (u, v) in enumerate(((0, 0), (1, 0), (1, 1), (0, 1))):
+            point = (x + u * 100, v * 100, z)
+            points.append(struct.pack('<3f', *point))
+            vertices.append(struct.pack('<2i4f', first + i, -1, 0, 0, 0, 0))
+            render_z = z + 10 if corrupt and first + i == 0 else z
+            render.append(struct.pack('<3f8x4f', point[0], point[1], render_z, 0.25 + u, 0.5 + v, 0, 0))
+    return (bytes(28) + bulk(12, vectors) + bulk(12, points) + bulk(64, nodes)
+            + struct.pack('<2i', 0, len(surfaces)) + b''.join(surfaces) + bulk(24, vertices)
+            + bulk(4, []) + struct.pack('<i', 0) + bulk(4, []) + bulk(4, [])
+            + struct.pack('<2i', 1, 1) + bulk(4, []) + struct.pack('<i', len(render)) + bulk(36, render))
+
+
 def vengeance_mesh_buffers():
     positions = [(0, 0, 40), (0, 40, 40), (100, 0, 40), (0, 65, 70), (0, 105, 70), (100, 65, 70)]
     data = bytes(41) + struct.pack("<3i", 3, 1, 3) + compact(2)
@@ -321,7 +347,17 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
         settings["terrain_actor"] = "Terrain_1" if legacy_ground else "PersistentLevel.Terrain_1"
         source.with_suffix(".import.json").write_text(json.dumps(settings), encoding="utf-8")
         (root / "Ground.png").unlink()
-    if bsp_world:
+    if bsp_world and modern:
+        imports.append(("Core", "Class", -1, "Model"))
+        model_class = -len(imports)
+        imports.extend([("Fixture", "Material", -1, "FixtureStone"), ("Fixture", "Material", -1, "FixtureGlass")])
+        model_index = len(exports) + 1
+        model = ascend_bsp_payload((1 - len(imports), -len(imports)), corrupt=bsp_world == "corrupt")
+        exports.append((model_class, 1, "WorldModel", 0, object_bytes() + model, 3))
+        url = pack("i", 7) + b"unreal\0" + pack("3i", 0, 0, 0)
+        extra = url + pack("4i", 0, 7777, 1, model_index)
+        exports[0] = (*exports[0][:4], level + extra, exports[0][5])
+    if bsp_world and not modern:
         level_model = len(exports) + 1
         level += bytes(5) + pack("6i", 7777, 1, 3, 8, 6, 63446) + compact(level_model)
         exports[0] = (*exports[0][:4], level, 3)
@@ -1327,6 +1363,42 @@ class UnrealBinarySceneTests(unittest.TestCase):
             metadata.write_text(json.dumps(settings), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, r"FixtureTerrain\.pkg in asset_packages"):
                 convert_unreal(source, root / "MissingIntakes")
+
+    def test_ascend_level_bsp_keeps_compiled_uvs_and_separates_collision(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, 'ascend', bsp_world=True)
+            manifest = convert_unreal(source, root / 'Intakes')
+            header, _, rows = load_intake(manifest)
+            self.assertEqual(header['format'], 51)
+            reference, = header['interiors']
+            name = header['interiors'][reference]
+            geometry, _ = load_intake_geometry(manifest.parent, name, header['files'][name])
+            self.assertEqual(geometry['format'], 11)
+            self.assertEqual(reference, f"unrealmesh:bsp.{geometry['source']['export']}")
+            self.assertEqual(geometry['materials'], ['Fixture.FixtureStone', 'Fixture.FixtureGlass'])
+            self.assertEqual(len(geometry['triangles']), 4)
+            self.assertEqual(len(geometry['collision']['triangles']), 4)
+            self.assertEqual(geometry['triangles'][0][4:], [0.25, 0.5, 1.25, 1.5, 1.25, 0.5])
+            visible = {geometry['vertices_m'][i][2] for face in geometry['triangles'] for i in face[1:4]}
+            solid = {geometry['vertices_m'][i][2] for face in geometry['collision']['triangles'] for i in face}
+            self.assertEqual(visible, {7, 7.7})
+            self.assertEqual(solid, {7, 8.4})
+            self.assertTrue(any(row.get('model_reference') == reference for row in rows))
+            share = export_public_layout(manifest, root / 'Share.zip')
+            public, _, _ = load_intake(unpack_intake(share, root / 'Public'))
+            self.assertEqual(public['format'], 22)
+            self.assertNotIn('interiors', public)
+
+    def test_ascend_inconsistent_compiled_bsp_stays_in_object_review(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, 'ascend', bsp_world='corrupt')
+            header, _, rows = load_intake(convert_unreal(source, root / 'Intakes'))
+            self.assertEqual(header['format'], 22)
+            self.assertNotIn('interiors', header)
+            review, = (row for row in rows if row['source_class'] == 'Model')
+            self.assertIn('do not match their polygon', review['reason'])
 
     def test_ascend_placed_meshes_keep_material_uvs_and_independent_collision(self):
         for mode, reference in (("embedded", "unrealmesh:originalmesh"), ("companion", "unrealmesh:fixture.originalmesh")):

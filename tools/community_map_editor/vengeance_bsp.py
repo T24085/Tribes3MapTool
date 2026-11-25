@@ -112,46 +112,58 @@ def triangle_winding(first, second, third, normal):
 
 
 def project_model(report, stream, model, objects, units, decoder_hash):
-    points, nodes, surfaces, vertex_pool = model_arrays(report, stream, model, objects)
+    return project_arrays(report, model, objects, units, decoder_hash, VENGEANCE_BSP,
+                          model_arrays(report, stream, model, objects))
+
+
+def project_arrays(report, model, objects, units, decoder_hash, model_format, arrays, *, texture_uv=None):
+    points, nodes, surfaces, vertex_pool = arrays
     triangles, collision = [], []
     materials, vertices = {}, {}
     for first, surface, size in nodes:
         if size < 3:
             continue
         if not 0 <= surface < len(surfaces) or not 0 <= first <= len(vertex_pool) - size:
-            raise ValueError("A Vengeance BSP node references a missing surface or vertex range.")
+            raise ValueError("A BSP node references a missing surface or vertex range.")
         indices = vertex_pool[first:first + size]
         if any(not 0 <= index < len(points) for index in indices):
-            raise ValueError("A Vengeance BSP face references a missing point.")
+            raise ValueError("A BSP face references a missing point.")
         material, flags, base, normal, u_axis, v_axis = surfaces[surface]
         visible = not flags & (INVISIBLE | FAKE_BACKDROP | PORTAL)
         solid = not flags & (NOT_SOLID | PORTAL)
         if not (visible or solid):
             continue
         if not all(math.isfinite(value) for vector in (base, normal, u_axis, v_axis) for value in vector):
-            raise ValueError("Invalid Vengeance BSP surface coordinates.")
-        for second, third in zip(indices[1:], indices[2:]):
-            a, b, c = (points[index] for index in (indices[0], second, third))
+            raise ValueError("Invalid BSP surface coordinates.")
+        for step in range(1, size - 1):
+            order = (0, step, step + 1)
+            a, b, c = (points[indices[index]] for index in order)
             winding = triangle_winding(a, b, c, normal)
             if not math.isfinite(winding):
-                raise ValueError("Invalid Vengeance BSP point coordinates.")
+                raise ValueError("Invalid BSP point coordinates.")
             if abs(winding) <= 1e-8:
                 continue
-            ordered = (indices[0], third, second) if winding > 0 else (indices[0], second, third)
+            if winding > 0:
+                order = (0, step + 1, step)
+            ordered = [indices[index] for index in order]
             face = [vertices.setdefault(index, len(vertices)) for index in ordered]
             if visible:
                 slot = materials.setdefault((material, flags & BLEND_FLAGS), len(materials))
                 uv = []
-                for index in ordered:
-                    displacement = tuple(v - origin for v, origin in zip(points[index], base))
-                    uv.extend((dot(displacement, u_axis), dot(displacement, v_axis)))
+                if texture_uv is None:
+                    for index in ordered:
+                        displacement = tuple(v - origin for v, origin in zip(points[index], base))
+                        uv.extend((dot(displacement, u_axis), dot(displacement, v_axis)))
+                else:
+                    for index in order:
+                        uv.extend(texture_uv[first + index])
                 triangles.append([slot, *face, *uv])
                 if flags & TWO_SIDED:
                     triangles.append([slot, face[0], face[2], face[1], *uv[:2], *uv[4:], *uv[2:4]])
             if solid:
                 collision.append(face)
             if len(triangles) > MAX_RECORDS or len(collision) > MAX_RECORDS:
-                raise ValueError("Vengeance BSP has too many triangles for one draft mesh.")
+                raise ValueError("BSP has too many triangles for one draft mesh.")
     if not triangles and not collision:
         return None
     locations = [[value / units for value in points[index]] for index in vertices]
@@ -159,7 +171,7 @@ def project_model(report, stream, model, objects, units, decoder_hash):
     if not render:
         triangles = [[0, *face, 0, 0, 0, 0, 0, 0] for face in collision]
     names = [objects[index]["object_path"] if index else "Unassigned" for index, _ in materials] if render else ["Collision"]
-    geometry = validate_geometry(dict(format=VENGEANCE_BSP,
+    geometry = validate_geometry(dict(format=model_format,
                                      source=dict(name=report["source"]["name"], sha256=report["source"]["sha256"],
                                                  decoder_sha256=decoder_hash, export=model["index"]),
                                      materials=names, vertices_m=locations, triangles=triangles, render=render,
