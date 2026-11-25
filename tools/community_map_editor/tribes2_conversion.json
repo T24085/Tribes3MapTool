@@ -52,6 +52,7 @@
       "unit": "UE fog density",
       "input_unit": "cm",
       "formula": "inverse_span",
+      "source_field": "density",
       "start": "fog.start_cm",
       "end": "fog.visible_cm",
       "fallback_span": 40000,
@@ -74,6 +75,7 @@
       "group": "sun",
       "unit": "multiplier",
       "formula": "constant",
+      "source_field": "intensity_scale",
       "value": 1,
       "range": [
         0,
@@ -89,6 +91,7 @@
       "group": "sun",
       "unit": "multiplier",
       "formula": "constant",
+      "source_field": "ambient_scale",
       "value": 1,
       "range": [
         0,

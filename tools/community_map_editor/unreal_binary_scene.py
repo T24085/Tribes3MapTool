@@ -42,6 +42,12 @@ def late_vengeance_state(cursor, objects):
 
 def read_object_prefix(cursor, summary, export, objects):
     modern = summary["game"] == "ascend"
+    if modern and summary["version"] == 805 and export["class_name"].casefold() == "dominantdirectionallightcomponent":
+        # UE3 saves an array of 16-bit dominant-light shadow samples before the component.
+        shadow_samples = cursor.count((cursor.limit - cursor.offset) // 2)
+        if shadow_samples * 2 > cursor.limit - cursor.offset:
+            raise ValueError("Dominant light shadow samples exceed the component payload.")
+        cursor.offset += shadow_samples * 2
     if not modern and summary["licensee_version"] >= 25:
         marker, = cursor.fields("i")
         extra = {3: 8, 4: 4}.get(marker)

@@ -42,7 +42,9 @@ MAX_INTAKE_INTERIORS = 128
 MAX_INTAKE_INTERIOR_BYTES = 96 * 1024 * 1024
 PLAYABLE_BOUNDS = "playable_bounds_cm"
 BOUNDARY_RECIPE = "draft_boundary_recipe"
-LATEST_INTAKE_VERSION = max(UNREAL_INTAKE_VERSION, *T2_DIF_VERSIONS, *T2_GENERATOR_SCOPE_VERSIONS)
+NATIVE_ENVIRONMENT_VERSION = 53
+LATEST_INTAKE_VERSION = max(NATIVE_ENVIRONMENT_VERSION, UNREAL_INTAKE_VERSION, *T2_DIF_VERSIONS,
+                            *T2_GENERATOR_SCOPE_VERSIONS)
 T1_SHAPE_INTAKE_VERSION = {4: 18, 5: 19, 6: 20, 7: 21}
 EQUIPMENT_FILE = "equipment.json"
 UNREAL_SCENE = "source-scene.json"
@@ -276,7 +278,7 @@ def validate_native_paint(header, terrain, scene, mask_metadata):
             raise ValueError("Invalid native terrain source artwork projection.")
 
 
-def validate_environment(settings):
+def validate_environment(settings, *, unreal=False):
     def vector(value):
         return isinstance(value, list) and len(value) == 3 and all(finite(item, 1) for item in value)
 
@@ -284,16 +286,24 @@ def validate_environment(settings):
         raise ValueError("Invalid intake environment.")
     if "sun" in settings:
         sun = settings["sun"]
-        if (not isinstance(sun, dict) or not sun or sun.keys() - {"direction", "color", "ambient"}
-                or not all(vector(item) for item in sun.values())
+        scales = {"intensity_scale", "ambient_scale"} if unreal else set()
+        directions = {"direction", "color", "ambient"}
+        if (not isinstance(sun, dict) or not sun or sun.keys() - (directions | scales)
+                or not all(vector(sun[key]) for key in sun.keys() & directions)
+                or any(not finite(sun[key], 8) or sun[key] < 0 for key in sun.keys() & scales)
                 or any(min(sun[key]) < 0 for key in sun.keys() & {"color", "ambient"})
                 or ("direction" in sun and abs(sum(v*v for v in sun["direction"]) - 1) > 1e-6)):
             raise ValueError("Invalid intake sun.")
     if "fog" in settings:
         fog = settings["fog"]
+        distances = {"start_cm", "visible_cm"}
+        native_ranges = {"density": (0, 5), "height_falloff": (0, 2), "max_opacity": (0, 1),
+                         "height_cm": (-2e6, 2e6)} if unreal else {}
         if (not isinstance(fog, dict) or "start_cm" not in fog
-                or fog.keys() - {"start_cm", "visible_cm", "color"}
-                or any(not finite(fog[key], 2e6) or fog[key] < 0 for key in fog.keys() - {"color"})
+                or fog.keys() - distances - {"color"} - native_ranges.keys()
+                or any(not finite(fog[key], 2e6) or fog[key] < 0 for key in fog.keys() & distances)
+                or any(not finite(fog[key], max(abs(low), high)) or not low <= fog[key] <= high
+                       for key, (low, high) in native_ranges.items() if key in fog)
                 or ("color" in fog and (not vector(fog["color"]) or min(fog["color"]) < 0))):
             raise ValueError("Invalid intake fog.")
 
@@ -375,14 +385,26 @@ def validate_model_index(header, inventory, *, field, review_field, pattern, pre
     return {name: ref for ref, name in found.items()}
 
 
+def intake_scene_format(header):
+    version = header.get("format") if isinstance(header, dict) else None
+    if type(version) is not int or not 1 <= version <= LATEST_INTAKE_VERSION:
+        raise ValueError("Unsupported intake format.")
+    if version == NATIVE_ENVIRONMENT_VERSION:
+        scene = header.get("scene_format")
+        if type(scene) is not int or scene not in UNREAL_INTAKE_VERSIONS or "environment" not in header:
+            raise ValueError("Invalid versioned native environment intake.")
+        return scene
+    if "scene_format" in header:
+        raise ValueError("Unexpected scene format for this intake.")
+    return version
+
+
 def intake_header(manifest):
     header = json.loads(bounded(manifest, MAX_MANIFEST_BYTES))
+    scene_format = intake_scene_format(header)
     if (
-        not isinstance(header, dict)
-        or type(header.get("format")) is not int
-        or not 1 <= header["format"] <= LATEST_INTAKE_VERSION
-            or not isinstance(header.get("profile"), str)
-            or header["profile"] not in profiles_for_version(header["format"])
+        not isinstance(header.get("profile"), str)
+        or header["profile"] not in profiles_for_version(scene_format)
         or header["profile"] != T2 and header.get("source_game") != NAMES[header["profile"]]
     ):
         raise ValueError("Unsupported intake format or profile.")
@@ -651,6 +673,10 @@ def load_mission_audio(manifest, inventory):
 def load_intake(manifest):
     manifest = Path(manifest).resolve(strict=True)
     header = intake_header(manifest)
+    native_environment = header["format"] == NATIVE_ENVIRONMENT_VERSION
+    if native_environment:
+        # Geometry consumers use the existing scene and inventory contract.
+        header["format"] = header.pop("scene_format")
 
     def valid_digest(value):
         return isinstance(value, str) and re.fullmatch("[0-9a-f]{64}", value)
@@ -734,7 +760,7 @@ def load_intake(manifest):
             or header["format"] < 3 and "environment" in header):
         raise ValueError("Invalid intake environment format.")
     if "environment" in header:
-        validate_environment(header["environment"])
+        validate_environment(header["environment"], unreal=native_environment)
     legacy_int = 15 <= header["format"] <= 21
     legacy_textures = 16 <= header["format"] <= 21
     vengeance_bsp = unreal and header["profile"] == VENGEANCE and header["reader"] == UNREAL_READER

@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 53",
+  "description": "A native Unreal scene intake with versioned global lighting and fog. The scene_format selects the existing geometry and asset contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "profile",
+    "source_game",
+    "name",
+    "reader",
+    "profile_sha256",
+    "sources",
+    "files",
+    "coverage",
+    "minimap",
+    "scene_format",
+    "environment"
+  ],
+  "properties": {
+    "format": {
+      "const": 53
+    },
+    "profile": {
+      "enum": [
+        "vengeance-ctf",
+        "ascend-ctf"
+      ]
+    },
+    "source_game": {
+      "enum": [
+        "Tribes: Vengeance",
+        "Tribes: Ascend"
+      ]
+    },
+    "name": {
+      "$ref": "intake-v21.schema.json#/properties/name"
+    },
+    "reader": {
+      "enum": [
+        "legacy-unreal-intake-v1",
+        "t2-public-layout-v1"
+      ]
+    },
+    "profile_sha256": {
+      "$ref": "intake-v21.schema.json#/properties/profile_sha256"
+    },
+    "sources": {
+      "$ref": "intake-v21.schema.json#/properties/sources"
+    },
+    "coverage": {
+      "$ref": "intake-v21.schema.json#/properties/coverage"
+    },
+    "minimap": {
+      "$ref": "intake-v21.schema.json#/properties/minimap"
+    },
+    "environment": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "sun": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "direction": {
+              "$ref": "intake-v3.schema.json#/properties/environment/properties/sun/properties/direction"
+            },
+            "color": {
+              "$ref": "intake-v3.schema.json#/$defs/rgb"
+            },
+            "ambient": {
+              "$ref": "intake-v3.schema.json#/$defs/rgb"
+            },
+            "intensity_scale": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 8
+            },
+            "ambient_scale": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 8
+            }
+          }
+        },
+        "fog": {
+          "type": "object",
+          "required": [
+            "start_cm"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "start_cm": {
+              "$ref": "intake-v3.schema.json#/$defs/centimeters"
+            },
+            "visible_cm": {
+              "$ref": "intake-v3.schema.json#/$defs/centimeters"
+            },
+            "color": {
+              "$ref": "intake-v3.schema.json#/$defs/rgb"
+            },
+            "density": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 5
+            },
+            "height_cm": {
+              "type": "number",
+              "minimum": -2000000,
+              "maximum": 2000000
+            },
+            "height_falloff": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 2
+            },
+            "max_opacity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      }
+    },
+    "interiors": {
+      "$ref": "intake-v41.schema.json#/properties/interiors"
+    },
+    "interior_review": {
+      "type": "object",
+      "maxProperties": 0
+    },
+    "files": {
+      "type": "object",
+      "required": [
+        "objects.json",
+        "terrain.json",
+        "height.png",
+        "minimap.png"
+      ],
+      "propertyNames": {
+        "anyOf": [
+          {
+            "enum": [
+              "objects.json",
+              "terrain.json",
+              "height.png",
+              "minimap.png",
+              "source-scene.json",
+              "model-textures.json"
+            ]
+          },
+          {
+            "pattern": "^interior-[0-9]{4}\\.json$"
+          },
+          {
+            "pattern": "^terrain-alpha-(?:0[0-9]|[12][0-9]|3[01])\\.png$"
+          },
+          {
+            "pattern": "^terrain-art-[a-f0-9]{32}\\.png$"
+          },
+          {
+            "pattern": "^texture_[a-f0-9]{32}\\.png$"
+          }
+        ]
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    },
+    "scene_format": {
+      "enum": [
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        51,
+        52
+      ]
+    },
+    "terrain_art": {
+      "$ref": "intake-v52.schema.json#/properties/terrain_art"
+    },
+    "terrain_uv": {
+      "$ref": "intake-v52.schema.json#/properties/terrain_uv"
+    },
+    "terrain_paint": {
+      "anyOf": [
+        {
+          "$ref": "intake-v24.schema.json#/properties/terrain_paint"
+        },
+        {
+          "$ref": "intake-v52.schema.json#/properties/terrain_paint"
+        }
+      ]
+    }
+  },
+  "dependentRequired": {
+    "interiors": [
+      "interior_review"
+    ],
+    "interior_review": [
+      "interiors"
+    ],
+    "terrain_art": [
+      "terrain_uv"
+    ],
+    "terrain_uv": [
+      "terrain_art"
+    ]
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "profile": {
+            "const": "vengeance-ctf"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source_game": {
+            "const": "Tribes: Vengeance"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "source_game": {
+            "const": "Tribes: Ascend"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "reader": {
+            "const": "legacy-unreal-intake-v1"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "files": {
+            "required": [
+              "source-scene.json"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "files": {
+            "not": {
+              "required": [
+                "source-scene.json"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

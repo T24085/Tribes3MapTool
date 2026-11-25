@@ -10,7 +10,8 @@ from pathlib import Path
 import tempfile
 import zipfile
 
-from intake_contract import BOUNDARY_RECIPE, EQUIPMENT_FILE, PLAYABLE_BOUNDS, PUBLIC_LAYOUT_READER, load_intake
+from intake_contract import (BOUNDARY_RECIPE, EQUIPMENT_FILE, NATIVE_ENVIRONMENT_VERSION,
+                             PLAYABLE_BOUNDS, PUBLIC_LAYOUT_READER, load_intake)
 from mesh_mappings import REFERENCE_FIELDS, source_reference
 from minimap import grayscale_png, terrain_png
 from mission_equipment import EQUIPMENT_ROLES, mission_equipment, power_context
@@ -158,6 +159,8 @@ def public_files(header, terrain, rows, *, boundary_options=None):
         files["minimap.png"] = terrain_png(ground, public["minimap"]["image_bounds"])
     if "environment" in header:
         public.update(format=3 if profile == T2 else public["format"], environment=header["environment"])
+        if unreal:
+            public.update(format=NATIVE_ENVIRONMENT_VERSION, scene_format=public["format"])
     generator_scopes = header["format"] in T2_GENERATOR_SCOPE_VERSIONS
     equipment = mission_equipment(rows, ground, generator_scopes=generator_scopes) if profile == T2 else None
     if equipment and equipment["equipment"]:

@@ -99,6 +99,11 @@ def profile_config(profile=None, *, source_profile=None):
                        for param in ("label", "unit"))):
             raise ValueError(f"Invalid bounds or units for {key}.")
         formula = record["formula"]
+        if "source_field" in record:
+            field = record["source_field"]
+            if formula not in {"constant", "inverse_span"} or not isinstance(field, str) or not LABEL.fullmatch(field):
+                raise ValueError(f"Invalid optional source value for {key}.")
+            common.add("source_field")
         if formula == "constant":
             valid = set(record) == common | {"value"} and within(record["value"], limits)
         elif formula == "source":
@@ -221,7 +226,10 @@ def project(profile, settings, scopes, layers):
                 break
         else:
             formula = rule["formula"]
-            if formula == "constant":
+            authored = settings.get(group, {}).get(rule.get("source_field"))
+            if authored is not None:
+                value = authored
+            elif formula == "constant":
                 value = rule["value"]
             elif formula == "source":
                 value = settings.get(group, {}).get(rule["field"])

@@ -12,9 +12,9 @@ import tempfile
 import zipfile
 
 from intake_contract import (
-    EQUIPMENT_FILE, INTERIOR_FILE, SHAPE_FILE, LATEST_INTAKE_VERSION, MAX_INTAKE_FILES,
+    EQUIPMENT_FILE, INTERIOR_FILE, SHAPE_FILE, MAX_INTAKE_FILES,
     MAX_INTAKE_INTERIOR_BYTES, MAX_MANIFEST_BYTES, PLAYABLE_BOUNDS,
-    bounded, intake_file_limit, intake_filename, load_intake, max_intake_files, validate_minimap,
+    bounded, intake_file_limit, intake_filename, intake_scene_format, load_intake, max_intake_files, validate_minimap,
 )
 from minimap import framing, grayscale_png, terrain_png
 from mission_audio import AUDIO_INDEX, AUDIO_MEMBER, MAX_AUDIO_BYTES, MAX_CLIPS, collect_audio
@@ -638,9 +638,9 @@ def unpack_intake(source, library):
             raise ValueError("Oversized intake manifest.")
         manifest = read_member(archive, entry.filename)
         header = json.loads(manifest)
+        version = intake_scene_format(header)
         names = header["files"]
-        version = header.get("format")
-        if not isinstance(names, dict) or type(version) is not int or not 1 <= version <= LATEST_INTAKE_VERSION:
+        if not isinstance(names, dict):
             raise ValueError("Invalid intake file list.")
         prefix = entry.filename[: -len("manifest.json")]
         if (

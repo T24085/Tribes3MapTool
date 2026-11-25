@@ -12,8 +12,8 @@ import re
 from ascend_materials import placed_materials as ascend_placed_materials, resolve_material as resolve_ascend_material
 from ascend_static_mesh import read_placed_meshes as read_ascend_meshes
 from ascend_texture_cache import AscendTextureCache
-from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, PLAYABLE_BOUNDS, UNREAL_READER, UNREAL_SCENE,
-                             bounded, finite, validate_minimap)
+from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, NATIVE_ENVIRONMENT_VERSION, PLAYABLE_BOUNDS,
+                             UNREAL_READER, UNREAL_SCENE, bounded, finite, validate_minimap)
 from interior_geometry import MAX_GEOMETRY_BYTES
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
@@ -36,6 +36,7 @@ from terrain_grid import CELLS
 from unreal_binary_scene import actor_scene
 from unreal_legacy_reader import attributes, descendants, read_unreal_export
 from unreal_native_terrain import decode_terrain
+from unreal_native_environment import read_environment
 from unreal_package_reader import GAMES as NATIVE_PACKAGE_TYPES, open_package
 from vengeance_bsp import read_bsp_models
 from ascend_bsp import read_bsp_models as read_ascend_bsp_models
@@ -119,6 +120,7 @@ def project_rows(scene, markers, heightmap, *, placement_components=None):
     root, = [item for item in scene["scene"] if item.get("block", "").casefold() == "map"]
     nodes = {item["line"]: item for item in descendants(root)}
     native = scene.get("native_terrain")
+    environment_notes = scene.get("environment_review", {})
     event_receivers = defaultdict(list)
     chains = scene.get("trigger_chains", {})
     brushes = scene.get("native_brushes", {})
@@ -154,6 +156,11 @@ def project_rows(scene, markers, heightmap, *, placement_components=None):
                    name=actor["name"] or f'Actor at line {line}',
                    status="review", reason=" · ".join(actor["review"]) or "Source actor retained for review",
                    properties={item["key"]: item["value"] for item in raw["entries"] if "key" in item})
+        if str(line) in environment_notes:
+            row["reason"] = " ".join(environment_notes[str(line)])
+            for item in (raw, *descendants(raw)):
+                for key, value in item.get("environment_fields", {}).items():
+                    row["properties"][key] = str(value)
         if line in markers:
             row.update(markers[line], status="marker", conversion_class="unrealctfmarker")
         elif brush := brushes.get(str(line)):
@@ -306,6 +313,7 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
     brush_models = {}
     mesh_docs, mesh_issues, companion_receipts = {}, {}, []
     paint = TerrainPaint()
+    environment = {}
     names = settings.get("asset_packages", [])
     if names and not binary:
         raise ValueError("Companion packages require a binary map source.")
@@ -322,6 +330,7 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
             read_meshes = partial(read_ascend_meshes, artwork=artwork, collision_review=collision_review)
         with open_package(source, game) as (report, stream):
             scene = actor_scene(report, stream, units)
+            environment = read_environment(scene, stream, report["summary"]["endian"])
             if native:
                 terrain, raw, paint = decode_terrain(
                     scene, report, stream, settings.get("terrain_actor"), companions=companions,
@@ -502,6 +511,7 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
     if binary:
         scripts.extend(Path(__file__).with_name(name) for name in ("unreal_binary_scene.py", "unreal_package_reader.py",
                                                                   "model_textures.py"))
+        scripts.append(Path(__file__).with_name("unreal_native_environment.py"))
         if game == "vengeance":
             scripts.extend(Path(__file__).with_name(name) for name in (
                 "vengeance_bsp.py", "vengeance_materials.py", "vengeance_normal_maps.py", "vengeance_static_mesh.py", "vengeance_terrain.py",
@@ -576,6 +586,8 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
                   files={name: sha256(data).hexdigest() for name, data in files.items()})
     if native_settings is not None:
         header["sources"][1]["origin"] = "Editor import settings"
+    if environment:
+        header.update(format=NATIVE_ENVIRONMENT_VERSION, scene_format=version, environment=environment)
     if interiors:
         header.update(interiors=interiors, interior_review={})
     if paint.masks:

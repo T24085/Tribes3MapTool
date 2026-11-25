@@ -483,10 +483,14 @@ def place_environment(actors, settings, values=None):
     start, density = values["fog.start_cm"], values["fog.density"]
     if start is None or density is None:
         return
-    actor = actors.spawn_actor_from_class(unreal.ExponentialHeightFog, unreal.Vector(0, 0, 0))
+    actor = actors.spawn_actor_from_class(unreal.ExponentialHeightFog, unreal.Vector(0, 0, fog.get("height_cm", 0)))
     component = actor.get_component_by_class(unreal.ExponentialHeightFogComponent)
     component.set_start_distance(start)
     component.set_fog_density(density)
+    if "height_falloff" in fog:
+        component.set_fog_height_falloff(fog["height_falloff"])
+    if "max_opacity" in fog:
+        component.set_fog_max_opacity(fog["max_opacity"])
     if "color" in fog:
         component.set_fog_inscattering_color(unreal.LinearColor(*fog["color"], 1))
 

@@ -260,6 +260,15 @@ imported terrain as its `Base`. Assign it in the appropriate team's
 `spawns` list to use its serialized world position and yaw. Starts attached
 to other actors require a manual placement review.
 
+[Intake version 53](intake-v53.schema.json) adds authored global lighting
+and fog to native imports. The manifest retains the earlier geometry
+contract in `scene_format`. Ascend imports saved sun direction, tint,
+brightness, skylight brightness, and exponential fog inputs. Vengeance
+maps saved sunlight and common zone ambient brightness and approximates
+matching enabled distance fog with UE height fog. Distinct zone fog
+settings stay in Object Review. Saved inputs appear in the source
+properties, and conversion-rule overrides still take priority.
+
 For Vengeance version 130/27, the importer reads the compiled level BSP
 into an editable static mesh alongside the terrain. The mesh retains
 material slots and the original texture coordinates in texel units. The

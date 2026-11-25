@@ -13,6 +13,7 @@ import zlib
 from test_unreal_package_reader import build_package, compact
 from test_unreal_legacy_intake import unreal_draft_fixture
 
+from conversion_rules import profile_config, project
 from intake_contract import UNREAL_SCENE, load_intake, load_intake_geometry
 from interior_geometry import render_sections
 from minimap import grayscale_png
@@ -114,7 +115,8 @@ def vengeance_mesh_buffers():
 def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_terrain=False, bad_terrain_flag=False,
                          bsp_world=False, static_mesh=None, external_height=False, painted=False, source_artwork=False,
                          bsp_artwork=False, mesh_artwork=False, shader_inputs=False, surface_detail=False, brush_mover=False,
-                         ascend_shader=None, ascend_component_materials=None, ascend_body=None, spawn_base=None):
+                         ascend_shader=None, ascend_component_materials=None, ascend_body=None, spawn_base=None,
+                         environment=False):
     exported, settings = unreal_draft_fixture(root, game)
     modern = game == "ascend"
     source = exported.with_suffix(".fmap" if modern else ".tvm")
@@ -131,6 +133,14 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                        "RelayToggle", "RelayOn", "RelayOff", "DoorRelayOn", "DoorRelayOff", "DoorEnable", "DoorDisable",
                        "DoorToggleSpare")
     strings = (*STRINGS, *sector_names, *door_names)
+    if environment:
+        environment_names = ("Color", "ByteProperty", "DominantDirectionalLight", "DominantDirectionalLightComponent",
+                             "SkyLight", "SkyLightComponent", "LightColor",
+                             "ExponentialHeightFog", "ExponentialHeightFogComponent", "FogHeight", "FogDensity",
+                             "FogHeightFalloff", "FogMaxOpacity", "StartDistance", "LightInscatteringColor",
+                             "Sunlight", "ZoneInfo", "bDistanceFog", "DistanceFogStart", "DistanceFogEnd",
+                             "DistanceFogColor", "Brightness", "LightBrightness", "AmbientBrightness")
+        strings = tuple(dict.fromkeys((*strings, *environment_names)))
     if spawn_base:
         strings += ("UTGame", "UTTeamPlayerStart", "AttachParent")
     if modern and painted:
@@ -808,6 +818,45 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
         terrain_arrays += pack("i", 3) + pack("i", count - int(painted == "bad-length")) + overlay
         terrain_arrays += pack("i", count) + bytes(count) + pack("i", count) + bytes([255]) * count
         exports[terrain_export] = (*exports[terrain_export][:4], object_bytes(*terrain_fields) + terrain_arrays, 3)
+    if environment:
+        assert not bsp_world
+
+        def light(kind, fields, owner=outer, *, component=False, prefix=b""):
+            imports.append(("Core", "Class", -1, kind))
+            exports.append((-len(imports), owner, kind, 0, prefix + object_bytes(*fields, component=component), 3))
+            return len(exports)
+
+        rotation = vector("Rotation", -8192, 16384, 0, structure="Rotator")
+        actors = []
+        if modern:
+            actors.append(light("DominantDirectionalLight", [rotation]))
+            light("DominantDirectionalLightComponent", [
+                prop("Brightness", "FloatProperty", pack("f", .625)),
+                prop("LightColor", "StructProperty", bytes((96, 160, 250, 0)), "Color"),
+            ], actors[-1], component=True, prefix=pack("i3H", 3, 65535, 3, 128))
+            actors.append(light("SkyLight", [vector("Location", 0, 0, 100)]))
+            light("SkyLightComponent", [prop("Brightness", "FloatProperty", pack("f", .5))],
+                  actors[-1], component=True)
+            actors.append(light("ExponentialHeightFog", [vector("Location", 0, 0, 240)]))
+            fields = [prop(key, "FloatProperty", pack("f", value)) for key, value in (
+                ("FogHeight", 240), ("FogDensity", .25), ("FogHeightFalloff", .375),
+                ("FogMaxOpacity", .75), ("StartDistance", 1500))]
+            fields.append(prop("LightInscatteringColor", "StructProperty", bytes((64, 128, 255, 0)), "Color"))
+            light("ExponentialHeightFogComponent", fields, actors[-1], component=True)
+        else:
+            actors.append(light("Sunlight", [rotation, prop("LightBrightness", "FloatProperty", pack("f", 153))]))
+            fields = [prop("bDistanceFog", "BoolProperty", b"\x01"), prop("AmbientBrightness", "ByteProperty", b"\x55"),
+                      prop("DistanceFogStart", "FloatProperty", pack("f", 500)),
+                      prop("DistanceFogEnd", "FloatProperty", pack("f", 9000)),
+                      prop("DistanceFogColor", "StructProperty", bytes((64, 128, 255, 0)), "Color")]
+            actors.append(light("ZoneInfo", fields))
+        expanded = (*roster, *actors)
+        level = object_bytes()
+        if modern:
+            level += pack("2i", 1, len(expanded)) + pack(f"{len(expanded)}i", *expanded)
+        else:
+            level += pack("2i", len(expanded), len(expanded)) + b"".join(map(compact, expanded))
+        exports[0] = (*exports[0][:4], level, 3)
     package = build_package(game, strings, imports, exports, compressed=modern, licensee=27, version=130)
     source.write_bytes(package)
     if legacy_ground and not external_height:
@@ -1837,6 +1886,53 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 self.assertEqual(deck_node["entries"][-1]["property_issues"], [])
                 review = next(row for row in rows if row["name"] == "Unmapped")
                 self.assertEqual(review["status"], "review")
+
+    def test_native_environment_survives_intake_and_respects_conversion_overrides(self):
+        for game in ("ascend", "vengeance"):
+            with self.subTest(game=game), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = binary_draft_fixture(root, game, environment=True)
+                manifest = convert_unreal(source, root / "Intakes")
+                on_disk = json.loads(manifest.read_bytes())
+                self.assertEqual((on_disk["format"], on_disk["scene_format"]), (53, 22))
+                header, _, rows = load_intake(manifest)
+                lighting = header["environment"]
+                self.assertAlmostEqual(lighting["sun"]["direction"][1], 2 ** -.5)
+                self.assertAlmostEqual(lighting["sun"]["direction"][2], -(2 ** -.5))
+                self.assertEqual(lighting["fog"]["color"][0], 1)
+                self.assertAlmostEqual(lighting["fog"]["color"][1], .2158605)
+                profile = profile_config(source_profile=header["profile"])
+                scopes = {"game": None, "map": "test-map", "objects": {}}
+                projected = project(profile, lighting, scopes, {})
+                if game == "ascend":
+                    self.assertEqual(lighting["fog"]["height_cm"], 480)
+                    self.assertEqual(lighting["fog"]["start_cm"], 3000)
+                    self.assertEqual(lighting["fog"]["height_falloff"], .375)
+                    self.assertEqual(lighting["fog"]["max_opacity"], .75)
+                    self.assertEqual(projected["fog.density"]["value"], .25)
+                    self.assertEqual(projected["sun.ambient_scale"]["value"], .5)
+                    self.assertEqual(projected["sun.intensity_scale"]["value"], .625)
+                    self.assertAlmostEqual(lighting["sun"]["color"][0], .95597335)
+                else:
+                    self.assertEqual(lighting["fog"]["visible_cm"], 18000)
+                    self.assertAlmostEqual(projected["fog.density"]["value"], 800 / 17000)
+                    self.assertAlmostEqual(projected["sun.intensity_scale"]["value"], .6)
+                overridden = project(profile, lighting, scopes, {"test-map": {"values": {"fog.density": .1}}})
+                self.assertEqual(overridden["fog.density"], {"value": .1, "layer": "map"})
+                self.assertTrue(any("global" in row["reason"] for row in rows if row["status"] == "review"))
+                field = "StartDistance" if game == "ascend" else "DistanceFogStart"
+                self.assertTrue(any(row["properties"].get(field) == ("1500.0" if game == "ascend" else "500.0")
+                                    for row in rows))
+                shared = export_public_layout(manifest, root / "Public.zip")
+                public_manifest = unpack_intake(shared, root / "Public")
+                public, _, _ = load_intake(public_manifest)
+                self.assertEqual(public["environment"], lighting)
+                shared_header = json.loads(public_manifest.read_bytes())
+                self.assertEqual((shared_header["format"], shared_header["scene_format"]), (53, 22))
+                on_disk["format"] = on_disk.pop("scene_format")
+                manifest.write_text(json.dumps(on_disk), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Invalid intake sun"):
+                    load_intake(manifest)
 
     def test_native_import_choices_create_intakes_without_a_settings_file(self):
         for game in ("ascend", "vengeance"):
