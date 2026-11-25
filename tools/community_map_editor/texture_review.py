@@ -13,6 +13,7 @@ from texture_batches import (decisions, draft_folder, inspect, inspect_replaceme
                              original_png, retry_batch, save_json)
 from texture_detail import CHANNELS, tile_edges
 from texture_detail_window import show_detail
+from texture_queue_window import show_queue
 from tk_runtime import configure_tk
 
 
@@ -262,6 +263,8 @@ def review(library, draft):
     ttk.Checkbutton(bar, text='Apply to draft mesh materials', variable=apply_to_map).pack(side='right', padx=8)
     detail_button = ttk.Button(left_panel, text='Merge surface detail…', command=edit_detail, state='disabled')
     detail_button.pack(fill='x', pady=(8, 0))
+    ttk.Button(left_panel, text='External texture queue…',
+               command=lambda: show_queue(window, root, items, show)).pack(fill='x', pady=(8, 0))
     ttk.Label(left_panel, text='Mask preview channel').pack(anchor='w', pady=(8, 0))
     channel_picker = ttk.Combobox(left_panel, textvariable=channel, width=8, state='disabled')
     channel_picker.bind('<<ComboboxSelected>>', lambda _event: show())

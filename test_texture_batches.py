@@ -12,6 +12,7 @@ import zlib
 sys.path.insert(0, str(Path(__file__).with_name('tools') / 'community_map_editor'))
 from texture_batches import (approved_replacements, create_batch, inspect, load_batch, make_color_revision,
                              retry_batch, save_json)
+from texture_repair_queue import pending_jobs, queue_command, run_queue
 
 
 def png(width, height, color):
@@ -116,6 +117,46 @@ class TextureBatchTest(unittest.TestCase):
                 retry = retry_batch(self.library, draft, root, items)
                 self.assertEqual(retry.parent, self.library / draft)
                 self.assertEqual(load_batch(self.library, draft, retry.name)[1], items)
+
+    def test_external_queue_stops_and_resumes_without_changing_an_approved_edit(self):
+        approved = self.replacement('T_002')
+        prior = approved.read_bytes()
+        reviewed = inspect(self.root, self.items['T_002'])[2]['sha256']
+        save_json(self.root / 'review.json', {'T_002': {'status': 'approved', 'sha256': reviewed}})
+        processor = self.root / 'processor.py'
+        processor.write_text(
+            'from PIL import Image\nimport sys\n'
+            'source, output, width, height = sys.argv[1:]\n'
+            'with Image.open(source) as image:\n'
+            '    image.resize((int(width), int(height))).save(output)\n', encoding='utf-8')
+        command = queue_command(sys.executable, [str(processor), '{source}', '{output}', '{width}', '{height}'])
+        progress = []
+
+        def report(message):
+            if not progress:
+                with self.assertRaisesRegex(ValueError, 'active queue'):
+                    run_queue(self.root, [], command, stopped=lambda: False, report=lambda _: None)
+            progress.append(message)
+
+        jobs = pending_jobs(self.root, self.items)
+        self.assertEqual([row['id'] for row in jobs], ['T_001', 'T_003'])
+        first = run_queue(self.root, jobs, command, stopped=lambda: len(progress) == 2, report=report)
+        self.assertEqual(first, {'T_001': 'ready for review'})
+        resumed = run_queue(self.root, pending_jobs(self.root, self.items), command,
+                            stopped=lambda: False, report=progress.append)
+        self.assertEqual(resumed, {'T_003': 'ready for review'})
+        self.assertEqual(pending_jobs(self.root, self.items), [])
+        self.assertEqual(approved.read_bytes(), prior)
+        self.assertEqual(list(approved_replacements(self.root, self.items)),
+                         [(self.items['T_002'], approved, reviewed)])
+
+    def test_external_queue_leaves_an_invalid_output_available_to_retry(self):
+        row = self.items['T_001']
+        command = queue_command(sys.executable, ['-c', 'import shutil, sys; shutil.copyfile(*sys.argv[1:])',
+                                                 '{source}', '{output}'])
+        result = run_queue(self.root, [row], command, stopped=lambda: False, report=lambda _: None)
+        self.assertIn('Expected 8×4', result['T_001'])
+        self.assertIn(row, pending_jobs(self.root, self.items))
 
     def test_color_revision_tints_the_resized_original_without_overwriting_the_batch(self):
         from PIL import Image

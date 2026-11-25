@@ -137,6 +137,20 @@ preview** repeats both images so you can inspect the joins. Picks are saved
 as you review. **Retry unresolved…** makes a fresh batch for rejected,
 missing, invalid, or changed replacements.
 
+Use **External texture queue…** in the reviewer to run an installed
+command-line texture processor against the missing images. Select its
+executable and enter its arguments as a JSON array, using `{source}` and
+`{output}` for the PNG paths. Use `{width}` and `{height}` if your processor
+accepts explicit target dimensions. The confirmation shows the remaining
+image count and output megapixels. When you enter minutes and USD per
+image, it also shows the estimated total time and cost before starting.
+
+The queue saves its settings in the private batch and keeps every existing
+replacement. **Stop after current** lets the current image finish. Run the
+same batch again to continue missing images. The queue checks the output
+PNG before adding it to `replacements/`. Generated images still require
+approval before the editor can import them.
+
 **Import approved** imports the exact reviewed bytes into the draft's
 `TextureRevisions` folder and opens those textures in the Content Browser.
 Turn on **Apply to draft mesh materials** to use the approved textures in
