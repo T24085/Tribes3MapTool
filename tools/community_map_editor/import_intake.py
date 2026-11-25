@@ -834,7 +834,9 @@ class DraftImport:
         if flag_limit is not None:
             place_flag_bounds(editor.ACTORS, flag_limit)
         audio = load_mission_audio(self.manifest, self.header["files"])
-        planned_audio = audio_playback(audio, {row["id"] for row in rows if row["status"] != "excluded"})
+        bridge = getattr(unreal, "CommunityMapMotionLibrary", None)
+        planned_audio = audio_playback(audio, {row["id"] for row in rows if row["status"] != "excluded"},
+                                       repeat_tools=hasattr(bridge, "configure_ambient_repeat"))
         if planned_audio:
             from draft_audio import place_audio
 

@@ -46,7 +46,7 @@ FEdGraphPinType PinType(FName Category, FName SubCategory = NAME_None)
 }
 
 template <typename Node>
-Node* Variable(FCommunityMapGraph& Graph, FName Name, int32 X, int32 Y)
+Node* TriggerVariable(FCommunityMapGraph& Graph, FName Name, int32 X, int32 Y)
 {
     return Graph.Add<Node>(X, Y, [Name](auto& Entry) { Entry.VariableReference.SetSelfMember(Name); });
 }
@@ -90,7 +90,7 @@ bool BuildProximityReceiverGraph(UBlueprint* Blueprint, int32 Mode)
     UEdGraph* SignalFunction = nullptr;
     UEdGraphPin* Received = FunctionEntry(Blueprint, SignalFunction, SignalTrigger);
     FCommunityMapGraph Signal(*SignalFunction);
-    auto* Spent = Variable<UK2Node_VariableGet>(Signal, TriggerSpent, 185, 175);
+    auto* Spent = TriggerVariable<UK2Node_VariableGet>(Signal, TriggerSpent, 185, 175);
     auto* Gate = Signal.Add<UK2Node_IfThenElse>(410, 0);
     auto* Change = Signal.Call(Collision, 880, 0);
     UEdGraphPin* Enable = Change->FindPin(TEXT("bNewActorEnableCollision"));
@@ -112,7 +112,7 @@ bool BuildProximityReceiverGraph(UBlueprint* Blueprint, int32 Mode)
     UEdGraph* SpendFunction = nullptr;
     UEdGraphPin* Entry = FunctionEntry(Blueprint, SpendFunction, SpendTrigger);
     FCommunityMapGraph Spend(*SpendFunction);
-    auto* Mark = Variable<UK2Node_VariableSet>(Spend, TriggerSpent, 220, 0);
+    auto* Mark = TriggerVariable<UK2Node_VariableSet>(Spend, TriggerSpent, 220, 0);
     auto* Disable = Spend.Call(Collision, 470, 0);
     return Spend.Connect(Entry, Mark->GetExecPin())
         && DefaultPin(SpendFunction, Mark->FindPin(TriggerSpent), TEXT("true"))
@@ -134,7 +134,7 @@ bool BuildStateGraph(UBlueprint* Blueprint)
     UEdGraphPin* Entry = FunctionEntry(Blueprint, ApplyFunction, ApplyState);
     FCommunityMapGraph Apply(*ApplyFunction);
     auto* StartsInactive = Apply.Call(AActor::StaticClass()->FindFunctionByName(TEXT("ActorHasTag")), 420, 190);
-    auto* Counter = Variable<UK2Node_VariableGet>(Apply, Revision, 180, 335);
+    auto* Counter = TriggerVariable<UK2Node_VariableGet>(Apply, Revision, 180, 335);
     auto* Parity = Math(Apply, TEXT("Percent_IntInt"), 405, 345);
     auto* Odd = Math(Apply, TEXT("NotEqual_IntInt"), 620, 345);
     auto* Active = Math(Apply, TEXT("EqualEqual_BoolBool"), 835, 190);
@@ -152,9 +152,9 @@ bool BuildStateGraph(UBlueprint* Blueprint)
     UEdGraph* ToggleFunction = nullptr;
     Entry = FunctionEntry(Blueprint, ToggleFunction, ToggleState);
     FCommunityMapGraph Toggle(*ToggleFunction);
-    auto* Previous = Variable<UK2Node_VariableGet>(Toggle, Revision, 180, 150);
+    auto* Previous = TriggerVariable<UK2Node_VariableGet>(Toggle, Revision, 180, 150);
     auto* Next = Math(Toggle, TEXT("Add_IntInt"), 395, 150);
-    auto* SetRevision = Variable<UK2Node_VariableSet>(Toggle, Revision, 620, 0);
+    auto* SetRevision = TriggerVariable<UK2Node_VariableSet>(Toggle, Revision, 620, 0);
     return bApply && Toggle.Connect(Entry, SetRevision->GetExecPin())
         && Toggle.Connect(Previous->GetValuePin(), Next->FindPin(TEXT("A")))
         && DefaultPin(ToggleFunction, Next->FindPin(TEXT("B")), TEXT("1"))
@@ -186,11 +186,11 @@ UEdGraphPin* Cooldown(FCommunityMapGraph& Graph, UEdGraph* EventGraph, UEdGraphP
                      int32& X, int32 Y, bool& bOK)
 {
     auto* Time = Graph.Call(UGameplayStatics::StaticClass()->FindFunctionByName(TEXT("GetTimeSeconds")), X, Y + 110);
-    auto* Previous = Variable<UK2Node_VariableGet>(Graph, Last, X, Y + 265);
+    auto* Previous = TriggerVariable<UK2Node_VariableGet>(Graph, Last, X, Y + 265);
     auto* Elapsed = Math(Graph, TEXT("Subtract_DoubleDouble"), X + 250, Y + 125);
     auto* Ready = Math(Graph, TEXT("GreaterEqual_DoubleDouble"), X + 480, Y + 125);
     auto* Allowed = Graph.Add<UK2Node_IfThenElse>(X + 725, Y);
-    auto* Save = Variable<UK2Node_VariableSet>(Graph, Last, X + 950, Y);
+    auto* Save = TriggerVariable<UK2Node_VariableSet>(Graph, Last, X + 950, Y);
     bOK = Graph.Connect(Exec, Allowed->GetExecPin())
         && Graph.Connect(Time->GetReturnValuePin(), Elapsed->FindPin(TEXT("A")))
         && Graph.Connect(Previous->GetValuePin(), Elapsed->FindPin(TEXT("B")))
@@ -220,14 +220,14 @@ bool BuildRepeatTimer(FCommunityMapGraph& Graph, UEdGraph* EventGraph, AActor* T
     double Interval, UEdGraphPin* Dispatch, UEdGraphPin* Fired, int32 Y)
 {
     auto* Timer = Graph.Add<UK2Node_CustomEvent>(0, Y, [Callback](auto& Event) { Event.CustomFunctionName = Callback; });
-    auto* Reset = Variable<UK2Node_VariableSet>(Graph, HasOccupants, 225, Y);
+    auto* Reset = TriggerVariable<UK2Node_VariableSet>(Graph, HasOccupants, 225, Y);
     auto* Target = Literal(Graph, Trigger, 225, Y + 185);
     auto* Overlaps = Graph.Call(AActor::StaticClass()->FindFunctionByName(TEXT("GetOverlappingActors")), 465, Y + 160);
-    auto* Snapshot = Variable<UK2Node_VariableSet>(Graph, Contacts, 730, Y);
-    auto* ReadContacts = Variable<UK2Node_VariableGet>(Graph, Contacts, 730, Y + 175);
+    auto* Snapshot = TriggerVariable<UK2Node_VariableSet>(Graph, Contacts, 730, Y);
+    auto* ReadContacts = TriggerVariable<UK2Node_VariableGet>(Graph, Contacts, 730, Y + 175);
     auto* VisitEach = Graph.Add<UK2Node_MacroInstance>(990, Y, [ForEach](auto& Entry) { Entry.SetMacroGraph(ForEach); });
-    auto* Actor = Variable<UK2Node_VariableSet>(Graph, Visitor, 1230, Y);
-    auto* KeepTiming = Variable<UK2Node_VariableGet>(Graph, HasOccupants, 1230, Y + 300);
+    auto* Actor = TriggerVariable<UK2Node_VariableSet>(Graph, Visitor, 1230, Y);
+    auto* KeepTiming = TriggerVariable<UK2Node_VariableGet>(Graph, HasOccupants, 1230, Y + 300);
     auto* HasRelevantOccupant = Graph.Add<UK2Node_IfThenElse>(1475, Y + 175);
     auto* Schedule = Graph.Call(UKismetSystemLibrary::StaticClass()->FindFunctionByName(TEXT("K2_SetTimer")), 1720, Y + 175);
     UEdGraphPin* Filter = Overlaps->FindPin(TEXT("ClassFilter"));
@@ -463,8 +463,8 @@ bool BindProximity(AActor* Trigger, const TArray<AActor*>& Receivers, int32 Acti
     UEdGraphPin* Accepted = Authority->GetThenPin();
     if (ForEach)
     {
-        auto* Set = Variable<UK2Node_VariableSet>(Graph, Visitor, 440, Y);
-        auto* Get = Variable<UK2Node_VariableGet>(Graph, Visitor, 440, Y + 175);
+        auto* Set = TriggerVariable<UK2Node_VariableSet>(Graph, Visitor, 440, Y);
+        auto* Get = TriggerVariable<UK2Node_VariableGet>(Graph, Visitor, 440, Y + 175);
         Pawn->NodePosX += 240;
         bOK = Graph.Connect(Accepted, Set->GetExecPin()) && Graph.Connect(Candidate, Set->FindPin(Visitor)) && bOK;
         Accepted = Set->GetThenPin();
@@ -483,7 +483,7 @@ bool BindProximity(AActor* Trigger, const TArray<AActor*>& Receivers, int32 Acti
     }
     if (ForEach)
     {
-        auto* Occupied = Variable<UK2Node_VariableSet>(Graph, HasOccupants, FMath::Max(940, X), Y);
+        auto* Occupied = TriggerVariable<UK2Node_VariableSet>(Graph, HasOccupants, FMath::Max(940, X), Y);
         bOK = Graph.Connect(Exec, Occupied->GetExecPin())
             && DefaultPin(EventGraph, Occupied->FindPin(HasOccupants), TEXT("true")) && bOK;
         Exec = Occupied->GetThenPin();

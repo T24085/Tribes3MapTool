@@ -271,7 +271,7 @@ def editor_plugin_args(project, engine, *, smoke, authoring_only=False):
     args = PLUGINS if smoke else EDITOR_PLUGINS
     enabled = []
     extensions = [('CommunityMapMaterials', 'render rain and snow'),
-                  ('CommunityMapMotion', 'bake DTS animation for the game')]
+                  ('CommunityMapMotion', 'bake map animation and timed audio for the game')]
     if not smoke:
         extensions.append(('CommunityMapReview', 'dock the object review'))
     extensions.append(('CommunityInventoryStationAuthoring', 'author inventory station Blueprints'))

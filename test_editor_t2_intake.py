@@ -81,6 +81,16 @@ class IntakeTests(unittest.TestCase):
           new AudioEmitter(Invalid) {position="2 3 4"; fileName="../private.wav";};
           new AudioEmitter(Unreadable) {position="2 3 4"; fileName="fx/private/bad.wav";};
           new AudioEmitter(Ambiguous) {position="2 3 4"; fileName="fx/private/double.wav";};
+          new AudioEmitter(Finite) {
+            position="2 3 4"; fileName="fx/private/alias.wav"; volume="0.25";
+            isLooping="1"; is3D="0"; outsideAmbient="0"; useProfileDescription="0";
+            loopCount="2"; minLoopGap="350"; maxLoopGap="900";
+          };
+          new AudioEmitter(Incomplete) {
+            position="2 3 4"; fileName="fx/private/alias.wav"; volume="0.25";
+            isLooping="1"; is3D="0"; outsideAmbient="0"; useProfileDescription="0";
+            loopCount="2"; minLoopGap="350";
+          };
         };''', encoding="utf-8")
         clip = io.BytesIO()
         with wave.open(clip, "wb") as audio:
@@ -128,8 +138,13 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual(by_name["PrivateBrook"]["status"], "Audio retained")
         self.assertIn("indoor volume", by_name["PrivateBrook"]["reason"])
         self.assertIn("WAV was missing", by_name["Missing"]["reason"])
-        planned = audio_playback(index, {row["id"] for row in rows})
+        self.assertIn("Community Map Motion", by_name["Finite"]["reason"])
+        self.assertIn("delay bounds", by_name["Incomplete"]["reason"])
+        allowed = {row["id"] for row in rows}
+        planned = audio_playback(index, allowed)
         self.assertEqual(planned, [(index["emitters"][1], index["clips"]["fx/private/alias.wav"])])
+        self.assertEqual(audio_playback(index, allowed, repeat_tools=True),
+                         planned + [(index["emitters"][-2], index["clips"]["fx/private/alias.wav"])])
         self.assertEqual(audio_playback(index, {main["source_id"]}), [])
         draft = object_review_document("DraftT2001", header, terrain, rows, catalog, {}, audio=index,
                                        placed_audio={planned[0][0]["source_id"]})

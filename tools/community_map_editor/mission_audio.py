@@ -155,7 +155,15 @@ def validate_audio_index(index, rows, terrain, wave_files, inventory, receipts):
         raise ValueError('Intake contains unreferenced mission audio.')
 
 
-def playback_issue(emitter, clip):
+def repeat_schedule(settings):
+    if settings['looping'] and settings['loop_count'] != 0:
+        schedule = settings['loop_count'], settings['min_gap_s'], settings['max_gap_s']
+        if schedule != (-1, 0, 0):
+            return schedule
+    return None
+
+
+def playback_issue(emitter, clip, *, repeat_tools=False):
     settings = emitter['settings']
     if emitter['review'] or not clip or 'file' not in clip:
         return 'The source or clip needs review before playback.'
@@ -171,20 +179,23 @@ def playback_issue(emitter, clip):
             return 'Directional audio needs a cone mapping.'
         if clip['pcm']['channels'] != 1:
             return 'Spatial playback needs a mono WAV.'
-    if settings['looping'] and (settings.get('loop_count') != -1
-                                or settings.get('min_gap_s') != 0 or settings.get('max_gap_s') != 0):
-        return 'Finite or delayed repeats need a playback mapping.'
+    if settings['looping']:
+        if 'loop_count' not in settings or (settings['loop_count'] != 0
+                and not {'min_gap_s', 'max_gap_s'} <= settings.keys()):
+            return 'Looping audio needs an explicit repeat count and delay bounds.'
+        if not repeat_tools and repeat_schedule(settings) is not None:
+            return 'Finite or delayed repeats require the updated Community Map Motion editor plugin.'
     return None
 
 
-def audio_playback(index, allowed):
+def audio_playback(index, allowed, *, repeat_tools=False):
     if index is None:
         return []
     playable = []
     for emitter in index['emitters']:
         if emitter['source_id'] in allowed:
             clip = index['clips'].get(emitter['settings'].get('clip'))
-            if playback_issue(emitter, clip) is None:
+            if playback_issue(emitter, clip, repeat_tools=repeat_tools) is None:
                 playable.append((emitter, clip))
     return playable
 

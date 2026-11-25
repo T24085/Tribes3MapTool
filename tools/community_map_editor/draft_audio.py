@@ -9,7 +9,7 @@ import wave
 import unreal
 
 from intake_contract import bounded
-from mission_audio import MAX_WAVE_BYTES
+from mission_audio import MAX_WAVE_BYTES, repeat_schedule
 
 
 ACTOR_TAG = "T3MissionAudio_"
@@ -58,15 +58,39 @@ def import_wave(folder, source, clip, looping):
     return sound
 
 
+def repeat_cue(folder, wave_asset, schedule):
+    count, minimum, maximum = schedule
+    schedule_hash = sha256(repr(schedule).encode("ascii")).hexdigest()[:16]
+    name = "SC_" + wave_asset.get_name() + "_" + schedule_hash
+    cue = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, folder, unreal.SoundCue.static_class(), unreal.SoundCueFactoryNew())
+    if cue is None or not unreal.CommunityMapMotionLibrary.configure_ambient_repeat(
+            cue, wave_asset, count, minimum, maximum):
+        raise RuntimeError(f"Could not build ambient repeat sound {name}.")
+    if count == -1:
+        cue.set_editor_property("virtualization_mode", unreal.VirtualizationMode.PLAY_WHEN_SILENT)
+    if not unreal.EditorAssetLibrary.save_loaded_asset(cue, False):
+        raise RuntimeError(f"Could not save ambient repeat sound {name}.")
+    return cue
+
+
 def place_audio(actors, draft, source, planned):
     folder = f"/Game/Community/{draft}/Audio"
-    sounds, placed = {}, set()
+    sounds, cues, placed = {}, {}, set()
     for emitter, clip in planned:
         settings = emitter["settings"]
         spatial = settings["spatial"]
-        key = (clip["source_sha256"], settings["looping"])
+        schedule = repeat_schedule(settings)
+        continuous = settings["looping"] and settings["loop_count"] == -1 and schedule is None
+        key = (clip["source_sha256"], continuous)
         if key not in sounds:
-            sounds[key] = import_wave(folder, source, clip, settings["looping"])
+            sounds[key] = import_wave(folder, source, clip, continuous)
+        sound = sounds[key]
+        if schedule is not None:
+            cue_key = (key, schedule)
+            if cue_key not in cues:
+                cues[cue_key] = repeat_cue(folder, sound, schedule)
+            sound = cues[cue_key]
         source_id = emitter["source_id"]
         actor = actors.spawn_actor_from_class(unreal.AmbientSound, unreal.Vector(*emitter["position_cm"]))
         if not actor:
@@ -77,7 +101,7 @@ def place_audio(actors, draft, source, planned):
         actor.tags = [unreal.Name(f"{ACTOR_TAG}{source_id}")]
         component = actor.audio_component
         component.set_editor_property("auto_activate", True)
-        component.set_editor_property("sound", sounds[key])
+        component.set_editor_property("sound", sound)
         component.set_editor_property("volume_multiplier", settings["volume"])
         component.set_editor_property("allow_spatialization", spatial)
         if spatial:

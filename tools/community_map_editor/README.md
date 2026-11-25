@@ -633,8 +633,12 @@ and choose **Play clip**, or set the position and choose **Show frame**.
 editor-only.
 
 Install the [Community Map Motion editor plugin](Plugins/CommunityMapMotion)
-built for the same Unreal version to bake a clip for a cook. With an
-imported prop selected, choose **Bake Selected DTS Animation…** and pick
+built for the same Unreal Editor build to bake a clip for a cook. Run
+Unreal's `RunUAT.bat BuildPlugin` with `-Plugin` pointing to
+`CommunityMapMotion.uplugin`, `-Package` pointing to a separate output
+folder, and `-NoTargetPlatforms` for the editor build. Copy the output to
+the authoring project's `Plugins/CommunityMapMotion` directory.
+With an imported prop selected, choose **Bake Selected DTS Animation…** and pick
 the clip. The tool adds a stock Geometry Cache actor and keeps the
 original prop as collision. Cache materials use the prop's material
 assignments. The bake enables Geometry Cache shader usage on project
@@ -1097,12 +1101,18 @@ their source bytes. Both Object Review views show missing, unreadable,
 ambiguous, or over-budget sounds and source fields that need review.
 The draft maps fully specified indoor-and-outdoor, non-directional
 emitters to Unreal ambient sound actors. It supports one-shots and
-continuous loops with zero repeat delay. Spatial emitters use mono sound
-and spherical linear attenuation between the authored full-volume and
-cutoff distances. A WAV used for both one-shot and loop playback gets
-two SoundWave assets, and emitters using the same playback mode can
-share that asset. Object Review keeps directional, outside-only,
-profile-based, finite-repeat, and delayed emitters available for review.
+continuous loops with zero repeat delay. Build the updated
+[Community Map Motion editor plugin](Plugins/CommunityMapMotion) for
+finite repeats and timed gaps. The generated Sound Cue plays the clip
+once immediately, then uses the authored delay bounds for each repeat.
+A count of `0` plays once, a positive count adds that many repeats,
+and `-1` repeats indefinitely. The saved cue uses stock Unreal sound
+nodes and can cook and play without the authoring plugin.
+Spatial emitters use mono sound and spherical linear attenuation between
+the authored full-volume and cutoff distances. A WAV used for both
+one-shot and continuous playback gets two SoundWave assets. Identical
+audio schedules can share a cue. Object Review keeps directional,
+outside-only, and profile-based emitters available for review.
 Shared layouts omit the sound index, WAVs, and source audio references.
 
 When one authored sky resolves, the converter places up to three editable

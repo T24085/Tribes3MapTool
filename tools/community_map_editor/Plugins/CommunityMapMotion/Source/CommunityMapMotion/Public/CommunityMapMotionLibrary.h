@@ -8,6 +8,8 @@ class UGeometryCache;
 class UMaterialInterface;
 class ALevelSequenceActor;
 class UStaticMesh;
+class USoundCue;
+class USoundWave;
 
 USTRUCT(BlueprintType)
 struct FCommunityMotionSection
@@ -81,4 +83,8 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Community Map Motion")
     static bool BindBrushTrigger(AActor* Trigger, const TArray<AActor*>& Receivers,
         int32 ActivationMode, bool bOnce, double RetriggerDelay, double RepeatInterval);
+
+    UFUNCTION(BlueprintCallable, Category = "Community Map Motion")
+    static bool ConfigureAmbientRepeat(USoundCue* Cue, USoundWave* Wave, int32 RepeatCount,
+        float MinGapSeconds, float MaxGapSeconds);
 };
