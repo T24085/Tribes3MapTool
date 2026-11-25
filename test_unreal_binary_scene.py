@@ -1274,8 +1274,9 @@ class UnrealBinarySceneTests(unittest.TestCase):
                     self.assertEqual(observed, values)
             with ZipFile(export_public_layout(manifest, root / "Public.zip")) as archive:
                 self.assertFalse({TEXTURE_INDEX, record["normal"]["file"], record["specular_mask"]["file"]} & set(archive.namelist()))
-            header["format"] = 29
-            manifest.write_text(json.dumps(header), encoding="utf-8")
+            original = json.loads(manifest.read_bytes())
+            original["scene_format"] = 29
+            manifest.write_text(json.dumps(original), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "Incomplete model texture provenance"):
                 load_intake(manifest)
 
@@ -1302,8 +1303,9 @@ class UnrealBinarySceneTests(unittest.TestCase):
             binding["opacity"]["pan"] = [0, 5000]
             content = json.dumps(bindings).encode()
             manifest.with_name(TEXTURE_INDEX).write_bytes(content)
-            header["files"][TEXTURE_INDEX] = sha256(content).hexdigest()
-            manifest.write_text(json.dumps(header), encoding="utf-8")
+            original = json.loads(manifest.read_bytes())
+            original["files"][TEXTURE_INDEX] = sha256(content).hexdigest()
+            manifest.write_text(json.dumps(original), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "opacity panning speed"):
                 load_intake(manifest)
 
