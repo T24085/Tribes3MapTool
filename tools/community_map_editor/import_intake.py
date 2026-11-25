@@ -12,10 +12,12 @@ import unreal
 
 from conversion_rules import create_snapshot, draft_rules_path, profile_config, project, write
 from profile_exchange import active_profile
-from intake_contract import UNREAL_SCENE, bounded, intake_file_limit, intake_header, load_intake, load_intake_geometry
+from intake_contract import (UNREAL_SCENE, bounded, intake_file_limit, intake_header, load_intake, load_intake_geometry,
+                             load_mission_audio)
 from interior_geometry import VENGEANCE_BSP, VENGEANCE_STATIC_MESH
 from map_pipeline import Outcome, PipelineRun, pipeline_config
 from mesh_mappings import material_reference, placements, source_reference
+from mission_audio import audio_playback
 from mission_equipment import mission_equipment, power_context
 from mission_weather import cloud_layers, mission_weather, precipitation_emitters
 from native_terrain_paint import NativeTerrainPaint
@@ -526,6 +528,7 @@ class DraftImport:
         self.run = PipelineRun(self.profile, "draft", library=self.library, title=self.folder.name)
         self.showcase_ready = False
         self.material_overrides = {}
+        self.placed_audio = set()
 
     def verify(self, _):
         self.header, self.terrain, self.rows = load_intake(self.manifest)
@@ -830,6 +833,12 @@ class DraftImport:
             verify_walls(editor.world(), editor.ACTORS.get_all_level_actors(), placed_markers)
         if flag_limit is not None:
             place_flag_bounds(editor.ACTORS, flag_limit)
+        audio = load_mission_audio(self.manifest, self.header["files"])
+        planned_audio = audio_playback(audio, {row["id"] for row in rows if row["status"] != "excluded"})
+        if planned_audio:
+            from draft_audio import place_audio
+
+            self.placed_audio = place_audio(editor.ACTORS, self.ident, self.folder, planned_audio)
         self.equipment = equipment
 
     def lighting(self, _):
@@ -889,7 +898,7 @@ class DraftImport:
                 warnings.append(f"Could not record the source for {ident}: {exc}")
             try:
                 publish_review(self.library, ident, header, self.terrain, self.source_rows, self.catalog,
-                               self.options["mesh_mappings"], manifest=self.manifest)
+                               self.options["mesh_mappings"], manifest=self.manifest, placed_audio=self.placed_audio)
             except (OSError, ValueError) as exc:
                 warnings.append(f"Could not save object review for {ident}: {exc}")
         try:

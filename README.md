@@ -5,9 +5,10 @@ This is the in-development Windows source for the TRIBES 3 community map editor.
 ## Get started
 
 Tribes 2 intakes can preserve private PCM WAVs and authored ambient
-emitter settings. Object Review identifies referenced sounds that need
-attention. Shared layouts omit the audio, and in-game playback is still
-in development. See [intake packages](tools/community_map_editor/README.md#intake-packages).
+emitter settings. Compatible one-shots and continuous loops play through
+standard Unreal ambient sound actors. Object Review identifies emitters
+that need additional mapping. Shared layouts omit the audio.
+See [intake packages](tools/community_map_editor/README.md#intake-packages).
 
 For the Windows ZIP, extract the archive and double-click **Start TRIBES 3 Map Editor.bat**. The launcher creates or reopens the workspace under `%LOCALAPPDATA%\Tribes3MapTool`.
 

@@ -1095,7 +1095,14 @@ in [mission-audio.json](intake-v47.audio.schema.json). References resolve
 against exact content paths, ignoring letter case. Matched PCM WAVs retain
 their source bytes. Both Object Review views show missing, unreadable,
 ambiguous, or over-budget sounds and source fields that need review.
-The audio is available in private intakes for future playback mapping.
+The draft maps fully specified indoor-and-outdoor, non-directional
+emitters to Unreal ambient sound actors. It supports one-shots and
+continuous loops with zero repeat delay. Spatial emitters use mono sound
+and spherical linear attenuation between the authored full-volume and
+cutoff distances. A WAV used for both one-shot and loop playback gets
+two SoundWave assets, and emitters using the same playback mode can
+share that asset. Object Review keeps directional, outside-only,
+profile-based, finite-repeat, and delayed emitters available for review.
 Shared layouts omit the sound index, WAVs, and source audio references.
 
 When one authored sky resolves, the converter places up to three editable

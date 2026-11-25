@@ -370,13 +370,14 @@ def batch_rebuild():
 
 def open_docked_review():
     from dock_review import review_for_existing_draft
+    from draft_audio import placed_audio_ids
 
     if os.environ.get('T3_EDITOR_MAP_REVIEW') != '1':
         return request_review_install()
     library = Path(os.environ['T3_CONVERTER_LIBRARY'])
     match = re.search(rf'/Maps/Community/({IMPORT_DRAFT})/Arena_\1_P\.', world().get_path_name())
     if match and not (library/'DraftReviews'/f'{match[1]}.json').is_file():
-        review_for_existing_draft(library, match[1])
+        review_for_existing_draft(library, match[1], placed_audio=placed_audio_ids(ACTORS.get_all_level_actors()))
     unreal.SystemLibrary.execute_console_command(world(), 'T3.MapReview')
 
 

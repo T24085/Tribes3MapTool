@@ -155,7 +155,41 @@ def validate_audio_index(index, rows, terrain, wave_files, inventory, receipts):
         raise ValueError('Intake contains unreferenced mission audio.')
 
 
-def audio_review(index):
+def playback_issue(emitter, clip):
+    settings = emitter['settings']
+    if emitter['review'] or not clip or 'file' not in clip:
+        return 'The source or clip needs review before playback.'
+    if not {'volume', 'spatial', 'looping', 'outside_only', 'use_profile'} <= settings.keys():
+        return 'Playback requires explicit gain, spatial, looping, outside, and profile settings.'
+    if settings['outside_only']:
+        return 'Outside-only audio needs a mapped indoor volume.'
+    if settings['spatial']:
+        low, high = settings.get('min_distance_cm'), settings.get('max_distance_cm')
+        if low is None or high is None or high <= low:
+            return 'Spatial playback needs a valid minimum and maximum distance.'
+        if (settings.get('cone_inside_degrees'), settings.get('cone_outside_degrees')) != (360, 360):
+            return 'Directional audio needs a cone mapping.'
+        if clip['pcm']['channels'] != 1:
+            return 'Spatial playback needs a mono WAV.'
+    if settings['looping'] and (settings.get('loop_count') != -1
+                                or settings.get('min_gap_s') != 0 or settings.get('max_gap_s') != 0):
+        return 'Finite or delayed repeats need a playback mapping.'
+    return None
+
+
+def audio_playback(index, allowed):
+    if index is None:
+        return []
+    playable = []
+    for emitter in index['emitters']:
+        if emitter['source_id'] in allowed:
+            clip = index['clips'].get(emitter['settings'].get('clip'))
+            if playback_issue(emitter, clip) is None:
+                playable.append((emitter, clip))
+    return playable
+
+
+def audio_review(index, placed=()):
     if index is None:
         return {}
     reasons = {
@@ -171,8 +205,10 @@ def audio_review(index):
             detail = 'The emitter needs a valid WAV reference.'
         elif 'reason' in clip:
             detail = reasons[clip['reason']]
+        elif emitter['source_id'] in placed:
+            detail = 'Mapped to an Unreal ambient sound actor in the saved draft.'
         else:
-            detail = 'PCM WAV retained. Playback needs a draft audio mapping.'
+            detail = playback_issue(emitter, clip) or 'Ready for ambient playback when the draft is built.'
         if emitter['review']:
             detail += ' Review source fields: ' + ', '.join(emitter['review']) + '.'
         results[emitter['source_id']] = detail

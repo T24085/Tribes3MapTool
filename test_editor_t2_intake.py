@@ -27,7 +27,7 @@ from interior_lighting import (LIGHTING_INDEX, alarm_switches_material, lighting
                                load_lighting_index, model_lighting)
 from map_pipeline import PipelineRun, pipeline_config, validate_pipeline
 from mesh_mappings import placements, source_reference, source_transform
-from mission_audio import AUDIO_INDEX, AUDIO_MEMBER
+from mission_audio import AUDIO_INDEX, AUDIO_MEMBER, audio_playback
 from mission_weather import cloud_layers, precipitation_emitters
 from object_catalog import build_rows, classify, load_catalog, source_fields
 from minimap import export_host_minimap, framing, terrain_pixels, view_transform
@@ -72,7 +72,11 @@ class IntakeTests(unittest.TestCase):
             coneOutsideVolume="0.25"; coneVector="0 3 4";
             loopCount="-1"; minLoopGap="10000"; maxLoopGap="20000";
           };
-          new AudioEmitter(Alias) {position="2 3 4"; fileName="fx/private/alias.wav";};
+          new AudioEmitter(Alias) {
+            position="2 3 4"; fileName="fx/private/alias.wav"; volume="0.25";
+            isLooping="1"; is3D="0"; outsideAmbient="0"; useProfileDescription="0";
+            loopCount="-1"; minLoopGap="0"; maxLoopGap="0";
+          };
           new AudioEmitter(Missing) {position="2 3 4"; fileName="fx/private/missing.wav"; profile="PrivateProfile";};
           new AudioEmitter(Invalid) {position="2 3 4"; fileName="../private.wav";};
           new AudioEmitter(Unreadable) {position="2 3 4"; fileName="fx/private/bad.wav";};
@@ -122,7 +126,14 @@ class IntakeTests(unittest.TestCase):
         document = object_review_document("DraftT2001", header, terrain, rows, catalog, {}, audio=index)
         by_name = {entry["object"]: entry for entry in document["objects"]}
         self.assertEqual(by_name["PrivateBrook"]["status"], "Audio retained")
+        self.assertIn("indoor volume", by_name["PrivateBrook"]["reason"])
         self.assertIn("WAV was missing", by_name["Missing"]["reason"])
+        planned = audio_playback(index, {row["id"] for row in rows})
+        self.assertEqual(planned, [(index["emitters"][1], index["clips"]["fx/private/alias.wav"])])
+        self.assertEqual(audio_playback(index, {main["source_id"]}), [])
+        draft = object_review_document("DraftT2001", header, terrain, rows, catalog, {}, audio=index,
+                                       placed_audio={planned[0][0]["source_id"]})
+        self.assertEqual(next(row for row in draft["objects"] if row["object"] == "Alias")["status"], "Mapped audio")
 
         bundle = self.folder / "private.zip"
         with zipfile.ZipFile(bundle, "w") as archive:
