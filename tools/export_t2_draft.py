@@ -316,6 +316,21 @@ def installed_release(host, central, merged, definition, *, replace_existing):
     return metadata, members
 
 
+def projected_catalog(host, payload, projection, proposed, map_id):
+    # Merge the proposed central inventory with the same sidecars staging will install.
+    for root in (host, payload):
+        for descriptor in (root/'lua').glob('*/map.json'):
+            if root == host and descriptor.parent.name == map_id:
+                continue
+            target = projection / descriptor.relative_to(root)
+            target.parent.mkdir(parents=True)
+            shutil.copyfile(descriptor, target)
+            inventory = descriptor.with_name('manifest.json')
+            if inventory.is_file():
+                shutil.copyfile(inventory, target.with_name(inventory.name))
+    return map_catalog(merge_map_manifests(projection, proposed))
+
+
 def export_draft(run, host, destination, *, label, minimap=None, equipment_adapter=None, replace_existing=False):
     run = run.resolve(strict=True)
     host = host.resolve(strict=True)
@@ -399,14 +414,13 @@ def export_draft(run, host, destination, *, label, minimap=None, equipment_adapt
         write_json(sidecar / 'manifest.json', {'format': 1, 'files': members})
 
         before_catalog = map_catalog(merged)
-        remaining = [row for row in merged['files'] if row['path'] not in old_members]
-        proposed = dict(merged, files=[*remaining, *shared_additions])
-        after_catalog = map_catalog(merge_map_manifests(payload, proposed))
+        proposed = dict(central, files=[*central['files'], *shared_additions])
+        after_catalog = projected_catalog(host, payload, Path(work)/'catalog', proposed, map_id)
         if {key: value for key, value in after_catalog.items() if key != map_id} != {
                 key: value for key, value in before_catalog.items() if key != map_id}:
             raise ValueError('This release would change another map’s catalog entry.')
         if shared_additions:
-            write_json(payload / base_path.name, dict(central, files=[*central['files'], *shared_additions]))
+            write_json(payload / base_path.name, proposed)
         descriptors = descriptor_paths(map_id)
         prior_names = set(old_members) | (descriptors if previous else set())
         next_names = descriptors | {row['path'] for row in (*members, *shared_additions)}
