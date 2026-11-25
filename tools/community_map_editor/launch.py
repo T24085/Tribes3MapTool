@@ -265,11 +265,13 @@ def editor_plugin_args(project, engine, *, smoke, authoring_only=False):
                   ('CommunityMapMotion', 'bake DTS animation for the game')]
     if not smoke:
         extensions.append(('CommunityMapReview', 'dock the object review'))
+    extensions.append(('CommunityInventoryStationAuthoring', 'author inventory station Blueprints'))
     for name, purpose in extensions:
         folder = project.parent / 'Plugins' / name
-        if editor_plugin_matches(folder, engine, name):
+        module = 'Topaz' if name == 'CommunityInventoryStationAuthoring' else name
+        if editor_plugin_matches(folder, engine, module):
             enabled.append(name)
-        elif (folder / f'Binaries/Win64/UnrealEditor-{name}.dll').is_file():
+        elif (folder / f'Binaries/Win64/UnrealEditor-{module}.dll').is_file():
             print(f'Build {name} for this Unreal Editor version to {purpose}.', flush=True)
     plugins = [*args[1].split(','), *enabled]
     if authoring_only:

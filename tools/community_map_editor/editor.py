@@ -14,6 +14,8 @@ from terrain_layers import PALETTE_SURFACES
 LEVEL_ROOT = '/Game/Maps/Community'
 SOURCE_LEVEL = LEVEL_ROOT + '/Damnation/Arena_Damnation_2026_P'
 PALETTE = '/Game/Community/MapEditorPalette'
+INVENTORY_STATION_FOLDER = '/Game/Community/SharedEquipment'
+INVENTORY_STATION_NAME = 'BP_CommunityInventoryStation'
 MARKERS = {
     'T3Spawn1': 'Blue Spawn',
     'T3Spawn2': 'Red Spawn',
@@ -558,6 +560,25 @@ def set_shield_power(setting):
     set_shield_settings(ACTORS.get_selected_level_actors(), setting)
 
 
+def create_inventory_station_blueprint():
+    if not hasattr(unreal, 'TopInventoryStation'):
+        raise ValueError('Install the inventory station authoring plugin for this Unreal Editor build.')
+    path = f'{INVENTORY_STATION_FOLDER}/{INVENTORY_STATION_NAME}'
+    if not ASSETS.does_asset_exist(path):
+        factory = unreal.BlueprintFactory()
+        factory.set_editor_property('parent_class', unreal.TopInventoryStation.static_class())
+        library = unreal.AssetToolsHelpers.get_asset_tools()
+        asset = library.create_asset(INVENTORY_STATION_NAME, INVENTORY_STATION_FOLDER, unreal.Blueprint, factory)
+        if not asset or not ASSETS.save_loaded_asset(asset):
+            raise ValueError('Unreal could not save the inventory station Blueprint.')
+    generated = ASSETS.load_blueprint_class(path)
+    if not generated or not isinstance(unreal.get_default_object(generated), unreal.TopInventoryStation):
+        raise ValueError('The shared inventory station path already contains an incompatible asset.')
+    if os.environ.get('T3_EDITOR_INTERACTIVE') == '1':
+        ASSETS.sync_browser_to_objects([path])
+    return generated
+
+
 def action(name, argument=None):
     commands = {'blank': create_blank, 'copy': copy_damnation, 'build': request_build,
                 'validate': marker_snapshot, 'browse': browse, 'marker': add_marker, 'import_t2': import_t2,
@@ -568,7 +589,8 @@ def action(name, argument=None):
                 'model_library': shared_model_library, 'contact_sheets': refresh_contact_sheets,
                 'dts_preview': dts_preview, 'dts_bake': dts_bake,
                 'lighting_camera': lighting_camera, 'rebuild_t2': rebuild_t2, 'batch_rebuild': batch_rebuild,
-                'report': show_report, 'docked_review': open_docked_review}
+                'report': show_report, 'docked_review': open_docked_review,
+                'inventory_station': create_inventory_station_blueprint}
     try:
         if name in {'blank', 'copy', 'build', 'import_t2', 'rebuild_t2', 'batch_rebuild', 'model_showcase', 'model_library'}:
             from dts_preview_unreal import stop
@@ -627,6 +649,7 @@ def register():
         ('Validate', 'Check CTF Markers', 'validate', None),
         ('ApproveEquipment', 'Approve Selected Equipment for Direct Host', 'approve_equipment', True),
         ('RemoveEquipmentApproval', 'Remove Selected Equipment Approval', 'approve_equipment', False),
+        ('InventoryStation', 'Create Inventory Station Blueprint', 'inventory_station', None),
         ('LinkShields', 'Link Selected Shields to Generator', 'shield_power', 'link'),
         ('UnlinkShields', 'Set Selected Shields to Independent Power', 'shield_power', 'unlink'),
         ('SourceShieldCircuit', 'Restore Source Shield Circuit', 'shield_power', 'source'),
@@ -642,6 +665,7 @@ def register():
     for key, label, operation, argument in items:
         if (key == 'CopyMap' and not os.environ.get('T3_EDITOR_SEED')
                 or key == 'Build' and not playtest
+                or key == 'InventoryStation' and not hasattr(unreal, 'TopInventoryStation')
                 or key == 'BuildForHost' and os.environ.get('T3_EDITOR_HOST_EXPORT') != '1'):
             continue
         entry = unreal.ToolMenuEntry(name=key, type=unreal.MultiBlockType.MENU_ENTRY)

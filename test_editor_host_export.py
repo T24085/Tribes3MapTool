@@ -272,6 +272,29 @@ class EditorHostExportTests(unittest.TestCase):
             self.assertNotIn(name, launch.editor_plugin_args(project, engine, smoke=True)[1])
             self.assertNotIn(name, launch.PLUGINS[1])
 
+    def test_inventory_station_authoring_uses_the_topaz_module_for_editor_and_cook(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            project = root/'project/Draft.uproject'
+            engine = root/'engine'
+            engine.mkdir()
+            name = 'CommunityInventoryStationAuthoring'
+            plugin = project.parent/'Plugins'/name/'Binaries/Win64'
+            plugin.mkdir(parents=True)
+            dll = 'UnrealEditor-Topaz.dll'
+            (plugin/dll).touch()
+            (plugin/'UnrealEditor.modules').write_text(json.dumps({
+                'BuildId': 'station-build', 'Modules': {'Topaz': dll},
+            }), encoding='utf-8')
+            receipt = engine/'UnrealEditor.modules'
+            receipt.write_text('{"BuildId":"other-build"}', encoding='utf-8')
+            with patch('builtins.print'):
+                self.assertNotIn(name, launch.editor_plugin_args(project, engine, smoke=False)[1])
+            receipt.write_text('{"BuildId":"station-build"}', encoding='utf-8')
+            for smoke in (False, True):
+                self.assertIn(name, launch.editor_plugin_args(project, engine, smoke=smoke)[1])
+            self.assertNotIn(name, launch.PLUGINS[1])
+
     def test_approved_equipment_requires_and_passes_the_native_adapter(self):
         with TemporaryDirectory() as folder:
             run = Path(folder)

@@ -1,0 +1,13 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1",
+  "FriendlyName": "Community Inventory Station Authoring",
+  "Description": "Editor compatibility for authoring inventory stations that inherit from the installed game.",
+  "Category": "CommunityAuthoring",
+  "CanContainContent": false,
+  "EnabledByDefault": false,
+  "Modules": [
+    { "Name": "Topaz", "Type": "Runtime", "LoadingPhase": "Default" }
+  ]
+}

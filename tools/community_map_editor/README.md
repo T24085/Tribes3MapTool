@@ -1122,6 +1122,16 @@ Use **TRIBES Map Editor → Force Shields** to set the selected openings to inde
 
 **Build for Direct Host** measures the support of each approved marker again. It records the exact cooked mesh and its actor name in the saved level. Set `direct_host_equipment_adapter` in the launcher config to the full path to `tools/attach_t2_equipment.py` in the source distribution. The selected host baseline needs both grouped equipment runtime modules in its verified inventory. Shield exports also need the grouped shield capability and `lua/powered_shields.lua`. The exporter includes the approved equipment in the same adapter as flags and spawns. Drafts with zero approvals keep the CTF-only flow. Generators, radar sensors and base turrets have native placement evidence. Two shield openings passed Unreal reopen, cook, and host staging verification. Their appearance and player collision still need in-game checks. Inventory stations remain in review. A headless two-client match verified the generator-linked material changes on a cooked draft.
 
+The optional `CommunityInventoryStationAuthoring` plugin exposes the native
+station parent to the stock Unreal authoring workspace. Build it against
+the workspace's UE 5.3 engine and install it under the project's `Plugins`
+folder. **TRIBES Map Editor → Create Inventory Station Blueprint** creates
+or selects the shared Blueprint. Add the station's visuals in the Blueprint
+editor. The plugin supplies the parent identity during authoring and cook.
+The installed game supplies the runtime implementation. Keep the plugin
+in the authoring workspace and distribute the cooked map assets. Automatic
+placement from intake markers and match interaction remain in review.
+
 The terrain reader accepts version 2 and 3 `.ter` files. `terrain.json` stores row-major heights in metres, hole indices, layer names, and Unreal placement in centimetres. Version 3's two authoring blocks are retained as text. The importer uses the authored heightfield and mask PNGs to build the draft. The PNGs carry raw 16-bit heights (divide by 32 for metres), material indices, and individual layer weights.
 
 Intake v2 and later support minimap settings and a verified terrain relief image. Missing, invalid or ambiguous playable areas leave the preview unavailable until a valid mission area is supplied. Verified packages with the same contents can be reused. Intakes are local authoring data.

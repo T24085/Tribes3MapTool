@@ -27,6 +27,13 @@ test on an imported Vengeance draft. The editor saved and reopened the
 same draft, opened Object Review automatically, and verified filtering,
 the property inspector, and the feature coverage view.
 
+The optional inventory station authoring plugin lets the Map Tool create a
+Blueprint derived from the installed game's station class. UE 5.3.1 cooked
+a test station, and an isolated game host spawned it with the native
+interaction capsule and powered component. Automatic placement from
+imported missions and match interaction are still under qualification.
+[Equipment authoring guide](tools/community_map_editor/README.md#review-equipment-and-power-groups)
+
 The Tribes 2 DIF importer preserves secondary detail meshes in version 43
 intakes. A three-level authored DIF passed import, draft reopen, and Windows
 cook in UE 5.3.1, with the original material assignments and primary-detail
