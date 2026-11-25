@@ -1903,6 +1903,44 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Invalid Ascend base color UV coordinates"):
                     load_intake(manifest)
 
+    def test_private_glb_export_preserves_mesh_attributes_and_separates_collision(self):
+        from mesh_glb import export_meshes
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "ascend", static_mesh="companion", mesh_artwork=True,
+                                          ascend_shader="vertex-rgb", ascend_vertices="half")
+            manifest = convert_unreal(source, root / "Intakes")
+            archive = export_meshes(manifest, root / "Assets.zip")
+            with ZipFile(archive) as bundle:
+                receipt = json.loads(bundle.read("mesh-export.json"))
+                model, = receipt["models"]
+                render = model["levels"][0]["file"]
+                collision = model["triangle_collision"]
+                self.assertEqual(set(bundle.namelist()), {"mesh-export.json", render, collision})
+                self.assertEqual((receipt["units"], receipt["up"], receipt["handedness"]), ("metres", "+Y", "right"))
+                for filename in (render, collision):
+                    self.assertEqual(sha256(bundle.read(filename)).hexdigest(), receipt["files"][filename])
+                glb = bundle.read(render)
+                self.assertEqual(struct.unpack_from("<4sII", glb), (b"glTF", 2, len(glb)))
+                length, kind = struct.unpack_from("<I4s", glb, 12)
+                self.assertEqual(kind, b"JSON")
+                asset = json.loads(glb[20:20 + length])
+                first, second = asset["meshes"][0]["primitives"]
+                self.assertIn("TEXCOORD_3", second["attributes"])
+                self.assertIn("COLOR_0", second["attributes"])
+                positions = asset["accessors"][first["attributes"]["POSITION"]]
+                normal = asset["accessors"][first["attributes"]["NORMAL"]]
+                view = asset["bufferViews"][normal["bufferView"]]
+                self.assertAlmostEqual(struct.unpack_from("<3f", glb, 28 + length + view["byteOffset"])[1], 1, places=4)
+                self.assertEqual((positions["min"][0], positions["max"][0]), (0, 2))
+                self.assertAlmostEqual(positions["min"][1], .8)
+                self.assertAlmostEqual(positions["max"][2], .8)
+                texture = asset["materials"][first["material"]]["pbrMetallicRoughness"]["baseColorTexture"]
+                self.assertEqual(texture["texCoord"], 1)
+                self.assertEqual(texture["extensions"]["KHR_texture_transform"]["scale"], [2.0, .5])
+                self.assertEqual(len(asset["images"]), 2)
+
     def test_world_bsp_exports_distinct_visual_and_collision_sections(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

@@ -751,6 +751,23 @@ texture files, source names and locations, free-text properties, and edits made
 later in the Unreal draft. Use **Open source or intake…** to reopen the ZIP, then
 assign local meshes and check terrain and marker heights before building.
 
+### Export private GLB mesh assets
+
+In **Import Mission or Intake…**, open an intake with decoded models and
+choose **Export GLB meshes…**. The ZIP contains glTF 2.0 mesh assets in
+metres with a right-handed, Y-up coordinate system. It includes available
+static detail levels, material slot names, saved normals, vertex colors,
+UV channels, and embedded base-color PNGs for resolved slots. Compiled
+triangle collision is exported as a separate mesh where available.
+Base-color PNGs with embedded profiles are converted to standard sRGB.
+`mesh-export.json` records the corresponding source geometry hashes and
+the checksum of each GLB.
+
+Keep this export private. It can contain original game meshes and
+textures. Use **Export public layout…** for sharing layouts. The GLB ZIP
+is a mesh export. Map placement, terrain, objectives, animation, and the
+original shader and lighting data stay in the verified intake.
+
 ### Inspect source objects and feature support
 
 The **All** tab pins blocked objects first, followed by rows that need

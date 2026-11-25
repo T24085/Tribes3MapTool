@@ -14,6 +14,7 @@ from boundary_polygon_window import show_polygon
 from intake_contract import load_intake, load_mission_audio, playable_bounds
 from map_pipeline import PipelineRun, pipeline_config
 from interior_lighting import lighting_coverage, load_lighting_index
+from mesh_glb import export_meshes
 from mesh_mappings import placements, source_reference
 from minimap import export_host_minimap, framing, terrain_pixels, view_transform
 from mission_audio import audio_review
@@ -866,6 +867,7 @@ def run(library, meshes=(), drafts=()):
             artwork_button.pack_forget()
         rule_button.configure(state="normal")
         public_button.configure(state="normal")
+        mesh_export_button.configure(state="normal" if state["models"] else "disabled")
 
     def decode(event=None):
         try:
@@ -940,6 +942,7 @@ def run(library, meshes=(), drafts=()):
         artwork_button.pack_forget()
         rule_button.configure(state="disabled")
         public_button.configure(state="disabled")
+        mesh_export_button.configure(state="disabled")
 
     def import_unreal(path, parent):
         metadata = path.with_suffix(".import.json")
@@ -1043,6 +1046,7 @@ def run(library, meshes=(), drafts=()):
         boundary_button.configure(state="disabled")
         rule_button.configure(state="disabled")
         public_button.configure(state="disabled")
+        mesh_export_button.configure(state="disabled")
         notice.set("Select a mission from the archive.")
         table.delete(*table.get_children())
         update_mesh_button()
@@ -1239,6 +1243,23 @@ def run(library, meshes=(), drafts=()):
             return
         notice.set("Public layout saved. Reopen the ZIP with Open source or intake.")
 
+    def save_mesh_assets():
+        path = filedialog.asksaveasfilename(
+            parent=root, title="Export private GLB mesh assets",
+            initialfile="private-mesh-assets.zip", defaultextension=".zip", filetypes=[("ZIP archive", "*.zip")],
+        )
+        if not path:
+            return
+        notice.set("Exporting private GLB mesh assets…")
+        root.update_idletasks()
+        try:
+            export_meshes(state["manifest"], path)
+        except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
+            notice.set("GLB mesh export failed.")
+            messagebox.showerror("Export GLB meshes", str(exc), parent=root)
+            return
+        notice.set("Private GLB mesh assets saved.")
+
     def accept():
         try:
             mappings = state["mappings"]
@@ -1276,6 +1297,8 @@ def run(library, meshes=(), drafts=()):
     bind_review()
     asset_options = ttk.Frame(root)
     asset_options.pack(fill="x", padx=10, pady=(0, 6))
+    mesh_export_button = ttk.Button(asset_options, text="Export GLB meshes…", state="disabled", command=save_mesh_assets)
+    mesh_export_button.pack(side="left")
     mesh_button = ttk.Button(asset_options, text="Map selected mesh…", state="disabled", command=map_mesh)
     mesh_button.pack(side="right")
     dif_button = ttk.Button(asset_options, text="DIF assets…", state="disabled", command=choose_dif_assets)
