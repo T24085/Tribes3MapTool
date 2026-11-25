@@ -15,7 +15,7 @@ from community_maps import MapDefinition, valid_label
 from map_sync_contract import MINIMAP_MAX_IMAGE, map_catalog, minimap_payload, png_dimensions
 from portable_maps import host_definitions, load_json, merge_map_manifests, owned_path
 from tools.t2_map_release import (DRAFT, create_plan, descriptor_paths, flag_boundary_features, publish_directory,
-                                  regular_row, verify_draft_world_settings, verify_flag_boundary_runtime,
+                                  regular_row, verified_host_source, verify_draft_world_settings, verify_flag_boundary_runtime,
                                   verify_minimap_runtime)
 from verified_file_cache import MAX_PACKAGE_MANIFEST_BYTES
 
@@ -133,6 +133,7 @@ def add_minimap(payload, overlay, map_id):
 EQUIPMENT_RUNTIME = b'-- T3_EDITOR_GROUPED_EQUIPMENT_V1'
 SHIELD_RUNTIME = b'-- T3_EDITOR_GROUPED_SHIELDS_V1'
 SHIELD_POLICIES_RUNTIME = b'-- T3_EDITOR_SHIELD_POWER_POLICIES_V1'
+STATION_RUNTIME = b'-- T3_EDITOR_INVENTORY_STATIONS_V1'
 MAX_EQUIPMENT_REVIEW_BYTES = 256 * 1024
 
 
@@ -169,6 +170,23 @@ def write_objectives(ctf, target, run, host, existing, preview_manifest, map_id,
                    for name in ('lua/objective_layouts.lua', module)):
                 raise ValueError('Choose a Direct Host baseline that supports custom shield power-loss settings.')
     cooked = {row['path'] for row in preview_manifest['files']}
+    if any(isinstance(row, dict) and 'station_floor_z_cm' in row for row in approved['placements']):
+        module = 'lua/inventory_stations.lua'
+        message = 'Choose a verified Direct Host baseline with draft inventory station support.'
+        for name in ('lua/objective_layouts.lua', 'lua/network.lua', module):
+            if STATION_RUNTIME not in verified_host_source(host, existing, name, message).splitlines():
+                raise ValueError(message)
+        launcher = 'playtest.py'
+        if launcher in existing or (host/launcher).exists() or (host/launcher).is_symlink():
+            launcher_error = 'Choose a Direct Host game launcher that loads portable map adapters.'
+            for name, required in ((launcher, (b'merge_map_manifests', b'runtime_paths')),
+                                   ('lib/portable_maps.py', (b'_portable_adapters',))):
+                data = verified_host_source(host, existing, name, launcher_error)
+                if not all(marker in data for marker in required):
+                    raise ValueError(launcher_error)
+        station = f'content/Community/{map_id}/Equipment/BP_CommunityInventoryStation'
+        if not {station+'.uasset', station+'.uexp'} <= cooked:
+            raise ValueError('The map’s inventory station Blueprint is missing from the draft cook.')
     for placement in approved['placements']:
         support = placement.get('support') if isinstance(placement, dict) else None
         asset = support.get('asset') if isinstance(support, dict) else None
@@ -233,7 +251,8 @@ def playtest_checklist(metadata, starts, flags, equipment, groups, *, flag_featu
         lines.extend(['', '[ ] Check each approved equipment placement for floor contact and obstruction.'])
         for entry, approved in equipment:
             role = entry['role'].replace('_', ' ')
-            point = position(approved['anchor_position_cm'])
+            x, y, z = approved['anchor_position_cm']
+            point = position((x, y, approved.get('station_floor_z_cm', z)))
             size = ''
             if 'half_size_cm' in approved:
                 width, height = approved['half_size_cm']
@@ -248,6 +267,8 @@ def playtest_checklist(metadata, starts, flags, equipment, groups, *, flag_featu
                          f" ({circuit}){size}")
         if any(entry['role']=='force_shield' for entry, _ in equipment):
             lines.append('[ ] Confirm powered shields pass friendly players and block enemies from both sides.')
+        if any(entry['role']=='inventory_station' for entry, _ in equipment):
+            lines.append('[ ] Use an inventory station on each team. Check that an enemy cannot use it and that it stops and resumes working as its circuit loses and regains power.')
     if groups:
         lines.extend(['', '[ ] Disable every generator in each powered circuit. Check its equipment and the listed shield settings.',
                       '[ ] Restore one generator per circuit. Verify equipment comes back online and shields are at full height.'])

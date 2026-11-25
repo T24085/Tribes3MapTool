@@ -18,7 +18,9 @@ REPO = TOOL.parents[1]
 sys.path[:0] = [str(REPO), str(REPO/'host/lib')]
 from native_resource_gate import NativeResourceBusy, native_resources
 from owned_native_session import run_owned_job
-from tools.community_map_editor.source_profiles import ANY_DRAFT, BRUSH_PREVIEW_FOLDER, IMPORT_DRAFT, imported_draft
+from tools.community_map_editor.source_profiles import (
+    ANY_DRAFT, BRUSH_PREVIEW_FOLDER, IMPORT_DRAFT, imported_draft, inventory_station_package,
+)
 
 
 def digest(path):
@@ -121,7 +123,7 @@ def install_editor_scripts(project, env, *, include_seed=True):
     env['T3_EDITOR_SEED'] = str(seed)
 
 
-def cook(project, engine, package, out, env, *, plugins=None, cancellation_path=None):
+def cook(project, engine, package, out, env, *, plugins=None, cancellation_path=None, station_package=None):
     content = out/'cook/Windows'/project.stem/'Content'
     args = [str(engine/'UnrealEditor-Cmd.exe'), str(project), '-run=Cook', '-TargetPlatform=Windows',
             '-CookSinglePackage', '-NoDefaultMaps', '-SkipEditorContent', '-Map='+package,
@@ -129,6 +131,8 @@ def cook(project, engine, package, out, env, *, plugins=None, cancellation_path=
             '-ini:Engine:[ConsoleVariables]:Editor.AsyncStaticMeshCompilationMaxConcurrency=1',
             '-ini:Engine:[ConsoleVariables]:Editor.AsyncTextureCompilationMaxConcurrency=1',
             '-abslog='+str(out/'cook.log'), *(PLUGINS if plugins is None else plugins)]
+    if station_package is not None:
+        args.append('-Package='+station_package)
     print('Cooking the saved draft and the assets it uses. See', out/'cook.log', flush=True)
     job = run_owned_job(args, project.parent, env, out/'cook-owner', 1600, cancellation_path=cancellation_path)
     active = job.get('job_active_processes_after_cleanup', job.get('job_active_processes_at_parent_exit'))
@@ -138,6 +142,10 @@ def cook(project, engine, package, out, env, *, plugins=None, cancellation_path=
         ident = package.split('/')[-2]
         if not all((content/'Community'/ident/('Terrain'+ext)).is_file() for ext in ('.uasset', '.uexp')):
             raise RuntimeError('The imported terrain is missing from the cook. See ' + str(out/'cook.log'))
+    if station_package is not None:
+        stem = station_package.removeprefix('/Game/')
+        if not all((content/(stem + ext)).is_file() for ext in ('.uasset', '.uexp')):
+            raise RuntimeError('The inventory station Blueprint is missing from the cook. See ' + str(out/'cook.log'))
     with (out/'cook.log').open(encoding='utf-8', errors='replace') as log:
         if any('Failed to compile Material for platform' in line for line in log):
             raise RuntimeError('A material failed to compile. See ' + str(out/'cook.log'))
@@ -365,8 +373,19 @@ def run_host_pipeline(project, engine, preview_base, attempt, env, exporter, ada
     def cook_draft(_):
         nonlocal cooked
         kwargs = {'cancellation_path': cancellation_path} if cancellation_path is not None else {}
-        if authoring_only:
-            kwargs['plugins'] = editor_plugin_args(project, engine, smoke=True, authoring_only=True)
+        review = attempt/'equipment-review.json'
+        if review.is_file():
+            data = read_json(review, 256 * 1024)
+            placements = data.get('placements') if isinstance(data, dict) else None
+            if not isinstance(placements, list) or not all(isinstance(row, dict) for row in placements):
+                raise ValueError('The equipment review does not contain valid placements.')
+            if any('station_floor_z_cm' in row for row in placements):
+                kwargs['station_package'] = inventory_station_package(draft)
+        if authoring_only or 'station_package' in kwargs:
+            kwargs['plugins'] = editor_plugin_args(project, engine, smoke=True, authoring_only=authoring_only)
+        if ('station_package' in kwargs
+                and 'CommunityInventoryStationAuthoring' not in kwargs['plugins'][1].split(',')):
+            raise ValueError('Build the inventory station authoring plugin for this Unreal Editor version before cooking.')
         cooked = cook(project, engine, package_path(draft), attempt, env, **kwargs)
 
     def package(_):

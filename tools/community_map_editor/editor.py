@@ -7,15 +7,13 @@ import re
 import unreal
 
 from perimeter import verify_flag_bounds, verify_walls
-from source_profiles import ANY_DRAFT, IMPORT_DRAFT, imported_draft
+from source_profiles import ANY_DRAFT, IMPORT_DRAFT, INVENTORY_STATION_TEMPLATE, T2_DRAFT, imported_draft, inventory_station_package
 from terrain_layers import PALETTE_SURFACES
 
 
 LEVEL_ROOT = '/Game/Maps/Community'
 SOURCE_LEVEL = LEVEL_ROOT + '/Damnation/Arena_Damnation_2026_P'
 PALETTE = '/Game/Community/MapEditorPalette'
-INVENTORY_STATION_FOLDER = '/Game/Community/SharedEquipment'
-INVENTORY_STATION_NAME = 'BP_CommunityInventoryStation'
 MARKERS = {
     'T3Spawn1': 'Blue Spawn',
     'T3Spawn2': 'Red Spawn',
@@ -563,17 +561,24 @@ def set_shield_power(setting):
 def create_inventory_station_blueprint():
     if not hasattr(unreal, 'TopInventoryStation'):
         raise ValueError('Install the inventory station authoring plugin for this Unreal Editor build.')
-    path = f'{INVENTORY_STATION_FOLDER}/{INVENTORY_STATION_NAME}'
+    current = world()
+    level = current.get_path_name().split('.')[0] if current else ''
+    draft = re.fullmatch(LEVEL_ROOT + rf'/({T2_DRAFT})/Arena_\1_P', level)
+    path = inventory_station_package(draft[1]) if draft else INVENTORY_STATION_TEMPLATE
     if not ASSETS.does_asset_exist(path):
-        factory = unreal.BlueprintFactory()
-        factory.set_editor_property('parent_class', unreal.TopInventoryStation.static_class())
-        library = unreal.AssetToolsHelpers.get_asset_tools()
-        asset = library.create_asset(INVENTORY_STATION_NAME, INVENTORY_STATION_FOLDER, unreal.Blueprint, factory)
+        if draft and ASSETS.does_asset_exist(INVENTORY_STATION_TEMPLATE):
+            asset = ASSETS.duplicate_asset(INVENTORY_STATION_TEMPLATE, path)
+        else:
+            folder, name = path.rsplit('/', 1)
+            factory = unreal.BlueprintFactory()
+            factory.set_editor_property('parent_class', unreal.TopInventoryStation.static_class())
+            library = unreal.AssetToolsHelpers.get_asset_tools()
+            asset = library.create_asset(name, folder, unreal.Blueprint, factory)
         if not asset or not ASSETS.save_loaded_asset(asset):
             raise ValueError('Unreal could not save the inventory station Blueprint.')
     generated = ASSETS.load_blueprint_class(path)
     if not generated or not isinstance(unreal.get_default_object(generated), unreal.TopInventoryStation):
-        raise ValueError('The shared inventory station path already contains an incompatible asset.')
+        raise ValueError('The inventory station path already contains an incompatible asset.')
     if os.environ.get('T3_EDITOR_INTERACTIVE') == '1':
         ASSETS.sync_browser_to_objects([path])
     return generated

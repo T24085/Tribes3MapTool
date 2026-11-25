@@ -10,6 +10,8 @@ UNREAL_PROFILES = {"vengeance": VENGEANCE, "ascend": ASCEND}
 NAMES = {T1: "Tribes 1", T2: "Tribes 2", VENGEANCE: "Tribes: Vengeance", ASCEND: "Tribes: Ascend"}
 PREFIX = {T1: "DraftT1", T2: "DraftT2", VENGEANCE: "DraftTV", ASCEND: "DraftTA"}
 BRUSH_PREVIEW_FOLDER = "/Game/Community/VengeanceBrushPreviews"
+INVENTORY_STATION_TEMPLATE = "/Game/Community/SharedEquipment/BP_CommunityInventoryStation"
+T2_DRAFT = r"DraftT2[0-9]{3}"
 BRUSH_PREVIEW_REFERENCE = "unrealmesh:brush."
 PROXIMITY_CHAIN_MODES = {"othertriggerturnson": 1, "othertriggerturnsoff": 2, "othertriggertoggles": 3}
 IMPORT_DRAFT = r"DraftT[12VA][0-9]{3}"
@@ -54,6 +56,12 @@ VENGEANCE_MODEL_VERSIONS = (VENGEANCE_BSP_MATERIALS_VERSION, *VENGEANCE_MESH_VER
 UNREAL_INTAKE_VERSIONS = (22, ASCEND_MESH_INTAKE_VERSION, *VENGEANCE_TERRAIN_VERSIONS, *VENGEANCE_MODEL_VERSIONS,
                           *ASCEND_ART_VERSIONS, *ASCEND_COLLISION_VERSIONS)
 UNREAL_INTAKE_VERSION = UNREAL_INTAKE_VERSIONS[-1]
+
+
+def inventory_station_package(map_id):
+    if not re.fullmatch(T2_DRAFT, map_id):
+        raise ValueError('Inventory station placement requires a Tribes 2 draft.')
+    return f'/Game/Community/{map_id}/Equipment/BP_CommunityInventoryStation'
 
 
 def imported_draft(value):

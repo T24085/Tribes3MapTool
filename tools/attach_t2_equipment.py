@@ -18,6 +18,7 @@ CLASSES = {
     'sensor': ('radar', '/Game/Topaz/Game/Objectives/BP_Objective_RadarSensor.BP_Objective_RadarSensor_C'),
     'base_turret': ('turret', '/Game/Topaz/Game/AI/BotPawns/BP_Topaz_BaseTurret.BP_Topaz_BaseTurret_C'),
     'force_shield': ('shield', None),
+    'inventory_station': ('station', None),
 }
 ASSET = re.compile(r'/Game/Community/(?:[A-Za-z0-9_]+/)+([A-Za-z0-9_]+)\.\1')
 ACTOR = re.compile(r'[A-Za-z0-9_]{1,128}')
@@ -82,13 +83,15 @@ def native_layout(equipment, review):
     if not approvals or len(approvals) > 60 or approvals.keys() - sources.keys():
         raise ValueError('Review must select known source objects within host capacity.')
     used_groups, supports, geometry, counts, entries, shields = {}, {}, {}, Counter(), [], []
+    stations = []
     for source_id, approved in approvals.items():
         source = sources[source_id]
         source_role = source.get('role')
         role, native_class = CLASSES.get(source_role, (None, None)) if isinstance(source_role, str) else (None, None)
         team, group_id = source.get('team'), source.get('power_group')
         if (role is None or type(team) is not int or team not in (1, 2) or source.get('transform') is None
-                or role != 'shield' and {'shield_power_group', 'on_power_loss'} & approved.keys()):
+                or role != 'shield' and {'shield_power_group', 'on_power_loss'} & approved.keys()
+                or role != 'station' and 'station_floor_z_cm' in approved):
             raise ValueError(f'Source object {source_id} needs a native role, valid transform and team.')
         if role == 'shield':
             group_id = approved.get('shield_power_group', group_id)
@@ -144,6 +147,14 @@ def native_layout(equipment, review):
             continue
         if 'half_size_cm' in approved:
             raise ValueError(f'Source object {source_id} is not a shield opening.')
+        if role == 'station':
+            floor = approved.get('station_floor_z_cm')
+            if not bounded_number(floor, 2e6) or not anchor[2] - 240.1 <= floor <= anchor[2] + 30.1:
+                raise ValueError(f'Inventory station {source_id} needs a measured floor below or near its anchor.')
+            stations.append(dict(id=ident, team=team, position_cm=[anchor[0], anchor[1], floor],
+                                 yaw_degrees=yaw, power_group=group_key,
+                                 support={key: support[key] for key in ('actor', 'asset')}))
+            continue
         supports[ident] = {key: support[key] for key in ('actor', 'asset')}
         counts[team, role] += 1
         entries.append(dict(id=ident, team=team, role=role, native_class=native_class,
@@ -161,6 +172,8 @@ def native_layout(equipment, review):
                   power_groups=used_groups)
     if shields:
         layout['powered_shields'] = shields
+    if stations:
+        layout['inventory_stations'] = stations
     if interiors := powered_interiors(review, used_groups):
         layout['powered_interiors'] = interiors
     return dict(format=1, map_id=map_id, package=package, world=f'{package}.{level}:',

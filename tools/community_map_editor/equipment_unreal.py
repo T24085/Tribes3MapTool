@@ -10,6 +10,7 @@ from tempfile import NamedTemporaryFile
 import unreal
 
 from intake_contract import bounded
+from source_profiles import inventory_station_package
 
 
 SOURCE_TAG = 'T3EquipmentSource_'
@@ -18,7 +19,7 @@ APPROVED = 'T3EquipmentApproved'
 SHIELD_GROUP = 'T3ShieldCircuit_'
 SHIELD_LOSS = 'T3ShieldPowerLoss_'
 SHIELD_POLICIES = {'drop', 'weaken', 'stay'}
-ROLES = {'generator', 'sensor', 'base_turret', 'force_shield'}
+ROLES = {'generator', 'sensor', 'base_turret', 'force_shield', 'inventory_station'}
 INTERIOR = 'T3BakedInterior'
 INTERIOR_INTAKE = 'T3InteriorPowerIntake_'
 INTERIOR_GROUP = 'T3InteriorPowerGroup_'
@@ -226,6 +227,7 @@ def review(world, actors, map_id, *, interiors=()):
     raw, source = read_source(sha)
     finish_support_compilation()
     placements = []
+    station_checked = False
     for (ident, _), actor in sorted(identities.items()):
         record = source.get(ident)
         if not record or record['role'] not in ROLES or not record['team']:
@@ -274,6 +276,14 @@ def review(world, actors, map_id, *, interiors=()):
         kind = 'terrain' if is_ground else 'structures'
         if 'half_size_cm' in placement and abs(hit[5].z-foot.z) > 30:
             raise ValueError(f'Align the bottom of {actor.get_actor_label()} with the doorway floor.')
+        if record['role'] == 'inventory_station':
+            if not station_checked:
+                parent = getattr(unreal, 'TopInventoryStation', None)
+                station = unreal.EditorAssetLibrary.load_blueprint_class(inventory_station_package(map_id)) if parent else None
+                if not station or not isinstance(unreal.get_default_object(station), parent):
+                    raise ValueError('Create the native station Blueprint before approving inventory stations.')
+                station_checked = True
+            placement['station_floor_z_cm'] = float(hit[5].z)
         placement['support'] = dict(actor=support_actor.get_name(),asset=asset,kind=kind)
         placements.append(placement)
     result = dict(format=1, map=map_id, equipment_sha256=sha, placements=placements)

@@ -1114,23 +1114,29 @@ plugin keeps the authored weather in the intake and logs an import warning.
 
 **Needs review only** keeps generators, sensors, base and sentry turrets, inventory and vehicle stations, and force shields visible. Double-click a row for the source datablock, team, position, full rotation and scale, and power-group records. Group records distinguish explicit `providesPower` declarations from grouping inferred from an ancestor named `…Powered`. They retain the source IDs of the generators in each group. Review missing teams, invalid transforms, and unresolved group assignments before wiring host gameplay.
 
-**Create Unreal draft** places equipment reference points under **TRIBES CTF → Equipment review** for rows with valid transforms. These editor-only points carry the source object IDs and intake hash. Move a generator, radar, or base turret marker to its intended native placement just above the finished support mesh. Select it and choose **Approve Selected Equipment for Direct Host**. Approved markers move to **TRIBES CTF → Approved equipment**. Use **Remove Selected Equipment Approval** to return them to review. Drafts imported before equipment source binding can still export flags and spawns. Import the source into a new draft to use these approvals.
+**Create Unreal draft** places equipment reference points under **TRIBES CTF → Equipment review** for rows with valid transforms. These editor-only points carry the source object IDs and intake hash. Move a generator, radar, base turret or inventory station marker to its intended placement just above the finished support mesh. Select it and choose **Approve Selected Equipment for Direct Host**. Approved markers move to **TRIBES CTF → Approved equipment**. Use **Remove Selected Equipment Approval** to return them to review. Drafts imported before equipment source binding can still export flags and spawns. Import the source into a new draft to use these approvals.
 
 Force shield references use an editor-only opening box. Center it in the doorway, rotate it around Z and size its local Y and Z axes to the clear width and height. Align the bottom with the floor before approving it. Older point-only shield references require a fresh import to create their boxes.
 
 Use **TRIBES Map Editor → Force Shields** to set the selected openings to independent power, restore their imported circuit, or link them to a selected same-team generator from the same intake. Choose **Drop**, **Weaken**, or **Stay Up** for power loss. A weakened shield keeps the lower half of the opening blocked to enemies and leaves the upper half clear. When power returns, it fills the opening again. A custom power-loss policy requires a Direct Host baseline that advertises shield power policy support.
 
-**Build for Direct Host** measures the support of each approved marker again. It records the exact cooked mesh and its actor name in the saved level. Set `direct_host_equipment_adapter` in the launcher config to the full path to `tools/attach_t2_equipment.py` in the source distribution. The selected host baseline needs both grouped equipment runtime modules in its verified inventory. Shield exports also need the grouped shield capability and `lua/powered_shields.lua`. The exporter includes the approved equipment in the same adapter as flags and spawns. Drafts with zero approvals keep the CTF-only flow. Generators, radar sensors and base turrets have native placement evidence. Two shield openings passed Unreal reopen, cook, and host staging verification. Their appearance and player collision still need in-game checks. Inventory stations remain in review. A headless two-client match verified the generator-linked material changes on a cooked draft.
+**Build for Direct Host** measures the support of each approved marker again. It records the exact cooked mesh and its actor name in the saved level. Set `direct_host_equipment_adapter` in the launcher config to the full path to `tools/attach_t2_equipment.py` in the source distribution. The selected host baseline needs both grouped equipment runtime modules in its verified inventory. Shield exports also need the grouped shield capability and `lua/powered_shields.lua`. The exporter includes the approved equipment in the same adapter as flags and spawns. Drafts with zero approvals keep the CTF-only flow. Generators, radar sensors and base turrets have native placement evidence. Two shield openings passed Unreal reopen, cook, and host staging verification. Their appearance and player collision still need in-game checks. A headless two-client match verified the generator-linked material changes on a cooked draft.
 
 The optional `CommunityInventoryStationAuthoring` plugin exposes the native
 station parent to the stock Unreal authoring workspace. Build it against
 the workspace's UE 5.3 engine and install it under the project's `Plugins`
-folder. **TRIBES Map Editor → Create Inventory Station Blueprint** creates
-or selects the shared Blueprint. Add the station's visuals in the Blueprint
-editor. The plugin supplies the parent identity during authoring and cook.
-The installed game supplies the runtime implementation. Keep the plugin
-in the authoring workspace and distribute the cooked map assets. Automatic
-placement from intake markers and match interaction remain in review.
+folder. In an imported Tribes 2 draft, choose **TRIBES Map Editor → Create
+Inventory Station Blueprint**. This creates or selects the draft's own
+Blueprint. If the project has a shared station template, the first use in
+the draft makes a copy. Add station visuals in the Blueprint editor, then
+approve the imported station markers and their circuit's generators. Build
+for Direct Host cooks the Blueprint and seats the stations at the measured
+floor height with the markers' yaw. The selected host bundle must include
+the verified inventory station runtime in `lua/inventory_stations.lua`.
+The installed game supplies the native interaction implementation. Keep the
+optional authoring plugin in the Unreal workspace and distribute the cooked
+map assets. The exported checklist includes friendly and enemy interaction
+and generator outage and recovery.
 
 The terrain reader accepts version 2 and 3 `.ter` files. `terrain.json` stores row-major heights in metres, hole indices, layer names, and Unreal placement in centimetres. Version 3's two authoring blocks are retained as text. The importer uses the authored heightfield and mask PNGs to build the draft. The PNGs carry raw 16-bit heights (divide by 32 for metres), material indices, and individual layer weights.
 
