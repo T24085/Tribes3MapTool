@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES private intake heightmaps, version 1",
+  "description": "Each 16-bit grayscale PNG represents 256 by 256 cells and includes their final edge vertices. Adjacent tiles share one line of vertices.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "format", "units", "intake_sha256", "tile_vertices", "origin_m", "step_m",
+               "raster_y", "height_offset_m", "height_step_m", "tile_grid", "files"],
+  "properties": {
+    "kind": {"const": "tribes-private-heightmaps"},
+    "format": {"const": 1},
+    "units": {"const": "metres"},
+    "intake_sha256": {"$ref": "#/$defs/sha256"},
+    "tile_vertices": {"const": 257},
+    "origin_m": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+    "step_m": {"type": "number", "exclusiveMinimum": 0},
+    "raster_y": {"enum": [-1, 1]},
+    "height_offset_m": {"type": "number"},
+    "height_step_m": {"type": "number", "minimum": 0},
+    "tile_grid": {
+      "type": "array", "minItems": 1, "maxItems": 64,
+      "items": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/$defs/tile"}}
+    },
+    "files": {
+      "type": "object", "minProperties": 1, "maxProperties": 4096,
+      "propertyNames": {"$ref": "#/$defs/tile"},
+      "additionalProperties": {"$ref": "#/$defs/sha256"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$", "minLength": 64, "maxLength": 64},
+    "tile": {"type": "string", "pattern": "^assets/terrain/height-[0-9]{4}\\.png$", "maxLength": 30}
+  }
+}

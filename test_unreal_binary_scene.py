@@ -1955,28 +1955,36 @@ class UnrealBinarySceneTests(unittest.TestCase):
             self.assertEqual(contents["manifest.json"], manifest.read_bytes())
             receipt = json.loads(contents["mesh-export.json"])
             self.assertEqual(receipt["intake_sha256"], sha256(manifest.read_bytes()).hexdigest())
+            heights = json.loads(contents["terrain-export.json"])
+            tile = heights["tile_grid"][0][0]
             model, = receipt["models"]
             render = model["levels"][0]["file"]
             collision = model["triangle_collision"]
-            self.assertEqual(set(contents), {"manifest.json", "mesh-export.json", render, collision,
+            self.assertEqual(set(contents), {"manifest.json", "mesh-export.json", render, collision, "terrain-export.json", tile,
                                              *load_intake(manifest)[0]["files"]})
 
             library = root / "Imported"
             plain = root / "Plain.zip"
+            meshes_only = root / "Prior private export.zip"
             with ZipFile(plain, "w") as bundle:
-                for name in set(contents) - {"mesh-export.json", render, collision}:
+                for name in set(contents) - {"mesh-export.json", render, collision, "terrain-export.json", tile}:
+                    bundle.writestr(name, contents[name])
+            with ZipFile(meshes_only, "w") as bundle:
+                for name in set(contents) - {"terrain-export.json", tile}:
                     bundle.writestr(name, contents[name])
             plain_manifest = unpack_intake(plain, library)
+            prior_manifest = unpack_intake(meshes_only, library)
             reopened = unpack_intake(archive, library)
-            self.assertNotEqual(plain_manifest, reopened)
+            self.assertEqual(len({plain_manifest, prior_manifest, reopened}), 3)
+            self.assertEqual(load_intake(prior_manifest), load_intake(manifest))
             self.assertEqual(load_intake(reopened), load_intake(manifest))
-            for name in (render, collision):
+            for name in (render, collision, tile):
                 self.assertEqual((reopened.parent / name).read_bytes(), contents[name])
             self.assertEqual(unpack_intake(archive, library), reopened)
 
             public = export_public_layout(reopened, root / "Public.zip")
             with ZipFile(public) as bundle:
-                self.assertFalse(set(bundle.namelist()) & {"mesh-export.json", render, collision})
+                self.assertFalse(set(bundle.namelist()) & {"mesh-export.json", render, collision, "terrain-export.json", tile})
 
             corrupt = contents[render][:-1] + bytes([contents[render][-1] ^ 1])
             with ZipFile(root / "Corrupt.zip", "w") as bundle:
@@ -1988,6 +1996,67 @@ class UnrealBinarySceneTests(unittest.TestCase):
             (reopened.parent / render).write_bytes(corrupt)
             with self.assertRaisesRegex(ValueError, "GLB asset checksum mismatch"):
                 unpack_intake(archive, library)
+
+    def test_private_heightmaps_match_tiled_native_draft_at_full_resolution(self):
+        from io import BytesIO
+        from PIL import Image
+
+        from intake_exchange import export_private_intake
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "vengeance", native_terrain=True)
+            manifest = convert_unreal(source, root / "Intakes")
+            _, terrain, _ = load_intake(manifest)
+            archive = export_private_intake(manifest, root / "Private.zip")
+            with ZipFile(archive) as bundle:
+                contents = {name: bundle.read(name) for name in bundle.namelist()}
+            receipt = json.loads(contents["terrain-export.json"])
+            self.assertEqual(receipt["intake_sha256"], sha256(manifest.read_bytes()).hexdigest())
+            self.assertEqual(receipt["origin_m"], [-20, -20, 0])
+            self.assertEqual(receipt["step_m"], .16)
+            self.assertEqual(receipt["raster_y"], 1)
+            west, east = receipt["tile_grid"][0]
+            tiled = TiledTerrain(terrain)
+            samples = []
+            for col, name in enumerate((west, east)):
+                data = contents[name]
+                self.assertEqual(receipt["files"][name], sha256(data).hexdigest())
+                with Image.open(BytesIO(data)) as image:
+                    self.assertEqual(image.size, (257, 257))
+                    samples.append(list(getattr(image, "get_flattened_data", image.getdata)()))
+                for actual, exact in zip(samples[-1], tiled.mesh_block(col, 0)["height_m"]):
+                    reconstructed = receipt["height_offset_m"] + actual * receipt["height_step_m"]
+                    self.assertLessEqual(abs(reconstructed - exact), receipt["height_step_m"] / 2 + 1e-10)
+            self.assertEqual(samples[0][256::257], samples[1][::257])
+            library = root / "Reopened"
+            self.assertEqual(load_intake(unpack_intake(archive, library)), load_intake(manifest))
+            receipt["raster_y"] = -1
+            with ZipFile(root / "Bad frame.zip", "w") as bundle:
+                for name, data in contents.items():
+                    bundle.writestr(name, json.dumps(receipt) if name == "terrain-export.json" else data)
+            with self.assertRaisesRegex(ValueError, "Heightmap frame does not match"):
+                unpack_intake(root / "Bad frame.zip", library)
+            corrupt = contents[west][:-1] + bytes([contents[west][-1] ^ 1])
+            with ZipFile(root / "Bad tile.zip", "w") as bundle:
+                for name, data in contents.items():
+                    bundle.writestr(name, corrupt if name == west else data)
+            with self.assertRaisesRegex(ValueError, "Heightmap checksum mismatch"):
+                unpack_intake(root / "Bad tile.zip", library)
+
+    def test_private_heightmap_wraps_tribes2_edge_vertices(self):
+        from io import BytesIO
+        from PIL import Image
+
+        from intake_terrain_assets import heightmap_png
+
+        raw = heightmap_png(list(range(65536)), 0, 65535)
+        with Image.open(BytesIO(raw)) as image:
+            self.assertEqual(image.size, (257, 257))
+            self.assertEqual(image.getpixel((255, 255)), 65535)
+            self.assertEqual(image.getpixel((256, 255)), 65280)
+            self.assertEqual(image.getpixel((255, 256)), 255)
+            self.assertEqual(image.getpixel((256, 256)), 0)
 
     def test_world_bsp_exports_distinct_visual_and_collision_sections(self):
         with TemporaryDirectory() as directory:

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES private mesh export, version 1",
+  "description": "The intake checksum is required when this receipt is attached to an editable intake ZIP.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "format", "units", "up", "handedness", "profile", "models", "files"],
+  "properties": {
+    "kind": {"const": "tribes-private-mesh-export"},
+    "format": {"const": 1},
+    "units": {"const": "metres"},
+    "up": {"const": "+Y"},
+    "handedness": {"const": "right"},
+    "profile": {"enum": ["tribes1-ctf", "tribes2-ctf", "vengeance-ctf", "ascend-ctf"]},
+    "intake_sha256": {"$ref": "#/$defs/sha256"},
+    "models": {
+      "type": "array", "minItems": 1, "maxItems": 256,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["reference", "geometry_sha256", "levels"],
+        "properties": {
+          "reference": {"type": "string", "minLength": 1},
+          "geometry_sha256": {"$ref": "#/$defs/sha256"},
+          "levels": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/level"}},
+          "triangle_collision": {
+            "type": "string", "pattern": "^assets/meshes/(interior|shape)-[0-9]{4}-collision\\.glb$"
+          }
+        }
+      }
+    },
+    "files": {
+      "type": "object", "minProperties": 1, "maxProperties": 16640,
+      "propertyNames": {"$ref": "#/$defs/asset"},
+      "additionalProperties": {"$ref": "#/$defs/sha256"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$", "minLength": 64, "maxLength": 64},
+    "asset": {
+      "type": "string", "pattern": "^assets/meshes/(interior|shape)-[0-9]{4}(-lod([1-9]|[1-5][0-9]|6[0-3])|-collision)?\\.glb$"
+    },
+    "level": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["lod", "file"],
+          "properties": {
+            "lod": {"const": 0},
+            "file": {"type": "string", "pattern": "^assets/meshes/(interior|shape)-[0-9]{4}\\.glb$"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["lod", "file", "source_detail", "min_pixels"],
+          "properties": {
+            "lod": {"type": "integer", "minimum": 1, "maximum": 63},
+            "file": {"type": "string", "pattern": "^assets/meshes/(interior|shape)-[0-9]{4}-lod([1-9]|[1-5][0-9]|6[0-3])\\.glb$"},
+            "source_detail": {"type": "integer"},
+            "min_pixels": {"type": "integer"}
+          }
+        }
+      ]
+    }
+  }
+}

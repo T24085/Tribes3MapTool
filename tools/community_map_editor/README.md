@@ -760,8 +760,8 @@ static detail levels, material slot names, saved normals, vertex colors,
 UV channels, and embedded base-color PNGs for resolved slots. Compiled
 triangle collision is exported as a separate mesh where available.
 Base-color PNGs with embedded profiles are converted to standard sRGB.
-`mesh-export.json` records the corresponding source geometry hashes and
-the checksum of each GLB.
+[`mesh-export.json`](mesh-export-v1.schema.json) records the corresponding
+source geometry hashes and the checksum of each GLB.
 
 Keep this export private. It can contain original game meshes and
 textures. Use **Export public layout…** for sharing layouts. The GLB ZIP
@@ -771,17 +771,33 @@ original shader and lighting data stay in the verified intake.
 ### Export and reopen a private intake
 
 Choose **Export private intake…** to save the complete intake in one ZIP
-with its portable GLBs, if the intake has exportable meshes. Use **Open
-source or intake…** to reopen it. The editor reads placement, terrain,
-objectives, and lighting from the original intake members. Other tools
-can use the files under `assets/meshes/` independently.
+with full-resolution PNG heightmaps and portable GLBs for decoded meshes.
+Use **Open source or intake…** to reopen it. The editor reads placement,
+terrain, objectives, and lighting from the original intake members.
 
 The ZIP keeps the original `manifest.json` and its inventoried files.
 When GLBs are present, `mesh-export.json` also contains the SHA-256 of
-the original manifest under `intake_sha256`. Import checks the linked
-receipt, exact file inventory, and each GLB before adding the intake to
-the source library. Keep this ZIP private because it can include original
+the original manifest under `intake_sha256`. The
+[`terrain-export.json` schema](terrain-export-v1.schema.json) describes the
+metric frame and the PNGs in `assets/terrain/`. Import verifies the manifest
+links, file inventory, hashes, and heightmap frame before adding the intake
+to the source library. Keep this ZIP private because it can include original
 artwork and audio.
+
+Each PNG is 257 × 257, unsigned 16-bit grayscale. Adjacent tiles share a row
+or column of vertices. For a pixel at column `u`, row `v` in tile column
+`c`, row `r`, use the following coordinates in target-world metres.
+
+```text
+x = origin_m[0] + (256*c + u) * step_m
+y = origin_m[1] + (256*r + v) * step_m * raster_y
+z = origin_m[2] + height_offset_m + pixel * height_step_m
+```
+
+The raster retains the draft grid, including edge padding for native
+terrain. `terrain.json` records the hidden cells and exact heights.
+PNG height rounding is at most half of `height_step_m`. A flat surface
+has a zero height step. Earlier intake ZIPs still open.
 
 ### Inspect source objects and feature support
 
