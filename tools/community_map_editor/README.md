@@ -11,6 +11,13 @@ Drafts live in the Community maps folder inside the authoring project. Put newly
 
 ## Local setup
 
+In the Windows ZIP, extract the entire archive and open **Start TRIBES 3
+Map Editor.bat**. It creates the workspace in `%LOCALAPPDATA%\Tribes3MapTool`
+on the first run and reopens it on later runs. Install Python 3.13 with its
+Windows launcher, Pillow, and Unreal Engine 5.3 before opening it. If your
+Unreal installation is unregistered, run the BAT with `--engine "D:\UE_5.3"`
+on the first run. Use `--workspace` to select a different workspace parent.
+
 For a fresh workspace on Windows, use Python 3.13 and Unreal Engine 5.3.
 Run these commands from the source checkout with your own workspace parent.
 Setup finds Unreal Engine 5.3 through Epic Games Launcher and opens the

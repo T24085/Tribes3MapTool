@@ -4,6 +4,8 @@ This is the in-development Windows source for the TRIBES 3 community map editor.
 
 ## Get started
 
+For the Windows ZIP, extract the archive and double-click **Start TRIBES 3 Map Editor.bat**. The launcher creates or reopens the workspace under `%LOCALAPPDATA%\Tribes3MapTool`.
+
 Install Python 3.13 and Unreal Engine 5.3, then run these commands from this checkout with your own workspace parent.
 
 ```powershell
