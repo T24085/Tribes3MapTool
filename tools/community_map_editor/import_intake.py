@@ -25,7 +25,7 @@ from perimeter import (POLYGON_REQUIRED, PolygonWalls, plan_boundaries, place_fl
 from perimeter_collision import validate_channels
 from sky_intake import SKY_INDEX, load_sky_index
 from source_library import record_draft
-from source_profiles import (BRUSH_PREVIEW_REFERENCE, PREFIX, T2_GENERATOR_SCOPE_VERSION, VENGEANCE_BRUSH_VERSIONS,
+from source_profiles import (BRUSH_PREVIEW_REFERENCE, PREFIX, T2_GENERATOR_SCOPE_VERSIONS, VENGEANCE_BRUSH_VERSIONS,
                              VENGEANCE_ELEVATOR_VERSION, VENGEANCE_MOVER_PLAYBACK_VERSION, imported_draft)
 from terrain_art import SOURCE_ART, available_art
 from terrain_layers import ART_SLOT_OFFSET, FALLBACK, PALETTE_SURFACES, SIZE, layer_choices, load_weights, painted_cells
@@ -774,7 +774,7 @@ class DraftImport:
         material_overrides = self.material_overrides
         lighting_index, generated_models = self.lighting_index, self.generated_models
         boxes, flag_limit = self.boxes, self.flag_limit
-        generator_scopes = self.header['format'] == T2_GENERATOR_SCOPE_VERSION
+        generator_scopes = self.header['format'] in T2_GENERATOR_SCOPE_VERSIONS
         equipment = mission_equipment(rows, terrain, generator_scopes=generator_scopes)
         lighting = {}
         source_hash = None
@@ -889,7 +889,7 @@ class DraftImport:
                 warnings.append(f"Could not record the source for {ident}: {exc}")
             try:
                 publish_review(self.library, ident, header, self.terrain, self.source_rows, self.catalog,
-                               self.options["mesh_mappings"])
+                               self.options["mesh_mappings"], manifest=self.manifest)
             except (OSError, ValueError) as exc:
                 warnings.append(f"Could not save object review for {ident}: {exc}")
         try:

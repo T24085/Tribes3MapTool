@@ -12,18 +12,22 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace as Record
 import unittest
 from unittest.mock import Mock, patch
+import wave
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "tools/community_map_editor"))
 from conversion_window import coverage_status
 from batch_rebuild import compare_drafts, create_batch, load_batch, save_batch
 from conversion_rules import checksum, create_snapshot, draft_rules_path, edit_scope, history, profile_config, selectors, write
-from intake_contract import BOUNDARY_RECIPE, PLAYABLE_BOUNDS, load_intake, load_intake_geometry, playable_bounds
+from dock_review import object_review_document
+from intake_contract import (BOUNDARY_RECIPE, PLAYABLE_BOUNDS, load_intake, load_intake_geometry, load_mission_audio,
+                             playable_bounds)
 from interior_geometry import dif_detail_lighting, dif_detail_mesh, material_sections, render_sections
 from interior_lighting import (LIGHTING_INDEX, alarm_switches_material, lighting_coverage, lighting_summary,
                                load_lighting_index, model_lighting)
 from map_pipeline import PipelineRun, pipeline_config, validate_pipeline
 from mesh_mappings import placements, source_reference, source_transform
+from mission_audio import AUDIO_INDEX, AUDIO_MEMBER
 from mission_weather import cloud_layers, precipitation_emitters
 from object_catalog import build_rows, classify, load_catalog, source_fields
 from minimap import export_host_minimap, framing, terrain_pixels, view_transform
@@ -54,6 +58,95 @@ class IntakeTests(unittest.TestCase):
             b"\2" + struct.pack("<H", 32) * 65536 + bytes(65536) + bytes(8)
         )
         self.library = self.folder / "library"
+
+    def test_mission_audio_round_trips_privately_with_source_settings_and_review(self):
+        self.mission.write_text('''new SimGroup(MissionGroup) {
+          new TerrainBlock(){terrainFile="Test.ter";position="-8 -16 1";squareSize="8";};
+          new SimGroup(Team1){new SimGroup(AlphaRelay){
+            new StaticShape(){datablock="GeneratorLarge";position="4 5 6";};
+            new StaticShape(){datablock="GeneratorLarge";position="8 9 10";};};};
+          new AudioEmitter(PrivateBrook) {
+            position="2 3 4"; fileName="FX/Private/Brook.WAV"; volume="0.75";
+            isLooping="1"; is3D="1"; useProfileDescription="0"; outsideAmbient="1";
+            minDistance="80"; maxDistance="5120"; coneInsideAngle="180"; coneOutsideAngle="360";
+            coneOutsideVolume="0.25"; coneVector="0 3 4";
+            loopCount="-1"; minLoopGap="10000"; maxLoopGap="20000";
+          };
+          new AudioEmitter(Alias) {position="2 3 4"; fileName="fx/private/alias.wav";};
+          new AudioEmitter(Missing) {position="2 3 4"; fileName="fx/private/missing.wav"; profile="PrivateProfile";};
+          new AudioEmitter(Invalid) {position="2 3 4"; fileName="../private.wav";};
+          new AudioEmitter(Unreadable) {position="2 3 4"; fileName="fx/private/bad.wav";};
+          new AudioEmitter(Ambiguous) {position="2 3 4"; fileName="fx/private/double.wav";};
+        };''', encoding="utf-8")
+        clip = io.BytesIO()
+        with wave.open(clip, "wb") as audio:
+            audio.setparams((1, 2, 8000, 0, "NONE", ""))
+            audio.writeframes(b"\x00\x01" * 40)
+        raw = clip.getvalue()
+        source_assets = self.folder / "Sounds.vl2"
+        with zipfile.ZipFile(source_assets, "w") as archive:
+            archive.writestr("fx/Private/brook.wav", raw)
+            archive.writestr("fx/private/alias.wav", raw)
+            archive.writestr("fx/private/bad.wav", b"not PCM")
+            archive.writestr("fx/PRIVATE/double.wav", raw)
+            archive.writestr("fx/private/DOUBLE.wav", raw)
+            archive.writestr("fx/private/unreferenced.wav", raw)
+        manifest = convert(self.mission, self.library, audio_assets=source_assets)
+        header, terrain, rows = load_intake(manifest)
+        self.assertEqual(header["format"], 47)
+        index = load_mission_audio(manifest, header["files"])
+        main = index["emitters"][0]
+        self.assertEqual(main["position_cm"], [210.0, -315.0, 420.0])
+        self.assertEqual(main["settings"], {
+            "clip": "fx/private/brook.wav", "volume": .75, "looping": True, "spatial": True, "use_profile": False,
+            "outside_only": True, "min_distance_cm": 8400.0, "max_distance_cm": 537600.0,
+            "cone_inside_degrees": 180.0, "cone_outside_degrees": 360.0, "cone_outside_volume": .25,
+            "cone_direction": [0.0, -.6, .8], "loop_count": -1, "min_gap_s": 10.0, "max_gap_s": 20.0,
+        })
+        digest = hashlib.sha256(raw).hexdigest()
+        filename = f"audio-{digest}.wav"
+        self.assertEqual(index["clips"]["fx/private/brook.wav"], {
+            "file": filename, "source_sha256": digest, "origin": "Sounds.vl2",
+            "pcm": {"channels": 1, "sample_bits": 16, "sample_rate": 8000, "frames": 40},
+        })
+        self.assertEqual(index["clips"]["fx/private/alias.wav"], index["clips"]["fx/private/brook.wav"])
+        self.assertIn({"name": "fx/private/brook.wav", "origin": "Sounds.vl2", "sha256": digest}, header["sources"])
+        self.assertEqual(index["clips"]["fx/private/missing.wav"], {"reason": "missing"})
+        self.assertEqual(index["clips"]["fx/private/bad.wav"], {"reason": "unreadable"})
+        self.assertEqual(index["clips"]["fx/private/double.wav"], {"reason": "ambiguous"})
+        self.assertEqual(index["emitters"][3]["review"], ["filename"])
+        self.assertEqual(index["emitters"][2]["review"], ["profile"])
+        self.assertEqual([name for name in header["files"] if AUDIO_MEMBER.fullmatch(name)], [filename])
+        self.assertEqual((manifest.parent / filename).read_bytes(), raw)
+        catalog = load_catalog(self.library, source_profile=header["profile"])
+        document = object_review_document("DraftT2001", header, terrain, rows, catalog, {}, audio=index)
+        by_name = {entry["object"]: entry for entry in document["objects"]}
+        self.assertEqual(by_name["PrivateBrook"]["status"], "Audio retained")
+        self.assertIn("WAV was missing", by_name["Missing"]["reason"])
+
+        bundle = self.folder / "private.zip"
+        with zipfile.ZipFile(bundle, "w") as archive:
+            for item in manifest.parent.iterdir():
+                archive.write(item, "intake/" + item.name)
+        received = unpack_intake(bundle, self.folder / "received")
+        self.assertEqual(load_intake(received), (header, terrain, rows))
+        shared = export_public_layout(received, self.folder / "share-audio-layout.zip")
+        with zipfile.ZipFile(shared) as archive:
+            self.assertNotIn(AUDIO_INDEX, archive.namelist())
+            self.assertFalse(any(AUDIO_MEMBER.fullmatch(name) for name in archive.namelist()))
+            self.assertNotIn(b"fx/private", archive.read("objects.json").lower())
+            self.assertNotIn(b"PrivateProfile", archive.read("objects.json"))
+            self.assertNotIn(b"Sounds.vl2", archive.read("manifest.json"))
+            self.assertEqual(json.loads(archive.read("manifest.json"))["format"], 46)
+        load_intake(unpack_intake(shared, self.folder / "shared"))
+
+        index["clips"]["fx/private/brook.wav"]["pcm"]["sample_rate"] = 16000
+        altered = json.dumps(index).encode()
+        received.with_name(AUDIO_INDEX).write_bytes(altered)
+        header["files"][AUDIO_INDEX] = hashlib.sha256(altered).hexdigest()
+        received.write_text(json.dumps(header), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "PCM layout differs"):
+            load_intake(received)
 
     def test_public_layout_reopens_with_ctf_and_power_but_no_private_payload(self):
         private = ("SecretAuthor", "192.168.23.17", "PrivateTerrain", "InternalNotes", "PrivateClass")

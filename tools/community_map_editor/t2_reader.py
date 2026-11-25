@@ -17,12 +17,13 @@ from intake_contract import (
     bounded, intake_file_limit, intake_filename, load_intake, max_intake_files, validate_minimap,
 )
 from minimap import framing, grayscale_png, terrain_png
+from mission_audio import AUDIO_MEMBER, MAX_AUDIO_BYTES, MAX_CLIPS, collect_audio
 from mission_equipment import mission_equipment
 from mission_weather import WEATHER_FILE, mission_weather
 from model_textures import MAX_TEXTURE_BYTES, TEXTURE_FILE, TEXTURE_INDEX
 from native_terrain_paint import MAX_PAINT_PNG_BYTES, PAINT_FILE
 from sky_intake import MAX_SKY_BYTES, SKY_PNG
-from source_profiles import (T2_DIF_ANIMATION_VERSION, T2_DIF_LOD_LIGHT_VERSION, T2_DIF_LOD_VERSION,
+from source_profiles import (T2_AUDIO_VERSION, T2_DIF_ANIMATION_VERSION, T2_DIF_LOD_LIGHT_VERSION, T2_DIF_LOD_VERSION,
                              T2_GENERATOR_SCOPE_VERSION)
 from interior_lighting import LIGHTING_INDEX, LIGHTMAP_FILE, MAX_LIGHTMAP_BYTES
 from terrain_art import ART_FILE, MAX_ART_BYTES
@@ -394,7 +395,7 @@ def read_member(archive, name):
 
 
 def convert(source, output, mission=None, terrain=None, *, dif_decoder=None, dif_assets=None,
-            dts_decoder=None, dts_assets=None, sky_assets=None):
+            dts_decoder=None, dts_assets=None, sky_assets=None, audio_assets=None):
     source = Path(source)
     output = Path(output)
     profile_bytes = PROFILE.read_bytes()
@@ -533,6 +534,13 @@ def convert(source, output, mission=None, terrain=None, *, dif_decoder=None, dif
         header.update(format=T2_DIF_LOD_VERSION, reader="t2-mission-v43.0")
     if generator_scopes:
         header.update(format=T2_GENERATOR_SCOPE_VERSION, reader="t2-mission-v46.0")
+    audio_root = audio_assets or dif_assets or dts_assets
+    audio, receipts = collect_audio(rows, terrain_data, source.resolve(), Path(audio_root).resolve() if audio_root else None)
+    if audio:
+        files.update(audio)
+        header['files'].update({name: sha(data) for name, data in audio.items()})
+        header['sources'].extend(receipts)
+        header.update(format=T2_AUDIO_VERSION, reader='t2-mission-v47.0')
     return publish_intake(header, files, output)
 
 
@@ -605,6 +613,9 @@ def unpack_intake(source, library):
             raise ValueError("Oversized intake terrain artwork.")
         if sum(archive.getinfo(prefix + n).file_size for n in names if PAINT_FILE.fullmatch(n)) > MAX_PAINT_PNG_BYTES:
             raise ValueError("Oversized native terrain paint files.")
+        audio = [archive.getinfo(prefix + n) for n in names if AUDIO_MEMBER.fullmatch(n)]
+        if len(audio) > MAX_CLIPS or sum(entry.file_size for entry in audio) > MAX_AUDIO_BYTES:
+            raise ValueError("Oversized intake mission audio.")
         if len(names) > max_intake_files(version):
             raise ValueError("Oversized intake inventory.")
         library = Path(library)
@@ -642,7 +653,9 @@ if __name__ == "__main__":
     parser.add_argument("--dts-decoder", type=Path, help="Installed io_scene_dts or dtslib folder")
     parser.add_argument("--dts-assets", type=Path, help="Tribes 2 content directory or asset VL2")
     parser.add_argument("--sky-assets", type=Path, help="Tribes 2 content directory or asset VL2")
+    parser.add_argument("--audio-assets", type=Path, help="Tribes 2 content directory or WAV asset VL2")
     args = parser.parse_args()
     print(convert(args.source, args.output, args.mission, args.terrain,
                   dif_decoder=args.dif_decoder, dif_assets=args.dif_assets,
-                  dts_decoder=args.dts_decoder, dts_assets=args.dts_assets, sky_assets=args.sky_assets))
+                  dts_decoder=args.dts_decoder, dts_assets=args.dts_assets, sky_assets=args.sky_assets,
+                  audio_assets=args.audio_assets))

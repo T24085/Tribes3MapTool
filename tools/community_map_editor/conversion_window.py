@@ -11,11 +11,12 @@ import zipfile
 
 from conversion_rules import checksum, sha256_file, write
 from boundary_polygon_window import show_polygon
-from intake_contract import load_intake, playable_bounds
+from intake_contract import load_intake, load_mission_audio, playable_bounds
 from map_pipeline import PipelineRun, pipeline_config
 from interior_lighting import lighting_coverage, load_lighting_index
 from mesh_mappings import placements, source_reference
 from minimap import export_host_minimap, framing, terrain_pixels, view_transform
+from mission_audio import audio_review
 from mission_equipment import mission_equipment, power_context
 from mission_weather import cloud_layers, mission_weather, precipitation_emitters
 from model_textures import load_texture_index
@@ -29,7 +30,7 @@ from public_layout import READER as PUBLIC_LAYOUT_READER, export_public_layout
 from rule_window import show_rules
 from sky_intake import load_sky_index
 from source_library import catalog_rows, record_source
-from source_profiles import T1, T2, T2_GENERATOR_SCOPE_VERSION, UNREAL_PROFILES
+from source_profiles import T1, T2, T2_GENERATOR_SCOPE_VERSIONS, UNREAL_PROFILES
 from t1_reader import convert_legacy, legacy_mission
 from t1_terrain import volume_missions
 from t2_reader import convert, members, unpack_intake
@@ -607,6 +608,7 @@ def run(library, meshes=(), drafts=()):
     configured_assets = os.environ.get("T3_DIF_ASSETS")
     dif_assets = Path(configured_assets) if configured_assets and Path(configured_assets).exists() else None
     sky_assets = None
+    audio_assets = None
 
     configured_dts = os.environ.get("T3_DTS_DECODER")
     dts_decoder = Path(configured_dts) if configured_dts and Path(configured_dts).is_dir() else None
@@ -695,6 +697,9 @@ def run(library, meshes=(), drafts=()):
                                f"{lighting['levels']} detail {level_label}. Power and animation need review.")
             elif reference in state.get("model_review", {}):
                 reason = state["model_review"][reference]
+            elif audio := state["audio"].get(row["id"]):
+                status, needs_review = "Audio retained", True
+                reason = audio
             elif weather:
                 status = "Weather review"
                 if weather["class"] == "sky":
@@ -798,7 +803,8 @@ def run(library, meshes=(), drafts=()):
                 warning = " · Saved mesh mappings could not be read"
         state["manifest"] = path
         state["classified"], state["active_rows"] = assessed, active
-        generator_scopes = header["format"] == T2_GENERATOR_SCOPE_VERSION
+        generator_scopes = header["format"] in T2_GENERATOR_SCOPE_VERSIONS
+        state["audio"] = audio_review(load_mission_audio(path, header["files"]))
         state["teams"], state["scopes"], state["contexts"] = power_context(rows, generator_scopes=generator_scopes)
         state["rule_source"] = (header, rows)
         state["models"] = {**header.get("interiors", {}), **header.get("shapes", {})}
@@ -882,7 +888,8 @@ def run(library, meshes=(), drafts=()):
                     else:
                         path = convert(src, library, choices.get() or None, terrain_source,
                                        dif_decoder=dif_decoder, dif_assets=dif_assets,
-                                       dts_decoder=dts_decoder, dts_assets=dts_assets, sky_assets=sky_assets)
+                                       dts_decoder=dts_decoder, dts_assets=dts_assets, sky_assets=sky_assets,
+                                       audio_assets=audio_assets)
 
                 pipeline.execute({"decode": decode_source})
                 return path
@@ -927,6 +934,7 @@ def run(library, meshes=(), drafts=()):
         dif_button.configure(text="DIF assets…", state="disabled")
         dts_button.configure(state="disabled")
         sky_button.configure(state="disabled")
+        audio_button.configure(state="disabled")
         artwork_button.pack_forget()
         rule_button.configure(state="disabled")
         public_button.configure(state="disabled")
@@ -979,6 +987,7 @@ def run(library, meshes=(), drafts=()):
                     dif_button.configure(state="normal")
                     dts_button.configure(state="normal")
                     sky_button.configure(state="normal")
+                    audio_button.configure(state="normal")
                     with zipfile.ZipFile(path) as archive:
                         names = members(archive, ".mis")
                 if not names:
@@ -995,6 +1004,7 @@ def run(library, meshes=(), drafts=()):
                     dif_button.configure(state="normal")
                     dts_button.configure(state="normal")
                     sky_button.configure(state="normal")
+                    audio_button.configure(state="normal")
             decode()
         except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
             messagebox.showerror("Open map", str(exc), parent=root)
@@ -1066,6 +1076,15 @@ def run(library, meshes=(), drafts=()):
                                          mustexist=True)
         if folder:
             sky_assets = Path(folder)
+            if state["source"].suffix.lower() == ".mis" or choices.get():
+                decode()
+
+    def choose_audio_assets():
+        nonlocal audio_assets
+        folder = filedialog.askdirectory(parent=root, title="Tribes 2 content folder with WAV files or VL2 packs",
+                                         mustexist=True)
+        if folder:
+            audio_assets = Path(folder)
             if state["source"].suffix.lower() == ".mis" or choices.get():
                 decode()
 
@@ -1252,6 +1271,8 @@ def run(library, meshes=(), drafts=()):
     dts_button.pack(side="right", padx=(0, 8))
     sky_button = ttk.Button(asset_options, text="Sky assets…", state="disabled", command=choose_sky_assets)
     sky_button.pack(side="right", padx=(0, 8))
+    audio_button = ttk.Button(asset_options, text="Audio assets…", state="disabled", command=choose_audio_assets)
+    audio_button.pack(side="right", padx=(0, 8))
     terrain_button = ttk.Button(asset_options, text="Terrain layers…", state="disabled", command=lambda:
         show_terrain_layers(root, state["terrain"], state["terrain_mappings"],
                             lambda choices: state.update(terrain_mappings=choices), artwork=state["artwork"],

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES 2 map intake with private mission audio, version 47",
+  "type": "object",
+  "required": ["format", "profile", "reader", "name", "source_game", "profile_sha256", "sources", "files", "coverage"],
+  "properties": {
+    "format": {"const": 47},
+    "profile": {"$ref": "intake-v46.schema.json#/properties/profile"},
+    "reader": {"const": "t2-mission-v47.0"},
+    "name": {"$ref": "intake-v46.schema.json#/properties/name"},
+    "source_game": {"const": "Tribes 2"},
+    "profile_sha256": {"$ref": "intake-v46.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v46.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v46.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v46.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v46.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v46.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v46.schema.json#/properties/interior_review"},
+    "shapes": {"$ref": "intake-v46.schema.json#/properties/shapes"},
+    "shape_review": {"$ref": "intake-v46.schema.json#/properties/shape_review"},
+    "files": {
+      "type": "object",
+      "required": ["objects.json", "terrain.json", "height.png", "mission-audio.json"],
+      "dependentRequired": {"sky-artwork.json": ["weather.json"]},
+      "propertyNames": {
+        "anyOf": [
+          {"$ref": "intake-v46.schema.json#/properties/files/propertyNames"},
+          {"const": "mission-audio.json"},
+          {"$ref": "intake-v47.audio.schema.json#/$defs/wave_file"}
+        ]
+      },
+      "additionalProperties": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+    }
+  },
+  "if": {"required": ["minimap"]},
+  "then": {"$ref": "intake-v2.schema.json#/then"},
+  "else": {"$ref": "intake-v2.schema.json#/else"},
+  "dependentRequired": {
+    "interiors": ["interior_review"],
+    "interior_review": ["interiors"],
+    "shapes": ["shape_review"],
+    "shape_review": ["shapes"]
+  }
+}

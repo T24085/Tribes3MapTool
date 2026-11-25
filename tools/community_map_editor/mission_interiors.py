@@ -70,18 +70,18 @@ def pick(name, primary, secondary, loose_roots):
     return pick_exact(PurePosixPath(name).name, primary, secondary, loose_roots)
 
 
-def read_asset(asset):
+def read_asset(asset, *, limit=MAX_GEOMETRY_BYTES):
     if isinstance(asset, Path):
-        return bounded(asset, MAX_GEOMETRY_BYTES), asset.name
+        return bounded(asset, limit), asset.name
     owner, entry = asset
     if isinstance(owner, Path):
         with ZipFile(owner) as archive:
-            return read_asset((archive, archive.getinfo(entry)))
-    if entry.file_size > MAX_GEOMETRY_BYTES:
+            return read_asset((archive, archive.getinfo(entry)), limit=limit)
+    if entry.file_size > limit:
         raise ValueError('The referenced asset exceeds the supported size.')
     with owner.open(entry) as stream:
-        raw = stream.read(MAX_GEOMETRY_BYTES + 1)
-    if len(raw) > MAX_GEOMETRY_BYTES:
+        raw = stream.read(limit + 1)
+    if len(raw) > limit:
         raise ValueError('The referenced asset exceeds the supported size.')
     return raw, PurePosixPath(entry.filename.replace('\\', '/')).name
 

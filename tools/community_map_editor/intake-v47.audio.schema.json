@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES 2 mission-audio.json for map intake version 47",
+  "description": "A private index. WAV members contain original PCM bytes and are named by their full SHA-256.",
+  "type": "object",
+  "required": ["format", "emitters", "clips"],
+  "additionalProperties": false,
+  "properties": {
+    "format": {"const": 1},
+    "emitters": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "required": ["source_id", "position_cm", "settings", "review"],
+        "additionalProperties": false,
+        "properties": {
+          "source_id": {"type": "integer", "minimum": 1},
+          "position_cm": {"anyOf": [{"$ref": "#/$defs/vector"}, {"type": "null"}]},
+          "settings": {"$ref": "#/$defs/settings"},
+          "review": {"type": "array", "maxItems": 24, "items": {"type": "string", "maxLength": 32}}
+        }
+      }
+    },
+    "clips": {
+      "type": "object",
+      "maxProperties": 256,
+      "propertyNames": {"$ref": "#/$defs/reference"},
+      "additionalProperties": {
+        "oneOf": [
+          {"$ref": "#/$defs/pcm_clip"},
+          {
+            "type": "object",
+            "required": ["reason"],
+            "additionalProperties": false,
+            "properties": {"reason": {"enum": ["missing", "ambiguous", "unreadable", "capacity"]}}
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "wave_file": {"type": "string", "pattern": "^audio-[0-9a-f]{64}[.]wav$"},
+    "vector": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}},
+    "reference": {"type": "string", "minLength": 5, "maxLength": 180, "pattern": "^[a-z0-9_ ./-]+[.]wav$"},
+    "gain": {"type": "number", "minimum": 0, "maximum": 1},
+    "angle": {"type": "number", "minimum": 0, "maximum": 360},
+    "gap": {"type": "number", "minimum": 0, "maximum": 600},
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "clip": {"$ref": "#/$defs/reference"},
+        "volume": {"$ref": "#/$defs/gain"},
+        "looping": {"type": "boolean"},
+        "spatial": {"type": "boolean"},
+        "outside_only": {"type": "boolean"},
+        "use_profile": {"type": "boolean"},
+        "min_distance_cm": {"type": "number", "minimum": 0},
+        "max_distance_cm": {"type": "number", "minimum": 0},
+        "min_gap_s": {"$ref": "#/$defs/gap"},
+        "max_gap_s": {"$ref": "#/$defs/gap"},
+        "loop_count": {"type": "integer", "minimum": -1, "maximum": 10000},
+        "cone_inside_degrees": {"$ref": "#/$defs/angle"},
+        "cone_outside_degrees": {"$ref": "#/$defs/angle"},
+        "cone_outside_volume": {"$ref": "#/$defs/gain"},
+        "cone_direction": {"$ref": "#/$defs/vector"}
+      }
+    },
+    "pcm_clip": {
+      "type": "object",
+      "required": ["file", "source_sha256", "origin", "pcm"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {"$ref": "#/$defs/wave_file"},
+        "source_sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"},
+        "origin": {"type": "string", "minLength": 1, "maxLength": 260},
+        "pcm": {
+          "type": "object",
+          "required": ["channels", "sample_rate", "sample_bits", "frames"],
+          "additionalProperties": false,
+          "properties": {
+            "channels": {"enum": [1, 2]},
+            "sample_rate": {"type": "integer", "minimum": 8000, "maximum": 96000},
+            "sample_bits": {"enum": [8, 16, 24, 32]},
+            "frames": {"type": "integer", "minimum": 1, "maximum": 11520000}
+          }
+        }
+      }
+    }
+  }
+}

@@ -1087,6 +1087,17 @@ imports the resolved PNGs into its `SourceSky` folder and creates a
 private texture review batch for each sky. Confirm the face orientation
 before applying the cubemap. [Material list reader](https://raw.githubusercontent.com/GarageGames/Torque3D/development/Engine/source/materials/materialList.cpp)
 
+**Audio assets…** accepts a local Tribes 2 content folder with loose WAVs
+or VL2 packs. The CLI option `--audio-assets` also accepts one VL2.
+[Version 47](intake-v47.schema.json) retains source emitter positions,
+gain, attenuation distances, cone settings, loop counts, and delay ranges
+in [mission-audio.json](intake-v47.audio.schema.json). References resolve
+against exact content paths, ignoring letter case. Matched PCM WAVs retain
+their source bytes. Both Object Review views show missing, unreadable,
+ambiguous, or over-budget sounds and source fields that need review.
+The audio is available in private intakes for future playback mapping.
+Shared layouts omit the sound index, WAVs, and source audio references.
+
 When one authored sky resolves, the converter places up to three editable
 cloud layers from the DML cloud slots. It also accepts packs that omit the
 environment slot and explicitly name the seventh texture as a cloud.

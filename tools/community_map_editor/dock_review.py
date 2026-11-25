@@ -3,20 +3,22 @@
 from pathlib import Path
 
 from conversion_rules import DRAFT, draft_snapshot, write
-from intake_contract import load_intake
+from intake_contract import load_intake, load_mission_audio
 from mesh_mappings import source_reference
+from mission_audio import audio_review
 from mission_equipment import EQUIPMENT_ROLES, power_context
 from object_catalog import SUPPORT, classify, load_catalog, source_fields
 from source_library import verified_draft_intake
-from source_profiles import T2_GENERATOR_SCOPE_VERSION
+from source_profiles import T2_GENERATOR_SCOPE_VERSIONS
 
 
-def object_review_document(draft, header, terrain, rows, catalog, mappings):
+def object_review_document(draft, header, terrain, rows, catalog, mappings, *, audio=None):
     if not DRAFT.fullmatch(draft):
         raise ValueError("Invalid draft ID for object review.")
     assessed = classify(rows, terrain, catalog)
     by_id = {row["id"]: row for row in rows}
-    teams, groups, contexts = power_context(rows, generator_scopes=header["format"] == T2_GENERATOR_SCOPE_VERSION)
+    teams, groups, contexts = power_context(rows, generator_scopes=header["format"] in T2_GENERATOR_SCOPE_VERSIONS)
+    audio_notes = audio_review(audio)
     models = {**header.get("interiors", {}), **header.get("shapes", {})}
     model_notes = {**header.get("interior_review", {}), **header.get("shape_review", {})}
     entries = []
@@ -45,6 +47,8 @@ def object_review_document(draft, header, terrain, rows, catalog, mappings):
             status = "Equipment review"
             details = "Source equipment requires placement review and host approval."
             review = True
+        elif ident in audio_notes:
+            status, details, review = "Audio retained", audio_notes[ident], True
         elif reference in mappings:
             status, details = "Mapped mesh", mappings[reference]
         elif reference in models:
@@ -99,9 +103,10 @@ def object_review_document(draft, header, terrain, rows, catalog, mappings):
     }
 
 
-def publish_review(library, draft, header, terrain, rows, catalog, mappings):
+def publish_review(library, draft, header, terrain, rows, catalog, mappings, *, manifest=None):
     path = library / "DraftReviews" / f"{draft}.json"
-    write(path, object_review_document(draft, header, terrain, rows, catalog, mappings))
+    audio = load_mission_audio(manifest, header["files"]) if manifest is not None else None
+    write(path, object_review_document(draft, header, terrain, rows, catalog, mappings, audio=audio))
     return path
 
 
@@ -113,4 +118,4 @@ def review_for_existing_draft(library, draft):
     header, terrain, rows = load_intake(manifest)
     catalog = load_catalog(library, snapshot=snapshot, recorded=snapshot is not None, source_profile=header["profile"])
     mappings = snapshot["options"]["mesh_mappings"] if snapshot else {}
-    return publish_review(library, draft, header, terrain, rows, catalog, mappings)
+    return publish_review(library, draft, header, terrain, rows, catalog, mappings, manifest=manifest)

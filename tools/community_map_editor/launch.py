@@ -96,6 +96,7 @@ def install_editor_scripts(project, env, *, include_seed=True):
                  'interior_geometry.py', 't1_dts_motion.py', 'interior_lighting.py', 'dif_light_animation.py',
                  'lighting_preview_unreal.py', 'dts_preview.py', 'dts_preview_unreal.py', 'dts_bake_unreal.py',
                  'model_textures.py', 'draft_model_materials.py', 'mission_equipment.py', 'mission_weather.py',
+                 'mission_audio.py',
                  'equipment_unreal.py', 'source_library.py', 'draft_showcase.py', 'model_library.py',
                  'contact_sheets_unreal.py', 'conversion_rules.py', 'tribes2_conversion.json', 'profile_exchange.py',
                  'batch_rebuild.py', 'batch_rebuild_unreal.py', 'batch_stage.py', 'batch_stage_unreal.py',
