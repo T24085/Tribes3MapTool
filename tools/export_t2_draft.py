@@ -12,7 +12,8 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from community_maps import MapDefinition, valid_label
-from map_sync_contract import MINIMAP_MAX_IMAGE, map_catalog, map_groups, minimap_payload, png_dimensions
+from map_sync_contract import (MINIMAP_MAX_IMAGE, OUTSIDE_AUDIO_FILE, OUTSIDE_AUDIO_MAX, map_catalog, map_groups,
+                               minimap_payload, outside_audio_document, png_dimensions)
 from portable_maps import host_definitions, load_json, merge_map_manifests, owned_path
 from tools.t2_map_release import (DRAFT, create_plan, descriptor_paths, flag_boundary_features, projected_manifest, publish_directory,
                                   regular_row, verified_host_source, verify_draft_world_settings, verify_flag_boundary_runtime,
@@ -226,7 +227,7 @@ def write_objectives(ctf, target, run, host, existing, preview_manifest, map_id,
     return inputs[1]['sha256'], placements, groups
 
 
-def playtest_checklist(metadata, starts, flags, equipment, groups, *, flag_features=()):
+def playtest_checklist(metadata, starts, flags, equipment, groups, *, flag_features=(), outside_audio=False):
     def position(point):
         return ', '.join(f'{value:g}' for value in point)
 
@@ -277,6 +278,9 @@ def playtest_checklist(metadata, starts, flags, equipment, groups, *, flag_featu
             lines.append(f"    Team {group['team']} circuit #{group['source_id']}: {generators}")
     if 'minimap' in metadata:
         lines.extend(['', '[ ] Check minimap alignment against both flag stands and a distinctive terrain edge.'])
+    if outside_audio:
+        lines.extend(['', '[ ] On an acoustic-capable Starter, check the outside-only sounds outdoors, deep inside, '
+                          'and near an exterior portal.'])
     lines.extend(['', '[ ] Check skiing and jetting along a base-to-base route and at the edge of the playable area.',
                   '[ ] Finish the match and verify the result on both clients.', ''])
     return '\n'.join(lines)
@@ -408,8 +412,23 @@ def export_draft(run, host, destination, *, label, minimap=None, equipment_adapt
         elif 'minimap' in previous:
             metadata['minimap'] = previous['minimap']
         previous_image = previous.get('minimap', {}).get('image')
+        acoustic_name = f'lua/{map_id}/{OUTSIDE_AUDIO_FILE}'
+        acoustic_source = run / OUTSIDE_AUDIO_FILE
+        has_acoustic = acoustic_source.exists() or acoustic_source.is_symlink()
+        if has_acoustic:
+            if acoustic_source.stat().st_size > OUTSIDE_AUDIO_MAX:
+                raise ValueError('The outside-only audio layout exceeds the export size limit.')
+            before = file_row(run, acoustic_source.name)
+            outside_audio_document(load_json(acoustic_source, OUTSIDE_AUDIO_MAX))
+            member = dict(before, path=acoustic_name)
+            if acoustic_name not in old_members and ((host / acoustic_name).exists() or (host / acoustic_name).is_symlink()):
+                raise ValueError('The host contains an uninventoried outside-only audio layout.')
+            shutil.copyfile(acoustic_source, payload / acoustic_name)
+            if member != file_row(payload, acoustic_name) or before != file_row(run, acoustic_source.name):
+                raise ValueError('The outside-only audio layout changed during export.')
+            members.append(member)
         for name, row in old_members.items():
-            if (name.startswith(f'lua/{map_id}/') and name != f'lua/{map_id}/objectives.lua'
+            if (name.startswith(f'lua/{map_id}/') and name not in (f'lua/{map_id}/objectives.lua', acoustic_name)
                     and (minimap is None or name != f'lua/{map_id}/{previous_image}')):
                 if (payload/name).exists():
                     raise ValueError(f'The exported minimap conflicts with an existing map-local file: {name}')
@@ -453,7 +472,8 @@ def export_draft(run, host, destination, *, label, minimap=None, equipment_adapt
             receipt['equipment_review_sha256'] = equipment_review
         write_json(result / 'export-receipt.json', receipt)
         (result / 'playtest-checklist.txt').write_text(
-            playtest_checklist(metadata, starts, flags, equipment, groups, flag_features=flag_features),
+            playtest_checklist(metadata, starts, flags, equipment, groups, flag_features=flag_features,
+                               outside_audio=has_acoustic),
             encoding='utf-8', newline='\n')
         publish_directory(result, destination)
     return destination

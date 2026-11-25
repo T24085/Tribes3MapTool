@@ -49,6 +49,97 @@ MINIMAP_VERSION = '1'
 MINIMAP_MAX_IMAGE = 16 * 1024**2
 MINIMAP_MAX_DIMENSION = 4096
 MINIMAP_PATH = re.compile(r'(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.png')
+OUTSIDE_AUDIO_HEADER = 'X-T3-Map-Outside-Audio'
+OUTSIDE_AUDIO_VERSION = '1'
+OUTSIDE_AUDIO_FILE = 'outside-audio.json'
+OUTSIDE_AUDIO_MAX = 16 * 1024**2
+
+
+def outside_audio_row(map_id, value):
+    if (not valid_id(map_id) or not isinstance(value, dict) or value.keys() != {'path', 'bytes', 'sha256'}
+            or value['path'] != f'lua/{map_id}/{OUTSIDE_AUDIO_FILE}'
+            or type(value['bytes']) is not int or not 0 < value['bytes'] <= OUTSIDE_AUDIO_MAX
+            or not valid_sha(value['sha256'])):
+        raise ValueError('Invalid outside-only audio inventory entry.')
+    return value
+
+
+def outside_audio_document(value):
+    """Validate launch data before it can become any part of a Lua literal."""
+    def number(value, low, high):
+        return type(value) in (int, float) and low <= value <= high
+
+    def index(value, low, high):
+        return type(value) is int and low <= value < high
+
+    def array(row, size):
+        return isinstance(row, list) and len(row) == size
+
+    def point(row):
+        return array(row, 3) and all(number(value, -1e7, 1e7) for value in row)
+
+    if not array(value, 4) or not number(value[0], 1, 1000) or any(
+            not isinstance(section, list) for section in value[1:]):
+        raise ValueError('Invalid outside-only audio document.')
+    _, rooms, models, emitters = value
+    if not emitters:
+        raise ValueError('An outside-only layout requires at least one emitter.')
+    tags = set()
+    for row in rooms:
+        if (not array(row, 2) or not isinstance(row[0], str)
+                or re.fullmatch(r'T3AcousticRoom_[0-9]{1,10}_[0-9a-f]{16}', row[0]) is None
+                or row[0] in tags or not index(row[1], 1, len(models) + 1)):
+            raise ValueError('Invalid outside-only room placement.')
+        tags.add(row[0])
+    for row in emitters:
+        if (not array(row, 3) or not isinstance(row[0], str)
+                or re.fullmatch(r'T3OutsideAudio_[0-9]{1,10}', row[0]) is None
+                or row[0] in tags or not number(row[1], 0, 1) or (row[2] != [] and (
+                    not array(row[2], 3) or not number(row[2][0], 0, 180)
+                    or not number(row[2][1], row[2][0], 180) or not number(row[2][2], 0, 1)))):
+            raise ValueError('Invalid outside-only emitter settings.')
+        tags.add(row[0])
+    for model in models:
+        if not array(model, 8) or any(not isinstance(table, list) for table in model):
+            raise ValueError('Invalid outside-only acoustic model.')
+        vertices, nodes, outside, portals, planes, children, leaves, faces = model
+        if (not vertices or not all(map(point, vertices)) or not 1 <= len(nodes) <= 32768
+                or not 1 <= len(portals) <= 4095 or portals[0] != []
+                or any(not isinstance(zone, list) or not all(map(point, zone)) for zone in portals)
+                or not 1 <= len(leaves) <= 16384 or not 1 <= len(faces) == len(outside) <= 65536
+                or any(type(flag) is not bool for flag in outside)
+                or len(planes) != len(nodes) or len(children) != len(nodes)
+                or any(not index(plane, 0, 65536) for plane in planes)):
+            raise ValueError('Invalid outside-only model inventory.')
+        incoming = [0] * len(nodes)
+        for node, branch in zip(nodes, children):
+            if (not array(node, 6) or not all(number(axis, -1e7, 1e7) for axis in node[:4])
+                    or not array(branch, 2) or any(not index(child, -len(portals) - 1, len(nodes))
+                                                  for child in node[4:])
+                    or any(not index(leaf, -1, len(leaves)) or (leaf >= 0 and child != -1)
+                           for leaf, child in zip(branch, node[4:]))):
+                raise ValueError('Invalid outside-only BSP node.')
+            for child in node[4:]:
+                if child >= 0:
+                    incoming[child] += 1
+        ready = [node for node, count in enumerate(incoming) if count == 0]
+        visited = 0
+        while ready:
+            visited += 1
+            for child in nodes[ready.pop()][4:]:
+                if child >= 0:
+                    incoming[child] -= 1
+                    if not incoming[child]:
+                        ready.append(child)
+        if visited != len(nodes):
+            raise ValueError('Cyclic outside-only BSP layout.')
+        if any(not isinstance(leaf, list) or any(not index(face, 0, len(faces)) for face in leaf)
+               for leaf in leaves):
+            raise ValueError('Invalid outside-only leaf surface list.')
+        if any(not isinstance(face, list) or not 1 <= len(face) <= 33 or not index(face[0], 0, 65536)
+               or any(not index(vertex, 0, len(vertices)) for vertex in face[1:]) for face in faces):
+            raise ValueError('Invalid outside-only source surface.')
+    return value
 
 
 def minimap_settings(value):
@@ -141,8 +232,9 @@ def session_index(value):
                 or 'hasMinimap' in row and not isinstance(row['hasMinimap'], bool)
                 or not valid_id(row['id']) or row['id'].casefold() in result
                 or not valid_label(row['label']) or row['gameTag'] not in ('T1', 'T2', 'T3', 'Community')
-                or type(row['bytes']) is not int or not 0 <= row['bytes'] <= MAX_TOTAL + 256 * 1024 + MINIMAP_MAX_IMAGE
-                or type(row['fileCount']) is not int or not 0 <= row['fileCount'] <= MAX_PACKAGE_FILES + 2
+                or type(row['bytes']) is not int
+                or not 0 <= row['bytes'] <= MAX_TOTAL + 256 * 1024 + MINIMAP_MAX_IMAGE + OUTSIDE_AUDIO_MAX
+                or type(row['fileCount']) is not int or not 0 <= row['fileCount'] <= MAX_PACKAGE_FILES + 3
                 or not valid_sha(row['contentHash']) or not valid_sha(row['manifestHash'])
                 or type(row['hasObjectives']) is not bool):
             raise ValueError('Invalid map index entry.')

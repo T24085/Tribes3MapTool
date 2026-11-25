@@ -223,20 +223,30 @@ def write_pcm16(raw, path, *, layout=None):
                     converted.writeframesraw(silence)
 
 
-def playback_issue(emitter, clip, *, repeat_tools=False):
+def directional_audio(settings):
+    return (settings['spatial'] and settings.get('cone_inside_degrees', 360) < 360
+            and settings.get('cone_outside_volume') != 1)
+
+
+def playback_issue(emitter, clip, *, repeat_tools=False, directional_tools=False, outside_tools=False):
     settings = emitter['settings']
     if emitter['review'] or not clip or 'file' not in clip:
         return 'The source or clip needs review before playback.'
     if not {'volume', 'spatial', 'looping', 'outside_only', 'use_profile'} <= settings.keys():
         return 'Playback requires explicit gain, spatial, looping, outside, and profile settings.'
-    if settings['outside_only']:
-        return 'Outside-only audio needs a mapped indoor volume.'
+    if settings['outside_only'] and not outside_tools:
+        return 'Outside-only audio needs a complete source room layout and the acoustic playback adapter.'
     if settings['spatial']:
         low, high = settings.get('min_distance_cm'), settings.get('max_distance_cm')
         if low is None or high is None or high <= low:
             return 'Spatial playback needs a valid minimum and maximum distance.'
-        if (settings.get('cone_inside_degrees'), settings.get('cone_outside_degrees')) != (360, 360):
-            return 'Directional audio needs a cone mapping.'
+        if not {'cone_inside_degrees', 'cone_outside_degrees'} <= settings.keys():
+            return 'Spatial playback needs explicit sound cone angles.'
+        if directional_audio(settings):
+            if not {'cone_direction', 'cone_outside_volume'} <= settings.keys():
+                return 'Directional playback needs a source direction and outside gain.'
+            if not directional_tools and not settings['outside_only']:
+                return 'Directional playback requires the updated Community Map Motion editor plugin.'
         if clip['pcm']['channels'] != 1:
             return 'Spatial playback needs a mono WAV.'
     if settings['looping']:
@@ -249,14 +259,15 @@ def playback_issue(emitter, clip, *, repeat_tools=False):
     return None
 
 
-def audio_playback(index, allowed, *, repeat_tools=False):
+def audio_playback(index, allowed, *, repeat_tools=False, directional_tools=False, outside_tools=False):
     if index is None:
         return []
     playable, fixed_assets, total_fixed_size = [], {}, 0
     for emitter in index['emitters']:
         if emitter['source_id'] in allowed:
             clip = index['clips'].get(emitter['settings'].get('clip'))
-            if playback_issue(emitter, clip, repeat_tools=True) is not None:
+            if playback_issue(emitter, clip, repeat_tools=True, directional_tools=directional_tools,
+                              outside_tools=outside_tools) is not None:
                 continue
             schedule = repeat_schedule(emitter['settings'])
             layout = None
@@ -295,7 +306,10 @@ def audio_review(index, placed=()):
         elif 'reason' in clip:
             detail = reasons[clip['reason']]
         elif emitter['source_id'] in placed:
-            detail = 'Mapped to an Unreal ambient sound actor in the saved draft.'
+            if emitter['settings']['outside_only']:
+                detail = 'Mapped to room-aware audio for the private draft playtest.'
+            else:
+                detail = 'Mapped to an Unreal ambient sound actor in the saved draft.'
         else:
             detail = playback_issue(emitter, clip)
             if detail is None:

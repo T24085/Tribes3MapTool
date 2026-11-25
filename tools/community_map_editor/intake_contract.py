@@ -16,7 +16,8 @@ from native_terrain_paint import MAX_PAINT_BYTES, MAX_PAINT_LAYERS, MAX_PAINT_PN
 from sky_intake import MAX_SKIES, MAX_SKY_BYTES, MAX_SKY_SLOTS, SKY_INDEX, SKY_PNG, validate_sky_artwork
 from source_profiles import (ASCEND, ASCEND_ART_VERSIONS, ASCEND_COLLISION_VERSIONS, ASCEND_CONVEX_COLLISION_VERSION,
                              ASCEND_PLACEMENT_ART_VERSION, ASCEND_PRIVATE_MESH_VERSIONS,
-                             BRUSH_PREVIEW_REFERENCE, NAMES, T2, T2_AUDIO_PROFILES_VERSION, T2_AUDIO_VERSIONS,
+                             BRUSH_PREVIEW_REFERENCE, NAMES, T2, T2_ACOUSTIC_COLLISION_VERSION, T2_ACOUSTIC_VERSIONS,
+                             T2_AUDIO_PROFILES_VERSION, T2_AUDIO_VERSIONS,
                              T2_DIF_ANIMATION_VERSION, T2_DIF_LOD_LIGHT_VERSION,
                              T2_DIF_LOD_VERSIONS, T2_DIF_VERSIONS, T2_GENERATOR_SCOPE_VERSION, T2_GENERATOR_SCOPE_VERSIONS,
                              UNREAL_INTAKE_VERSION,
@@ -774,6 +775,10 @@ def load_intake(manifest):
     has_simple_collision = False
     has_convex = False
     has_dif_lods = False
+    acoustic_intake = header["format"] in T2_ACOUSTIC_VERSIONS
+    collision_intake = header["format"] == T2_ACOUSTIC_COLLISION_VERSION
+    has_acoustics = False
+    has_acoustic_collision = False
     for name, digest in inventory.items():
         if not intake_filename(name, header["format"]):
             raise ValueError("Unexpected intake filename.")
@@ -782,6 +787,14 @@ def load_intake(manifest):
 
             geometry, size = load_intake_geometry(manifest.parent, name, digest)
             has_dif_lods |= 'lods' in geometry
+            if 'acoustics' in geometry:
+                if not acoustic_intake or geometry['format'] != 1 or not INTERIOR_FILE.fullmatch(name):
+                    raise ValueError('DIF acoustic geometry requires intake version 49.')
+                has_acoustics = True
+                if 'collision' in geometry['acoustics']:
+                    if not collision_intake:
+                        raise ValueError('DIF acoustic collision requires intake version 50.')
+                    has_acoustic_collision = True
             model_bytes += size
             if model_bytes > MAX_INTAKE_INTERIOR_BYTES:
                 raise ValueError("Oversized intake model geometry.")
@@ -1093,6 +1106,13 @@ def load_intake(manifest):
             raise ValueError("Intake equipment does not match the source objects and power groups.")
     if has_audio:
         audio_receipts = {(item['name'], item['origin'], item['sha256']) for item in header['sources']}
-        validate_audio_index(docs[AUDIO_INDEX], rows, terrain, wave_files, inventory, audio_receipts,
-                             inherited=header['format'] == T2_AUDIO_PROFILES_VERSION)
+        audio = docs[AUDIO_INDEX]
+        inherited = header['format'] == T2_AUDIO_PROFILES_VERSION or (
+            acoustic_intake and isinstance(audio, dict) and audio.get('format') == 2)
+        validate_audio_index(audio, rows, terrain, wave_files, inventory, audio_receipts, inherited=inherited)
+        if acoustic_intake and (not has_acoustics
+                                or not any(row['settings'].get('outside_only') for row in audio['emitters'])):
+            raise ValueError('This intake requires an outside emitter and verified acoustic geometry.')
+        if collision_intake and not has_acoustic_collision:
+            raise ValueError('This intake requires verified DIF acoustic collision.')
     return header, terrain, rows

@@ -30,6 +30,39 @@ end)()({valid=valid,report=report,scope=scope})
 local warn_players=(function()
 @@DRAFT_BOUNDARY_WARNING@@
 end)()({valid=valid,report=report,scope=scope})
+local outside_document=@@DRAFT_OUTSIDE_AUDIO@@
+local outside_audio=(function()
+@@DRAFT_OUTSIDE_AUDIO_RUNTIME@@
+end)()
+local outside_started=false
+local function start_outside_audio(gm)
+ if not outside_document or outside_started then return end
+ outside_started=true
+ local owner=gm:GetWorld():GetAddress()
+ local math_library=asset('/Script/Engine.Default__KismetMathLibrary')
+ local statics=asset('/Script/Engine.Default__GameplayStatics')
+ local listener
+ local function update()
+  scope()
+  if not valid(gm) or gm:GetWorld():GetAddress()~=owner then return end
+  if not listener then
+   listener=outside_audio.bind({valid=valid,find=FindAllOf,name=FName,local_point=function(actor,p)
+    return math_library:InverseTransformLocation(actor:GetTransform(),{X=p[1],Y=p[2],Z=p[3]})
+   end},owner,outside_document)
+   if listener then report('DRAFT_OUTSIDE_AUDIO_READY')end
+  end
+  local camera=statics:GetPlayerCameraManager(gm,0)
+  if listener and valid(camera)then
+   local p=camera:GetCameraLocation()
+   listener({p.X,p.Y,p.Z})
+  end
+  ExecuteInGameThreadWithDelay(50,function()
+   local ok,why=pcall(update)
+   if not ok then report('RUNTIME_ERROR|'..tostring(why))end
+  end)
+ end
+ update()
+end
 local function objective(gm,class,team,marker,isFlag)
  local api=asset('/Script/Engine.Default__GameplayStatics')
  local half=math.rad(marker[4])/2
@@ -71,6 +104,7 @@ local function step()
  if not installed then
   configure_perimeter(gm)
   install(gm)
+  start_outside_audio(gm)
  end
  local status=bootstrap(state)
  local players=FindAllOf('ValPlayerController')or{}

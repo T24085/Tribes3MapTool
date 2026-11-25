@@ -1,5 +1,6 @@
-"""Translate DIF light loops into timed colors and atlas masks."""
+"""Translate DIF animated lights into timed colors and atlas masks."""
 
+from hashlib import sha256
 import math
 import re
 
@@ -7,8 +8,11 @@ import re
 MAX_TRACKS_PER_ATLAS = 8
 MAX_MASK_PIXELS = 8 * 1024 * 1024
 LIGHT_START_PREFIX = "T2 Light Start "
-TRIGGERED_LOOP_FLAGS = (2, 10)
-AMBIENT_LOOP_FLAGS = (3, 11)
+# Low three bits select the animation and bit 3 selects the alarm atlas.
+LIGHT_TYPES = {0: "ramp", 2: "loop", 3: "loop", 4: "flicker", 5: "flicker"}
+AMBIENT_FLAG = 1
+ALARM_FLAG = 8
+TRIGGERED_LIGHT_FLAGS = (0, 2, 4, 8, 10, 12)
 
 
 def looping_atlas_tracks(record):
@@ -21,13 +25,14 @@ def looping_atlas_tracks(record):
     surfaces = {row[0]: row[3:5] for row in record["surfaces"]}
     atlases, warnings = {}, []
     for track_id, (name_offset, start, count, flags, duration) in enumerate(animation["tracks"]):
-        if flags not in TRIGGERED_LOOP_FLAGS + AMBIENT_LOOP_FLAGS:
-            warnings.append(f"Light track {track_id} uses ramp, flicker, or unknown flags ({flags}).")
+        mode = LIGHT_TYPES.get(flags & ~ALARM_FLAG)
+        if mode is None:
+            warnings.append(f"Light track {track_id} uses unknown animation flags ({flags}).")
             continue
-        role = int(bool(flags & 8))
+        role = int(bool(flags & ALARM_FLAG))
         try:
-            start_parameter = trigger_parameter(names, name_offset) if flags in TRIGGERED_LOOP_FLAGS else None
-            frames = loop_frames(animation, start, count, duration, rectangles, surfaces, masks, role)
+            start_parameter = None if flags & AMBIENT_FLAG else trigger_parameter(names, name_offset)
+            frames = light_frames(animation, start, count, duration, rectangles, surfaces, masks, role, mode)
         except ValueError as error:
             warnings.append(f"Light track {track_id}: {error}")
             continue
@@ -36,7 +41,17 @@ def looping_atlas_tracks(record):
             if len(tracks) == MAX_TRACKS_PER_ATLAS:
                 warnings.append(f"Light track {track_id} exceeds the animated tracks supported per atlas.")
                 continue
-            tracks.append([duration, states, start_parameter] if start_parameter else [duration, states])
+            if mode == "loop":
+                tracks.append([duration, states, start_parameter] if start_parameter else [duration, states])
+            elif mode == "ramp":
+                tracks.append([duration, states, start_parameter, mode])
+            else:
+                # The name offset can differ between LODs. Use the encoded name
+                # for a stable stream across each asset's detail levels.
+                name = names[name_offset:name_offset + 129].split(b"\0", 1)[0].lower()
+                identity = name or str(track_id).encode("ascii")
+                seed = int.from_bytes(sha256(identity + bytes([role])).digest()[:4], "little")
+                tracks.append([duration, states, start_parameter, mode, seed])
     return atlases, warnings
 
 
@@ -47,28 +62,32 @@ def trigger_parameter(names, offset):
             name = names[offset:end]
             if re.fullmatch(rb"[!-~](?:[ -~]*[!-~])?", name):
                 return LIGHT_START_PREFIX + name.decode("ascii").lower()
-    raise ValueError("The triggerable loop does not have a valid source light name.")
+    raise ValueError("The triggerable track does not have a valid source light name.")
 
 
-def supported_triggers(atlases):
+def supported_triggers(atlases, *, loops_only=False):
     return {track[2].removeprefix(LIGHT_START_PREFIX)
-            for tracks in atlases.values() for track in tracks if len(track) == 3}
+            for tracks in atlases.values() for track in tracks
+            if len(track) > 2 and track[2] and (not loops_only or len(track) == 3)}
 
 
-def loop_frames(animation, start, count, duration, rectangles, surfaces, masks, role):
+def light_frames(animation, start, count, duration, rectangles, surfaces, masks, role, mode):
     states, data = animation["states"], animation["surface_data"]
     if not (0 <= start < start + count <= len(states) and count <= 64 and 0 < duration <= 86_400_000):
-        raise ValueError("The loop state range or duration is unsupported.")
+        raise ValueError("The animation state range or duration is unsupported.")
+    if mode == "flicker" and count < 2:
+        raise ValueError("Flicker needs a second state to specify its update interval.")
+    last_time = duration - 1 if mode == "loop" else duration
     previous_time, expected_slots, frames = -1, None, {}
     for red, green, blue, time, first, length in states[start:start + count]:
         color = [red, green, blue]
-        if (not previous_time < time < duration or previous_time == -1 and time != 0
+        if (not previous_time < time <= last_time or previous_time == -1 and time != 0
                 or not all(0 <= channel <= 255 for channel in color) or not 0 <= first <= first + length <= len(data)):
-            raise ValueError("The loop has invalid timing, color, or mask bindings.")
+            raise ValueError("The animation has invalid timing, color, or mask bindings.")
         previous_time = time
         bindings = {(surface, slot): offset for surface, offset, slot in data[first:first + length]}
         if expected_slots is not None and bindings.keys() != expected_slots:
-            raise ValueError("The loop changes its set of state slots.")
+            raise ValueError("The animation changes its set of state slots.")
         expected_slots = bindings.keys()
         per_atlas = {}
         for (surface, slot), offset in sorted(bindings.items()):
@@ -79,7 +98,7 @@ def loop_frames(animation, start, count, duration, rectangles, surfaces, masks, 
             rows = per_atlas.setdefault(atlas, {})
             if offset != -1:
                 if surface in rows:
-                    raise ValueError("The loop uses more than one mask on a surface in the same track.")
+                    raise ValueError("The animation uses more than one mask on a surface in the same track.")
                 rows[surface] = [x, y, width, height, masks[offset:offset + width * height].hex()]
         for atlas, rows in per_atlas.items():
             frames.setdefault(atlas, []).append([time, color, list(rows.values())])

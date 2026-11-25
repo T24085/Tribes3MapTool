@@ -112,14 +112,15 @@ def indexed_assets(source, asset_root, extension):
         yield primary, secondary, loose_roots
 
 
-def collect_interiors(rows, source, decoder_file, asset_root):
+def collect_interiors(rows, source, decoder_file, asset_root, *, include_acoustics=False):
     references = {reference for row in rows if (reference := source_reference(row))
                   and reference.startswith('interiorinstance:')}
     if not references:
         return {}, {}, {}
     decoder = load_decoder(decoder_file)
     return collect_geometry(references, source, asset_root, '.dif', 'interior',
-                            lambda raw, name: decode_bytes(raw, name, decoder, include_lighting=True))
+                            lambda raw, name: decode_bytes(raw, name, decoder, include_lighting=True,
+                                                           include_acoustics=include_acoustics))
 
 
 def collect_shapes(rows, source, decoder_folder, asset_root):

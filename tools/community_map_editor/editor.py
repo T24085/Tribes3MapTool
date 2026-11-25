@@ -337,12 +337,48 @@ def request_build(kind='playtest'):
     record_build_rules(payload['map'], request.parent)
     if kind == 'host':
         write_host_equipment(request.parent, equipment)
+    write_outside_audio(payload['map'], request.parent)
     temporary = request.with_suffix('.tmp')
     with temporary.open('x', encoding='utf-8') as stream:
         json.dump(payload, stream)
     temporary.rename(request)
     unreal.log(f'T3_MAP_EDITOR_BUILD_REQUEST|{payload["map"]}')
     unreal.SystemLibrary.quit_editor()
+
+
+def write_outside_audio(draft, directory):
+    from outside_audio import MAX_PAYLOAD, OUTSIDE_TAG, PAYLOAD_FILE, ROOM_TAG, draft_payload, room_tag
+
+    rooms, tracks = {}, set()
+    for actor in ACTORS.get_all_level_actors():
+        for tag in map(str, actor.tags):
+            source = re.fullmatch(rf'{OUTSIDE_TAG}([0-9]+)', tag)
+            if source:
+                source_id = int(source[1])
+                component = actor.get_component_by_class(unreal.AudioComponent)
+                if source_id in tracks or not component or not component.get_editor_property('sound'):
+                    raise ValueError(f'Outside-only emitter {source_id} has a duplicate tag or no sound.')
+                tracks.add(source_id)
+            room = re.fullmatch(rf'{ROOM_TAG}([0-9]+)_[0-9a-f]{{16}}', tag)
+            if room:
+                source_id = int(room[1])
+                component = actor.get_component_by_class(unreal.StaticMeshComponent)
+                mesh = component.get_editor_property('static_mesh') if component else None
+                if source_id in rooms or not mesh or tag != room_tag(source_id, mesh.get_path_name()):
+                    raise ValueError(f'Acoustic room {source_id} has a duplicate tag or a different source mesh.')
+                rooms[source_id] = tag
+    if tracks:
+        library = Path(os.environ['T3_CONVERTER_LIBRARY'])
+        data = json.dumps(draft_payload(library, draft, rooms, tracks), separators=(',', ':'),
+                          allow_nan=False).encode()
+        if len(data) > MAX_PAYLOAD:
+            raise ValueError('The outside-only audio data exceeds the playtest package limit.')
+        destination = directory / PAYLOAD_FILE
+        temporary = destination.with_suffix('.tmp')
+        temporary.write_bytes(data)
+        temporary.replace(destination)
+    else:
+        (directory / PAYLOAD_FILE).unlink(missing_ok=True)
 
 
 def build_playtest():
@@ -371,13 +407,16 @@ def batch_rebuild():
 def open_docked_review():
     from dock_review import review_for_existing_draft
     from draft_audio import placed_audio_ids
+    from mission_lighting import placed_command_ids
 
     if os.environ.get('T3_EDITOR_MAP_REVIEW') != '1':
         return request_review_install()
     library = Path(os.environ['T3_CONVERTER_LIBRARY'])
     match = re.search(rf'/Maps/Community/({IMPORT_DRAFT})/Arena_\1_P\.', world().get_path_name())
     if match and not (library/'DraftReviews'/f'{match[1]}.json').is_file():
-        review_for_existing_draft(library, match[1], placed_audio=placed_audio_ids(ACTORS.get_all_level_actors()))
+        actors = ACTORS.get_all_level_actors()
+        review_for_existing_draft(library, match[1], placed_audio=placed_audio_ids(actors),
+                                  placed_lights=placed_command_ids(actors))
     unreal.SystemLibrary.execute_console_command(world(), 'T3.MapReview')
 
 

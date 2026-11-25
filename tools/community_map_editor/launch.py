@@ -93,10 +93,10 @@ def install_editor_scripts(project, env, *, include_seed=True):
                  'sky_contract.py', 'sky_intake.py', 'draft_sky.py', 'draft_clouds.py', 'draft_precipitation.py',
                  'draft_interiors.py', 'draft_movers.py', 'vengeance_mover_plan.py', 'unreal_legacy_reader.py',
                  'draft_elevators.py', 'vengeance_elevators.py',
-                 'interior_geometry.py', 't1_dts_motion.py', 'interior_lighting.py', 'dif_light_animation.py',
+                 'interior_geometry.py', 'dif_acoustics.py', 't1_dts_motion.py', 'interior_lighting.py', 'dif_light_animation.py',
                  'lighting_preview_unreal.py', 'dts_preview.py', 'dts_preview_unreal.py', 'dts_bake_unreal.py',
                  'model_textures.py', 'draft_model_materials.py', 'mission_equipment.py', 'mission_weather.py',
-                 'mission_audio.py', 'mission_audio_profiles.py', 'draft_audio.py',
+                 'mission_audio.py', 'mission_audio_profiles.py', 'draft_audio.py', 'outside_audio.py', 'mission_lighting.py',
                  'equipment_unreal.py', 'source_library.py', 'draft_showcase.py', 'model_library.py',
                  'contact_sheets_unreal.py', 'conversion_rules.py', 'tribes2_conversion.json', 'profile_exchange.py',
                  'batch_rebuild.py', 'batch_rebuild_unreal.py', 'batch_stage.py', 'batch_stage_unreal.py',
@@ -157,7 +157,7 @@ def lua(value):
     return json.dumps(value, separators=(',', ':')).replace('[', '{').replace(']', '}')
 
 
-def package_preview(parent, cooked, target, ident, markers, *, host_export=False):
+def package_preview(parent, cooked, target, ident, markers, *, host_export=False, outside_audio=None):
     target.mkdir()
     manifest = {'files': []} if host_export else read_json(parent/'package-manifest.json')
     records = {}
@@ -228,11 +228,15 @@ def package_preview(parent, cooked, target, ident, markers, *, host_export=False
 
     folder = 'lua/'+ident+'/'
     offline = (TOOL/'offline.lua').read_text(encoding='utf-8')
+    acoustic_runtime = ((REPO/'runtime-fixes/mission_outside_audio.lua').read_text(encoding='utf-8')
+                        if outside_audio else 'return nil')
     for token, value in {'DRAFT_WORLD':json.dumps(level+'.'+stem+':'),
                          'DRAFT_STARTS':lua([markers['T3Spawn1'],markers['T3Spawn2']]),
                          'DRAFT_FLAGS':lua([markers['T3Flag1'][0],markers['T3Flag2'][0]]),
                          'DRAFT_COLLISION_FILTER':(REPO/'runtime-fixes/mission_perimeter_collision.lua').read_text(encoding='utf-8'),
                          'DRAFT_FLAG_LIMIT':(REPO/'runtime-fixes/mission_flag_limit.lua').read_text(encoding='utf-8'),
+                         'DRAFT_OUTSIDE_AUDIO':lua(outside_audio or False),
+                         'DRAFT_OUTSIDE_AUDIO_RUNTIME':acoustic_runtime,
                          'DRAFT_BOUNDARY_WARNING':(REPO/'runtime-fixes/mission_boundary_warning.lua').read_text(encoding='utf-8')}.items():
         offline = offline.replace('@@'+token+'@@', value)
     add(folder+'offline.lua', contents=offline.encode())
@@ -643,7 +647,11 @@ def run(config, *, smoke=False, authoring_smoke=False):
         if not preview:
             raise ValueError('This workspace has no offline playtest configuration.')
         cooked = cook(project, engine, level, attempt, env)
-        package = package_preview(parent, cooked, attempt/'preview', ident, markers)
+        from tools.community_map_editor.outside_audio import MAX_PAYLOAD, PAYLOAD_FILE
+
+        acoustic_path = attempt / PAYLOAD_FILE
+        outside_audio = read_json(acoustic_path, MAX_PAYLOAD) if acoustic_path.is_file() else None
+        package = package_preview(parent, cooked, attempt/'preview', ident, markers, outside_audio=outside_audio)
         print('Opening the private TRIBES 3 playtest. Steam must be running.', flush=True)
         args = [str(package/'python/python.exe'), '-B', '-u', str(package/'playtest.py'),
                 'offline', '--authoring-preview', '--map', ident, '--game-dir', str(game_source),

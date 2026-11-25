@@ -52,6 +52,10 @@
       "label": "Terrain file",
       "type": "text"
     },
+    "statement": {
+      "label": "Source statement",
+      "type": "text"
+    },
     "squaresize": {
       "label": "Terrain grid spacing",
       "type": "number",
@@ -259,6 +263,12 @@
         "flightceiling",
         "flightceilingrange"
       ]
+    },
+    "interior-light-command": {
+      "label": "Interior light command",
+      "aliases": ["missionlightcommand"],
+      "feature": "lighting",
+      "fields": ["statement"]
     },
     "interior": {
       "label": "Interior",

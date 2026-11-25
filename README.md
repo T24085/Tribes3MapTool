@@ -18,6 +18,12 @@ Version 48 can also resolve inherited sound settings from literal Tribes 2
 audio profiles in loose scripts and VL2 files. The private intake records
 which profiles supplied the clip and playback settings. [Version 48 audio schema](tools/community_map_editor/intake-v48.audio.schema.json)
 
+The editor can apply literal Tribes 2 startup light commands to their
+named interiors. Ramp and flicker tracks use the original color masks.
+Version 50 intakes also retain the collision and room data used by
+outside-only audio. Connected playback requires compatible Direct Host
+and Starter builds. See the [editor guide](tools/community_map_editor/README.md).
+
 For the Windows ZIP, extract the archive and double-click **Start TRIBES 3 Map Editor.bat**. The launcher creates or reopens the workspace under `%LOCALAPPDATA%\Tribes3MapTool`.
 
 Install Python 3.13 and Unreal Engine 5.3, then run these commands from this checkout with your own workspace parent.

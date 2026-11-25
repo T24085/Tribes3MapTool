@@ -27,6 +27,8 @@ def validate_geometry(data):
     fields = {'format', 'source', 'materials', 'vertices_m', 'triangles'}
     if data['format'] == 1 and 'lods' in data:
         fields.add('lods')
+    if data['format'] == 1 and 'acoustics' in data:
+        fields.add('acoustics')
     if data['format'] == 5 or data['format'] >= 6 and 'collision' in data:
         fields.add('collision')
     if native:
@@ -84,6 +86,10 @@ def validate_geometry(data):
             or not isinstance(triangles, list) or not 1 <= len(triangles) <= 250_000):
         raise ValueError('Invalid interior mesh dimensions or materials.')
     validate_mesh_triangles(triangles, len(vertices), len(materials))
+    if 'acoustics' in data:
+        from dif_acoustics import validate_acoustics
+
+        validate_acoustics(data['acoustics'], len(triangles), len(vertices))
     if 'lods' in data:
         validate_dif_lods(data['lods'], len(materials))
     if 'collision' in data:

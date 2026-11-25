@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tribes 2 DIF acoustic data embedded as acoustics in primary interior geometry",
+  "type": "object",
+  "required": [
+    "nodes",
+    "outside_surfaces",
+    "portal_centers_m",
+    "surface_runs"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node"
+      },
+      "minItems": 1,
+      "maxItems": 32768
+    },
+    "outside_surfaces": {
+      "type": "array",
+      "items": {
+        "type": "boolean"
+      },
+      "minItems": 1,
+      "maxItems": 65536
+    },
+    "portal_centers_m": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/point"
+        },
+        "minItems": 0,
+        "maxItems": 8192
+      },
+      "minItems": 1,
+      "maxItems": 4095,
+      "prefixItems": [
+        {
+          "const": []
+        }
+      ]
+    },
+    "surface_runs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/surface_run"
+      },
+      "minItems": 1,
+      "maxItems": 65536
+    }
+  },
+  "$defs": {
+    "coordinate": {
+      "type": "number",
+      "minimum": -10000000,
+      "maximum": 10000000
+    },
+    "child": {
+      "type": "integer",
+      "minimum": -4096,
+      "maximum": 32767
+    },
+    "point": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/coordinate"
+        },
+        {
+          "$ref": "#/$defs/coordinate"
+        },
+        {
+          "$ref": "#/$defs/coordinate"
+        }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "node": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/coordinate"
+        },
+        {
+          "$ref": "#/$defs/coordinate"
+        },
+        {
+          "$ref": "#/$defs/coordinate"
+        },
+        {
+          "$ref": "#/$defs/coordinate"
+        },
+        {
+          "$ref": "#/$defs/child"
+        },
+        {
+          "$ref": "#/$defs/child"
+        }
+      ],
+      "items": false,
+      "minItems": 6,
+      "maxItems": 6
+    },
+    "surface_run": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "integer",
+          "minimum": 1
+        }
+      ],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    }
+  }
+}

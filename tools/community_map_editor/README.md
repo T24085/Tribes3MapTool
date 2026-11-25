@@ -972,17 +972,30 @@ configured decoder.
 Reimport the original mission to create a [version 45 intake](intake-v45.schema.json)
 with [animated mask placements](intake-v45.lighting.schema.json). The
 editor uses the source rectangles, intensity masks, and keyframe colors
-to play ambient loops on the authored detail levels. Alarm tracks appear
-only in the alarm state. Older intakes still open with their baked lighting.
+to play ambient loops and flickers on the authored detail levels. Alarm
+tracks appear only in the alarm state. Older intakes still open with their
+baked lighting. Flicker updates select a weighted state at each authored
+interval, with a 67 ms minimum update interval. Each actor and track uses
+a stable pseudorandom stream so surfaces of one light stay in sync.
 
-Named triggerable loops use a scalar on each affected material instance.
+Named triggerable loops, ramps and flickers use a scalar on each affected
+material instance. A ramp holds its final color and mask after it finishes.
 The conversion review lists the supported names under **Source interior
 lighting**. The scalar name is `T2 Light Start ` followed by the lower-case
 source name. It defaults to `-1` (off). Map logic can set it to the current
-game time in seconds to start the loop, then set it back to `-1` to turn
+game time in seconds to start the light, then set it back to `-1` to turn
 it off. Set the scalar on all affected slots of that interior instance.
 For inspection, set the start to `0` and use `T2 Light Preview Time` as
-elapsed seconds. Source script wiring, flicker, and ramps remain in review.
+elapsed seconds.
+
+The Tribes 2 reader also preserves literal light calls after the mission's
+object section. Calls such as `Bunker.activateLight("Room Alarm");` resolve
+only when the receiver is a unique, earlier interior with that named
+track. The editor stores the resulting startup state on that placement's
+materials. This keeps identical buildings independent. A start followed
+by a stop leaves the first key displayed, as in Tribes 2. Calls inside
+functions, conditional calls, computed names, and unresolved targets
+remain in Object Review. Shared layouts omit the private source commands.
 
 The imported material multiplies the source base color by the baked
 color atlas on a second UV channel. The draft starts in its normal
@@ -1126,8 +1139,37 @@ The private intake includes the used declarations and the digest of
 each source script. Computed expressions, conflicting references and
 unresolved parents stay in Object Review. [Manifest schema](intake-v48.schema.json) · [Audio index schema](intake-v48.audio.schema.json)
 
-Outside-only emitters still need an indoor volume mapping. Shared layouts
-omit the sound index, WAVs, and source audio references.
+Version 49 preserves the primary detail's room tree, exterior-visible
+surface flags, exterior portal centers and triangle-to-surface mapping
+when an outside-only emitter and decodable DIF room data are present.
+The acoustic data stays inside the private interior geometry files.
+Room nodes store an oriented plane followed by the front and back
+references. Nonnegative references index the room tree, `-1` is solid,
+and `-2 - room` identifies an empty leaf. Room zero is exterior.
+Portal centers use source-local metres. Each surface run gives the
+source surface index, the first primary triangle and the triangle count.
+An unresolved DIF still appears in Object Review.
+The v47 and v48 audio index schemas still apply according to the audio
+index's own format. [Manifest schema](intake-v49.schema.json) ·
+[Embedded acoustic schema](intake-v49.dif-acoustics.schema.json)
+
+Version 50 adds original solid-leaf identities, split-plane IDs, and
+collision fan boundaries where the reader provides them. Plain geometry
+can still carry the version 49 room data. The collision records identify
+whether the floor trace reached a source surface or a solid leaf with no
+matching face. [Manifest schema](intake-v50.schema.json) ·
+[Embedded acoustic schema](intake-v50.dif-acoustics.schema.json)
+
+The private draft preview can use the room data when every imported
+DIF instance retains its source collision. It uses the local camera and
+applies the resulting gain before starting each outside-only sound.
+Direct Host staging includes the saved room and emitter bindings in the
+map's private inventory. Connected playback requires the paired Host and
+Starter builds that support this layout. An older Starter can still
+download the map with its previous manifest format.
+
+Shared layouts omit the private interior geometry, sound index, WAVs,
+and source audio references.
 
 When one authored sky resolves, the converter places up to three editable
 cloud layers from the DML cloud slots. It also accepts packs that omit the

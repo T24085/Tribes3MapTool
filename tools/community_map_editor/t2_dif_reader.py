@@ -8,20 +8,28 @@ from pathlib import Path
 import sys
 from tempfile import NamedTemporaryFile
 
+from dif_acoustics import decode_acoustics
 from intake_contract import bounded, finite
 from interior_geometry import MAX_GEOMETRY_BYTES, validate_geometry
 
 
-def decode_geometry(dif, source, surface_ranges=None):
+def decode_geometry(dif, source, surface_ranges=None, *, include_acoustics=False):
     if dif.difVersion != 44 or not dif.interiors:
         raise ValueError('Expected a Tribes 2 DIF with a primary interior.')
     primary, *secondary = dif.interiors
 
     def read_level(interior):
-        ranges = [] if surface_ranges is not None else None
+        acoustic_detail = include_acoustics and interior is primary
+        ranges = [] if surface_ranges is not None or acoustic_detail else None
         mesh = interior_mesh(interior, ranges)
         if surface_ranges is not None:
             surface_ranges.append(ranges)
+        if acoustic_detail:
+            try:
+                mesh['acoustics'] = decode_acoustics(interior, ranges, len(mesh['triangles']))
+            except (AttributeError, TypeError, ValueError):
+                # Some DIF readers omit room data. Keep the renderable interior.
+                pass
         return mesh
 
     geometry = {'format': 1, 'source': source, **read_level(primary)}
@@ -114,7 +122,7 @@ def load_decoder(decoder):
         raise ValueError(f'The installed DIF decoder could not load: {error}') from error
 
 
-def decode_bytes(raw, name, decoder, *, include_lighting=False):
+def decode_bytes(raw, name, decoder, *, include_lighting=False, include_acoustics=False):
     if not name.casefold().endswith('.dif') or raw[:4] != b'\x2c\0\0\0':
         raise ValueError('Expected a version 44 Tribes 2 DIF.')
     read, decoder_hash = decoder
@@ -123,7 +131,7 @@ def decode_bytes(raw, name, decoder, *, include_lighting=False):
         source = {'name': name, 'sha256': hashlib.sha256(raw).hexdigest(),
                   'decoder_sha256': decoder_hash, 'dif_version': 44, 'lod': 0}
         ranges = [] if include_lighting else None
-        geometry = decode_geometry(dif, source, ranges)
+        geometry = decode_geometry(dif, source, ranges, include_acoustics=include_acoustics)
         if not include_lighting:
             return geometry
         return geometry, level_lighting(dif.interiors, source['sha256'], ranges)

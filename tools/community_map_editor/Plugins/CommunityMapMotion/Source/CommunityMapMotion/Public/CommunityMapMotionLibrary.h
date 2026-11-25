@@ -92,4 +92,11 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Community Map Motion")
     static bool ConfigureAmbientMetaSound(UMetaSoundSource* Source, USoundWave* Wave, int32 RepeatCount,
         float MinGapSeconds, float MaxGapSeconds);
+
+    UFUNCTION(BlueprintCallable, Category = "Community Map Motion")
+    static UClass* BuildDirectionalAmbientClass(const FString& PackageName);
+
+    UFUNCTION(BlueprintCallable, Category = "Community Map Motion")
+    static bool ConfigureDirectionalAmbient(AActor* Emitter, double InnerAngle, double OuterAngle,
+        double InnerGain, double OuterGain);
 };

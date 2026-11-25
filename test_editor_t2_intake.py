@@ -206,7 +206,7 @@ class IntakeTests(unittest.TestCase):
         document = object_review_document("DraftT2001", header, terrain, rows, catalog, {}, audio=index)
         by_name = {entry["object"]: entry for entry in document["objects"]}
         self.assertEqual(by_name["PrivateBrook"]["status"], "Audio retained")
-        self.assertIn("indoor volume", by_name["PrivateBrook"]["reason"])
+        self.assertIn("source room layout", by_name["PrivateBrook"]["reason"])
         self.assertIn("WAV was missing", by_name["Missing"]["reason"])
         self.assertIn("Community Map Motion", by_name["Finite"]["reason"])
         self.assertIn("delay bounds", by_name["Incomplete"]["reason"])
@@ -240,6 +240,18 @@ class IntakeTests(unittest.TestCase):
         self.assertIn("draft PCM budget", audio_review(long_index)[4])
         self.assertEqual(len(audio_playback(long_index, {1, 2, 3, 4}, repeat_tools=True)), 4)
         self.assertEqual(audio_playback(index, {main["source_id"]}), [])
+        directional = {**main, "settings": {**main["settings"], "outside_only": False}}
+        direction_only = {**index, "emitters": [directional]}
+        self.assertIn("updated Community Map Motion", audio_review(direction_only)[main["source_id"]])
+        self.assertEqual(audio_playback(direction_only, allowed, repeat_tools=True), [])
+        self.assertEqual(audio_playback(direction_only, allowed, directional_tools=True), [])
+        self.assertEqual(audio_playback(direction_only, allowed, repeat_tools=True, directional_tools=True),
+                         [(directional, alias, None)])
+        directionless = {**directional, "settings": dict(directional["settings"])}
+        directionless["settings"].pop("cone_direction")
+        self.assertIn("source direction and outside gain",
+                      audio_review({**index, "emitters": [directionless]})[main["source_id"]])
+        self.assertEqual(audio_playback(index, {main["source_id"]}, repeat_tools=True, directional_tools=True), [])
         draft = object_review_document("DraftT2001", header, terrain, rows, catalog, {}, audio=index,
                                        placed_audio={planned[0][0]["source_id"]})
         self.assertEqual(next(row for row in draft["objects"] if row["object"] == "Alias")["status"], "Mapped audio")
@@ -914,10 +926,11 @@ class IntakeTests(unittest.TestCase):
         with zipfile.ZipFile(assets_pack, "w") as archive:
             archive.writestr("interiors/Base.dif", b"fixture")
 
-        def decode(raw, name, decoder, *, include_lighting):
+        def decode(raw, name, decoder, *, include_lighting, include_acoustics):
             self.assertEqual(raw, b"fixture")
             self.assertEqual(decoder, "fixture reader")
             self.assertTrue(include_lighting)
+            self.assertFalse(include_acoustics)
             return {
                 "format": 1, "source": {"name": name, "sha256": "a" * 64, "decoder_sha256": "b" * 64,
                                         "dif_version": 44, "lod": 0},
@@ -945,6 +958,73 @@ class IntakeTests(unittest.TestCase):
         (manifest.parent / "interior-0001.json").write_bytes(b"bad")
         with self.assertRaisesRegex(ValueError, "checksum mismatch"):
             load_intake(manifest)
+
+    def test_outside_audio_can_carry_acoustic_geometry_in_a_private_intake(self):
+        from test_t2_dif_geometry import point, room_fields
+
+        self.add_mission_area('''
+            new AudioEmitter(Exterior) {
+                position="0 0 0"; fileName="fx/ambient.wav"; outsideAmbient="1";
+                isLooping="1"; is3D="0"; useProfileDescription="0"; volume=".4";
+            };
+        ''')
+        (self.folder / "base.dif").write_bytes(b"\x2c\0\0\0fixture")
+        surface = Record(windingStart=0, windingCount=3, textureIndex=0, texGenIndex=0,
+                         planeIndex=0, planeFlipped=False, surfaceFlags=0)
+        mesh = Record(
+            points=[point(0, 0, 0), point(1, 0, 0), point(0, 1, 0)], materialList=["floor"],
+            surfaces=[surface], windings=[0, 1, 2, 0, 1, 2, 0],
+            planes=[Record(normalIndex=0, planeDistance=0), Record(normalIndex=1, planeDistance=-2)],
+            normals=[point(0, 0, 1), point(1, 0, 0)],
+            texGenEQs=[Record(planeX=point(1, 0, 0), planeY=point(0, 1, 0))],
+            **room_fields(),
+        )
+        decoder = (lambda _raw: Record(difVersion=44, interiors=[mesh]), "b" * 64)
+        with patch("mission_interiors.load_decoder", return_value=decoder):
+            manifest = convert(self.mission, self.library, dif_decoder=self.folder / "decoder.py")
+        header, _, _ = load_intake(manifest)
+        self.assertEqual(header["format"], 49)
+        self.assertEqual(header["reader"], "t2-mission-v49.0")
+        model_name, = header["interiors"].values()
+        geometry, _ = load_intake_geometry(manifest.parent, model_name, header["files"][model_name])
+        self.assertEqual(geometry["acoustics"]["outside_surfaces"], [False])
+        self.assertEqual(geometry["acoustics"]["portal_centers_m"], [[], [[1/3, 1/3, 0]]])
+        shared = export_public_layout(manifest, self.folder / "shared.zip")
+        with zipfile.ZipFile(shared) as archive:
+            self.assertNotIn(model_name, archive.namelist())
+            self.assertNotIn(AUDIO_INDEX, archive.namelist())
+        header.update(format=47, reader="t2-mission-v47.0")
+        manifest.write_text(json.dumps(header), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "DIF acoustic geometry requires intake version 49"):
+            load_intake(manifest)
+
+        mesh.bspNodes[0].backIndex = 0xc000
+        mesh.bspNodes[0].isBackSolid = True
+        surface.fanMask = 7
+        mesh.bspSolidLeaves = [Record(surfaceStart=0, surfaceCount=2)]
+        mesh.solidLeafSurfaces = [0x80000000, 0]
+        with patch("mission_interiors.load_decoder", return_value=decoder):
+            collision_manifest = convert(self.mission, self.library, dif_decoder=self.folder / "decoder.py")
+        newer_header, _, rows = load_intake(collision_manifest)
+        self.assertEqual(newer_header["format"], 50)
+        model_name, = newer_header["interiors"].values()
+        geometry, _ = load_intake_geometry(collision_manifest.parent, model_name, newer_header["files"][model_name])
+        self.assertEqual(geometry["acoustics"]["collision"], {
+            "node_planes": [0x8001], "solid_children": [[-1, 0]],
+            "leaves": [[0]], "faces": [[0, 0, 1, 2]],
+        })
+        from outside_audio import draft_payload, room_tag
+
+        record_draft(self.library, "DraftT2001", collision_manifest)
+        ids = {row["name"]: row["id"] for row in rows}
+        tag = room_tag(ids["I"], "/Game/Test/Sample.Sample")
+        data = draft_payload(self.library, "DraftT2001", {ids["I"]: tag}, {ids["Exterior"]})
+        self.assertEqual(data[1], [[tag, 1]])
+        self.assertEqual(data[3], [[f"T3OutsideAudio_{ids['Exterior']}", .4, []]])
+        newer_header.update(format=49, reader="t2-mission-v49.0")
+        collision_manifest.write_text(json.dumps(newer_header), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "DIF acoustic collision requires intake version 50"):
+            load_intake(collision_manifest)
 
     def test_interior_lighting_round_trip_preserves_faces_and_both_states(self):
         from PIL import Image
@@ -1121,7 +1201,7 @@ class IntakeTests(unittest.TestCase):
             "surfaces": [[2, 0, 1, 0, 0, [0, 1, .25, .25, 0, 0]]],
             "has_alarm": True, "animated_lights": 4, "source_sha256": "0" * 64, "review": [],
             "animation": {
-                "tracks": [[5, 0, 2, 2, 700], [5, 0, 2, 10, 700], [6, 0, 2, 10, 700], [0, 0, 2, 5, 700]],
+                "tracks": [[5, 0, 2, 2, 700], [5, 0, 2, 10, 700], [6, 0, 2, 10, 700], [0, 0, 2, 7, 700]],
                 "names_hex": b"idle\0Room Alarm\0".hex(),
                 "states": [[255, 0, 0, 0, 0, 1], [0, 0, 0, 350, 1, 1]],
                 "surface_data": [[2, 0, 7], [2, -1, 7]],
@@ -1136,7 +1216,7 @@ class IntakeTests(unittest.TestCase):
         lighting = model_lighting({filename: record, f"{filename}#1": secondary}, filename, geometry)
         self.assertEqual(len(lighting["animation_warnings"]), 2)
         self.assertIn("valid source light name", lighting["animation_warnings"][0])
-        self.assertIn("flicker", lighting["animation_warnings"][1])
+        self.assertIn("unknown animation flags", lighting["animation_warnings"][1])
         _, _, _, normal, alarm, _ = lighting["surfaces"][0]
         self.assertNotEqual(normal, alarm)
         self.assertEqual(lighting["lod_surfaces"][1][0][4], alarm)
@@ -1147,6 +1227,88 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual(lighting_summary(record)["triggerable_light_loops"], ["room alarm"])
         self.assertEqual(lighting_coverage({filename: record, f"{filename}#1": secondary})[filename]
                          ["triggerable_light_loops"], ["room alarm"])
+
+    def test_dif_ramp_and_flicker_preserve_modes_masks_and_alarm_binding(self):
+        from dif_light_animation import looping_atlas_tracks, supported_triggers
+
+        def record(prefix=b""):
+            names = prefix + b"Ramp\0Flicker\0"
+            return {
+                "surfaces": [[2, 0, 1, 0, 1, [0, 1, .25, .25, 0, 0]]],
+                "animation": {
+                    "tracks": [[len(prefix), 0, 2, 0, 1000],
+                               [len(prefix) + 5, 2, 2, 5, 1000],
+                               [len(prefix) + 5, 2, 2, 12, 1000],
+                               [len(prefix) + 5, 2, 1, 4, 1000]],
+                    "names_hex": names.hex(),
+                    "states": [[0, 0, 0, 0, 0, 1], [255, 0, 0, 1000, 1, 1],
+                               [10, 20, 30, 0, 0, 1], [90, 100, 110, 200, 1, 1]],
+                    "surface_data": [[2, 0, 7], [2, 2, 7]],
+                    "surface_rects": [[2, 1, 2, 2, 1, 7, 1]],
+                    "state_masks_hex": "10fffe20",
+                },
+            }
+
+        tracks, warnings = looping_atlas_tracks(record())
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("second state", warnings[0])
+        ramp, ambient = tracks[0, 0]
+        alarm, = tracks[1, 1]
+        self.assertEqual(ramp, [1000, [[0, [0, 0, 0], [[1, 2, 2, 1, "10ff"]]],
+                                       [1000, [255, 0, 0], [[1, 2, 2, 1, "fe20"]]]],
+                                "T2 Light Start ramp", "ramp"])
+        self.assertEqual(ambient[:4], [1000, [[0, [10, 20, 30], [[1, 2, 2, 1, "10ff"]]],
+                                              [200, [90, 100, 110], [[1, 2, 2, 1, "fe20"]]]],
+                                       None, "flicker"])
+        self.assertEqual(alarm[2:4], ["T2 Light Start flicker", "flicker"])
+        self.assertNotEqual(alarm[4], ambient[4])
+        self.assertEqual(looping_atlas_tracks(record(b"padding\0"))[0], tracks)
+        self.assertEqual(supported_triggers(tracks), {"ramp", "flicker"})
+
+    def test_mission_light_startup_commands_resolve_once_and_stay_private(self):
+        from mission_lighting import COMMAND_CLASS, startup_bindings
+
+        raw = self.mission.read_text().replace(
+            'new Item(Rabbit)', 'new InteriorInstance(Room) {interiorFile="base.dif";position="0 0 0";};'
+            'new InteriorInstance(RoomTwin) {interiorFile="base.dif";position="2 0 0";};'
+            'new InteriorInstance(Duplicate) {interiorFile="base.dif";position="2 0 0";};'
+            'new SimGroup(TeamX) {new InteriorInstance(Duplicate) '
+            '{interiorFile="base.dif";position="2 0 0";};};'
+            'new Item(Rabbit)')
+        self.mission.write_text(raw + """
+            Room.ActivateLight("Bunker Ramp");
+            function later() { RoomTwin.activateLight("Bunker Ramp"); }
+            Room.activateLight("Bunker Reset");
+            Room.deactivateLight("BUNKER RESET");
+            Room.deactivateLight("Never activated");
+            RoomTwin.activateLight(%unknown);
+            if (%switch) RoomTwin.activateLight("Bunker Ramp");
+            Duplicate.activateLight("Bunker Ramp");
+            Room.activateLight("Missing Name");
+        """)
+        manifest = convert(self.mission, self.library)
+        header, terrain, rows = load_intake(manifest)
+        room = next(row["id"] for row in rows if row["name"] == "Room")
+        twin = next(row["id"] for row in rows if row["name"] == "RoomTwin")
+        known = {row["id"]: ("bunker ramp", "bunker reset", "never activated")
+                 for row in rows if row["source_class"] == "InteriorInstance"}
+        commands = [row for row in rows if row["source_class"] == COMMAND_CLASS]
+        defaults, applied = startup_bindings(rows, known)
+        self.assertEqual(defaults, {room: {"bunker ramp": 0.0, "bunker reset": -2.0}})
+        # The function body is retained as a command for review but does not execute.
+        self.assertEqual(applied, {room: [commands[i]["id"] for i in (0, 2, 3, 4)]})
+        self.assertNotIn(twin, defaults)
+        self.assertEqual(len(commands), 9)
+        review = object_review_document("DraftT2001", header, terrain, rows, load_catalog(), {},
+                                        placed_lights=applied[room])
+        statuses = {row["id"]: (row["status"], row["review"]) for row in review["objects"]}
+        self.assertEqual(statuses[str(commands[0]["id"])], ("Mapped light command", False))
+        self.assertEqual(statuses[str(commands[-1]["id"])], ("Source light review", True))
+        public = self.folder / "Public.zip"
+        export_public_layout(manifest, public)
+        with zipfile.ZipFile(public) as archive:
+            for name in archive.namelist():
+                self.assertNotIn(b"bunker ramp", archive.read(name).lower())
 
     def test_duplicate_archive_interior_stays_in_review(self):
         source = self.folder / "Assets.vl2"

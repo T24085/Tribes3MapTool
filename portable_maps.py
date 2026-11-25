@@ -7,7 +7,7 @@ import re
 from community_maps import BY_ID, LEGACY_MAPS, MAX_MAPS, declared_definitions, declared_shared_content, valid_id, valid_label
 
 
-from map_sync_contract import minimap_settings
+from map_sync_contract import OUTSIDE_AUDIO_FILE, minimap_settings
 from verified_file_cache import MAX_MERGED_HOST_FILES, MAX_PACKAGE_MANIFEST_BYTES
 
 
@@ -187,7 +187,7 @@ def merge_map_manifests(root, manifest):
         if group.casefold() not in present_content:
             raise ValueError(f'Shared map assets are missing: {group}')
     for folder in folders:
-        for filename in ('objectives.lua', 'bot-approaches.json'):
+        for filename in ('objectives.lua', 'bot-approaches.json', OUTSIDE_AUDIO_FILE):
             path = folder / filename
             if ((path.exists() or path.is_symlink()) and
                     (path.is_symlink() or path.is_junction() or not path.is_file()

@@ -279,7 +279,7 @@ def terrain_art_material(editor, ident, slot, folder, filename, digest):
 
 
 def place_static_objects(actors, planned, meshes, material_overrides=None, lighting_links=None, native_modes=None,
-                         mover_tracks=None, draft=None, triggers=None):
+                         mover_tracks=None, draft=None, triggers=None, acoustic_rooms=(), light_commands=None):
     material_overrides = material_overrides or {}
     mover_tracks = mover_tracks or {}
     for row, path, location, rotation, scale in planned:
@@ -325,6 +325,14 @@ def place_static_objects(actors, planned, meshes, material_overrides=None, light
             from equipment_unreal import mark_interior_lighting
 
             mark_interior_lighting(actor, *lighting_links[row['id']])
+        if row['id'] in acoustic_rooms:
+            from outside_audio import room_tag
+
+            actor.tags = list(actor.tags) + [unreal.Name(room_tag(row["id"], meshes[path].get_path_name()))]
+        if light_commands and row["id"] in light_commands:
+            from mission_lighting import BINDING_TAG
+
+            actor.tags = list(actor.tags) + [unreal.Name(f"{BINDING_TAG}{ident}") for ident in light_commands[row["id"]]]
         actor.set_actor_label(row["name"] or f"{row['source_class']} {row['id']}")
         actor.set_folder_path("TRIBES Import/Moving brushes" if motion else "TRIBES Import/Mapped meshes")
         if motion:
@@ -669,9 +677,20 @@ class DraftImport:
         from draft_interiors import asset_mesh
         from draft_model_materials import generate_overrides
 
+        from interior_lighting import lighting_coverage
+        from mission_lighting import COMMAND_CLASS, startup_bindings
+
+        available = {}
+        if any(row["source_class"] == COMMAND_CLASS and row["status"] != "excluded" for row in self.rows):
+            coverage = lighting_coverage(self.lighting_index)
+            for row, path, *_ in self.planned:
+                if path in self.generated:
+                    source = self.generated_models[source_reference(row)][0]
+                    available[row["id"]] = coverage.get(source, {}).get("triggerable_lights", ())
+        startup, self.light_commands = startup_bindings(self.rows, available)
         self.material_overrides = generate_overrides(self.folder, self.header["files"], self.generated_models,
                                                      self.lighting_index, moving_references=self.moving_references,
-                                                     placements=self.planned)
+                                                     placements=self.planned, startup_lights=startup)
         for path, (geometry, digest, lighting, texture_sizes, reference) in self.generated.items():
             surfaces = (self.material_overrides.get(reference)
                         if geometry["format"] in (VENGEANCE_BSP, VENGEANCE_STATIC_MESH) else None)
@@ -799,9 +818,22 @@ class DraftImport:
         native_modes = {path: (geometry["render"], bool(geometry["collision"]["triangles"]
                                                        or geometry["collision"].get("simple")), geometry["format"])
                         for path, (geometry, *_rest) in self.generated.items() if "render" in geometry}
+        audio = load_mission_audio(self.manifest, self.header["files"])
+        bridge = getattr(unreal, "CommunityMapMotionLibrary", None)
+        interior_ids = {row["id"] for row in rows if row["source_class"].casefold() == "interiorinstance"
+                        and row["status"] != "excluded"}
+        acoustic_rooms = {row["id"] for row, path, *_ in planned
+                          if row["id"] in interior_ids and path in self.generated
+                          and "collision" in self.generated[path][0].get("acoustics", {})}
+        planned_audio = audio_playback(audio, {row["id"] for row in rows if row["status"] != "excluded"},
+                                       repeat_tools=hasattr(bridge, "configure_ambient_repeat"),
+                                       directional_tools=hasattr(bridge, "configure_directional_ambient"),
+                                       outside_tools=self.library is not None and acoustic_rooms == interior_ids)
+        if not any(row["settings"]["outside_only"] for row, _, _ in planned_audio):
+            acoustic_rooms = set()
         triggers = {}
         place_static_objects(editor.ACTORS, planned, meshes, material_overrides, lighting, native_modes,
-                             self.mover_tracks, self.ident, triggers)
+                             self.mover_tracks, self.ident, triggers, acoustic_rooms, getattr(self, "light_commands", None))
         if self.lifts:
             from draft_elevators import place_elevators
 
@@ -833,10 +865,6 @@ class DraftImport:
             verify_walls(editor.world(), editor.ACTORS.get_all_level_actors(), placed_markers)
         if flag_limit is not None:
             place_flag_bounds(editor.ACTORS, flag_limit)
-        audio = load_mission_audio(self.manifest, self.header["files"])
-        bridge = getattr(unreal, "CommunityMapMotionLibrary", None)
-        planned_audio = audio_playback(audio, {row["id"] for row in rows if row["status"] != "excluded"},
-                                       repeat_tools=hasattr(bridge, "configure_ambient_repeat"))
         if planned_audio:
             from draft_audio import place_audio
 
@@ -876,6 +904,7 @@ class DraftImport:
     def save(self, _):
         from dock_review import publish_review
         from lighting_preview_unreal import seed_cameras
+        from mission_lighting import placed_command_ids
         from model_library import record_import
 
         header, ident = self.header, self.ident
@@ -900,7 +929,8 @@ class DraftImport:
                 warnings.append(f"Could not record the source for {ident}: {exc}")
             try:
                 publish_review(self.library, ident, header, self.terrain, self.source_rows, self.catalog,
-                               self.options["mesh_mappings"], manifest=self.manifest, placed_audio=self.placed_audio)
+                               self.options["mesh_mappings"], manifest=self.manifest, placed_audio=self.placed_audio,
+                               placed_lights=placed_command_ids(self.editor.ACTORS.get_all_level_actors()))
             except (OSError, ValueError) as exc:
                 warnings.append(f"Could not save object review for {ident}: {exc}")
         try:

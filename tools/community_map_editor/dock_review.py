@@ -7,12 +7,13 @@ from intake_contract import load_intake, load_mission_audio
 from mesh_mappings import source_reference
 from mission_audio import audio_review
 from mission_equipment import EQUIPMENT_ROLES, power_context
+from mission_lighting import COMMAND_CLASS
 from object_catalog import SUPPORT, classify, load_catalog, source_fields
 from source_library import verified_draft_intake
 from source_profiles import T2_GENERATOR_SCOPE_VERSIONS
 
 
-def object_review_document(draft, header, terrain, rows, catalog, mappings, *, audio=None, placed_audio=()):
+def object_review_document(draft, header, terrain, rows, catalog, mappings, *, audio=None, placed_audio=(), placed_lights=()):
     if not DRAFT.fullmatch(draft):
         raise ValueError("Invalid draft ID for object review.")
     assessed = classify(rows, terrain, catalog)
@@ -31,7 +32,12 @@ def object_review_document(draft, header, terrain, rows, catalog, mappings, *, a
         role = EQUIPMENT_ROLES.get((cls.casefold(), props.get("datablock", "").casefold()))
         details = row["reason"]
         review = False
-        if coverage["blocked"]:
+        if cls == COMMAND_CLASS:
+            review = ident not in placed_lights
+            status = "Source light review" if review else "Mapped light command"
+            details = ("This call needs a literal light, a unique earlier interior, and a decoded track."
+                       if review else "Applied to the startup state of the named interior.")
+        elif coverage["blocked"]:
             status = "Not placed"
             details = " ".join(coverage["blocked"])
             review = True
@@ -105,15 +111,15 @@ def object_review_document(draft, header, terrain, rows, catalog, mappings, *, a
     }
 
 
-def publish_review(library, draft, header, terrain, rows, catalog, mappings, *, manifest=None, placed_audio=()):
+def publish_review(library, draft, header, terrain, rows, catalog, mappings, *, manifest=None, placed_audio=(), placed_lights=()):
     path = library / "DraftReviews" / f"{draft}.json"
     audio = load_mission_audio(manifest, header["files"]) if manifest is not None else None
     write(path, object_review_document(draft, header, terrain, rows, catalog, mappings,
-                                      audio=audio, placed_audio=placed_audio))
+                                      audio=audio, placed_audio=placed_audio, placed_lights=placed_lights))
     return path
 
 
-def review_for_existing_draft(library, draft, *, placed_audio=()):
+def review_for_existing_draft(library, draft, *, placed_audio=(), placed_lights=()):
     manifest = verified_draft_intake(library, draft)
     if manifest is None:
         return None
@@ -122,4 +128,4 @@ def review_for_existing_draft(library, draft, *, placed_audio=()):
     catalog = load_catalog(library, snapshot=snapshot, recorded=snapshot is not None, source_profile=header["profile"])
     mappings = snapshot["options"]["mesh_mappings"] if snapshot else {}
     return publish_review(library, draft, header, terrain, rows, catalog, mappings, manifest=manifest,
-                          placed_audio=placed_audio)
+                          placed_audio=placed_audio, placed_lights=placed_lights)

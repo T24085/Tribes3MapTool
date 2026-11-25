@@ -173,8 +173,10 @@ def source_material(folder, inventory, record, *, destination, mode='opaque', tw
     return material
 
 
-def loop_expression(node, connect, uv, time, preview, dimensions, track, destination, y):
-    duration, states, *activation = track
+def loop_expression(node, connect, uv, time, preview, dimensions, track, destination, y, start_defaults):
+    duration, states = track[:2]
+    activation = track[2] if len(track) > 2 else None
+    mode = track[3] if len(track) > 3 else "loop"
     width, height = dimensions
     png, tiles, columns, rows = mask_texture(states, width, height)
     digest = sha256(png).hexdigest()
@@ -187,15 +189,19 @@ def loop_expression(node, connect, uv, time, preview, dimensions, track, destina
     mask.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
     mask.set_editor_property('texture', intensity)
     custom = node(unreal.MaterialExpressionCustom, -650, y)
-    custom.set_editor_property('description', 'Tribes 2 triggered light loop' if activation else 'Tribes 2 ambient light loop')
+    scope = 'triggered' if activation else 'ambient'
+    custom.set_editor_property('description', f'Tribes 2 {scope} light {mode}')
     custom.set_editor_property('output_type', unreal.CustomMaterialOutputType.CMOT_FLOAT3)
     pins = []
     inputs = [('UV', uv), ('Clock', time), ('PreviewTime', preview), ('Mask', mask)]
     if activation:
         start = node(unreal.MaterialExpressionScalarParameter, -1160, y + 220)
-        start.set_editor_property('parameter_name', activation[0])
-        start.set_editor_property('default_value', -1.0)
+        start.set_editor_property('parameter_name', activation)
+        start.set_editor_property('default_value', start_defaults.get(activation, -1.0))
         inputs.append(('StartTime', start))
+    if mode == 'flicker':
+        origin = node(unreal.MaterialExpressionActorPositionWS, -1160, y + 320)
+        inputs.append(('Origin', origin))
     for key, _ in inputs:
         pin = unreal.CustomInput()
         pin.set_editor_property('input_name', key)
@@ -211,16 +217,41 @@ def loop_expression(node, connect, uv, time, preview, dimensions, track, destina
     code = []
     clock = 'Clock'
     if activation:
-        code.append('if (StartTime < 0.0 || (PreviewTime < 0.0 && Clock < StartTime)) return float3(0.0,0.0,0.0);')
+        code.append('if ((StartTime < 0.0 && StartTime != -2.0) || (PreviewTime < 0.0 && Clock < StartTime)) return float3(0.0,0.0,0.0);')
         clock = '(Clock - StartTime)'
-    code.extend([f'float Phase = fmod(max(0.0, PreviewTime >= 0.0 ? PreviewTime : {clock}) * 1000.0, {duration}.0);',
-                 'float3 Color = float3(0.0,0.0,0.0);', 'float2 Tile = float2(0.0,0.0);'])
+    code.append(f'float Elapsed = max(0.0, PreviewTime >= 0.0 ? PreviewTime : {clock}) * 1000.0;')
+    if activation:
+        code.append('if (StartTime == -2.0) Elapsed = 0.0;')
+    if mode == 'flicker':
+        # The second state's timestamp is the refresh interval. The draw
+        # ranges between zero and duration, so the timestamps weight each
+        # state's odds. Derive it from the placement and phase so all atlas
+        # contributions agree without a game-side random-number service.
+        period = max(67, states[1][0])
+        seed = track[4]
+        code.extend([f'uint Step = (uint)floor(Elapsed / {period}.0);',
+                     f'uint Draw = Step ^ {seed}u ^ asuint(Origin.x) ^ (asuint(Origin.y) * 1664525u)'
+                     ' ^ (asuint(Origin.z) * 1013904223u);',
+                     'Draw = (Draw ^ (Draw >> 16)) * 0x7feb352du;',
+                     'Draw = (Draw ^ (Draw >> 15)) * 0x846ca68bu;',
+                     'Draw ^= Draw >> 16;',
+                     f'float Phase = Step == 0u ? 0.0 : float(Draw % {duration + 1}u);'])
+    elif mode == 'ramp':
+        code.append(f'float Phase = min(Elapsed, {duration}.0);')
+    else:
+        code.append(f'float Phase = fmod(Elapsed, {duration}.0);')
+    code.extend(['float3 Color = float3(0.0,0.0,0.0);', 'float2 Tile = float2(0.0,0.0);'])
     for i, (start, rgb, _) in enumerate(states):
-        end = states[i + 1][0] if i + 1 < len(states) else duration
-        next_color = states[(i + 1) % len(states)][1]
+        last = i + 1 == len(states)
+        end, following = (duration, states[0][1]) if last else states[i + 1][:2]
         tile = tiles[i]
-        code.extend([('if' if not i else 'else if') + f' (Phase < {end}.0) {{',
-                     f' Color = lerp({color(rgb)}, {color(next_color)}, (Phase - {start}.0) / {end - start}.0);',
+        branch = ('if' if not i else 'else if') + f' (Phase < {end}.0)'
+        if last and mode != 'loop':
+            branch = 'else' if i else ''
+        expression = color(rgb)
+        if mode == 'loop' or (mode == 'ramp' and not last):
+            expression = f'lerp({expression}, {color(following)}, (Phase - {start}.0) / {end - start}.0)'
+        code.extend([f'{branch} {{', f' Color = {expression};',
                      f' Tile = float2({tile % columns}.0, {tile // columns}.0);', '}'])
     code.extend([f'float2 HalfTexel = 0.5 / float2({width}.0,{height}.0);',
                  f'float2 At = (clamp(UV, HalfTexel, 1.0 - HalfTexel) + Tile) / float2({columns}.0,{rows}.0);',
@@ -231,13 +262,20 @@ def loop_expression(node, connect, uv, time, preview, dimensions, track, destina
 
 
 def lighted_material(folder, inventory, albedo, normal, alarm, *, legacy=False, masked=False,
-                     normal_loops=(), alarm_loops=()):
+                     normal_loops=(), alarm_loops=(), startup_lights=None):
+    from dif_light_animation import LIGHT_START_PREFIX
+
+    names_in_slot = {track[2] for track in (*normal_loops, *alarm_loops) if len(track) > 2 and track[2]}
+    defaults = {LIGHT_START_PREFIX + name: value for name, value in (startup_lights or {}).items()
+                if LIGHT_START_PREFIX + name in names_in_slot}
     names = (albedo, normal, alarm)
     signature = '|'.join(inventory[name] if name else '-' for name in names)
     if legacy:
         signature += '|t1-masked' if masked else '|t1-opaque'
     if normal_loops or alarm_loops:
         signature += '|dif-ambient-v1|' + json.dumps([normal_loops, alarm_loops], separators=(',', ':'))
+    if defaults:
+        signature += '|dif-startup-v1|' + json.dumps(defaults, separators=(',', ':'), sort_keys=True)
     digest = sha256(signature.encode()).hexdigest()
     prefix = LEGACY_BAKED_PREFIX if legacy else BAKED_MATERIAL_PREFIX
     destination = LEGACY_DESTINATION if legacy else DESTINATION
@@ -281,7 +319,7 @@ def lighted_material(folder, inventory, albedo, normal, alarm, *, legacy=False, 
             row = y + index * 300
             add = node(unreal.MaterialExpressionAdd, -390, row)
             connect(*value, add, 'A')
-            connect(*loop_expression(node, connect, uv, time, preview, dimensions, loop, destination, row), add, 'B')
+            connect(*loop_expression(node, connect, uv, time, preview, dimensions, loop, destination, row, defaults), add, 'B')
             value = add, ''
         clamp = node(unreal.MaterialExpressionSaturate, -270, y)
         inputs = list(lib.get_material_expression_input_names(clamp))
@@ -326,20 +364,25 @@ def lighted_material(folder, inventory, albedo, normal, alarm, *, legacy=False, 
     return material
 
 
-def generate_overrides(folder, inventory, models, lighting_index=None, *, moving_references=(), placements=()):
+def generate_overrides(folder, inventory, models, lighting_index=None, *, moving_references=(), placements=(),
+                       startup_lights=None):
     index = load_texture_index(folder, inventory)
     lighting_index = lighting_index or {}
     materials, overrides = {}, {}
     variants = {}
+    placement_lights = {}
     for row, *_ in placements:
         key = placement_key(row['id'])
-        if key in index and source_reference(row) in models:
+        light_defaults = (startup_lights or {}).get(row['id'])
+        if (key in index or light_defaults) and source_reference(row) in models:
             variants[key] = models[source_reference(row)]
+            if light_defaults:
+                placement_lights[key] = light_defaults
     models = {**models, **variants}
     for reference, (filename, geometry) in models.items():
         authored = index.get(filename, {})
         if reference in variants:
-            authored = {**authored, **index[reference]}
+            authored = {**authored, **index.get(reference, {})}
         lighting = model_lighting(lighting_index, filename, geometry)
         if not authored and not lighting:
             continue
@@ -363,7 +406,8 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
                 slots[component_slot] = lighted_material(folder, inventory, name, normal_map, alarm_map,
                                                          legacy=legacy, masked=mode == 'masked',
                                                          normal_loops=atlases[normal].get('animated_loops', ()) if normal >= 0 else (),
-                                                         alarm_loops=atlases[alarm].get('animated_loops', ()) if alarm >= 0 else ())
+                                                         alarm_loops=atlases[alarm].get('animated_loops', ()) if alarm >= 0 else (),
+                                                         startup_lights=placement_lights.get(reference))
             elif not name:
                 continue
             else:

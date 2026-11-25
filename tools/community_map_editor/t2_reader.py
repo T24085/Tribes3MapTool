@@ -17,13 +17,16 @@ from intake_contract import (
     bounded, intake_file_limit, intake_filename, load_intake, max_intake_files, validate_minimap,
 )
 from minimap import framing, grayscale_png, terrain_png
-from mission_audio import AUDIO_MEMBER, MAX_AUDIO_BYTES, MAX_CLIPS, collect_audio
+from mission_audio import AUDIO_INDEX, AUDIO_MEMBER, MAX_AUDIO_BYTES, MAX_CLIPS, collect_audio
 from mission_equipment import mission_equipment
+from mission_lighting import CALL_PREFIX, COMMAND_CLASS
 from mission_weather import WEATHER_FILE, mission_weather
 from model_textures import MAX_TEXTURE_BYTES, TEXTURE_FILE, TEXTURE_INDEX
 from native_terrain_paint import MAX_PAINT_PNG_BYTES, PAINT_FILE
 from sky_intake import MAX_SKY_BYTES, SKY_PNG
-from source_profiles import (T2_AUDIO_PROFILES_VERSION, T2_AUDIO_VERSION, T2_DIF_ANIMATION_VERSION, T2_DIF_LOD_LIGHT_VERSION, T2_DIF_LOD_VERSION,
+from source_profiles import (T2_ACOUSTIC_COLLISION_VERSION, T2_ACOUSTICS_VERSION,
+                             T2_AUDIO_PROFILES_VERSION, T2_AUDIO_VERSION, T2_DIF_ANIMATION_VERSION,
+                             T2_DIF_LOD_LIGHT_VERSION, T2_DIF_LOD_VERSION,
                              T2_GENERATOR_SCOPE_VERSION)
 from interior_lighting import LIGHTING_INDEX, LIGHTMAP_FILE, MAX_LIGHTMAP_BYTES
 from terrain_art import ART_FILE, MAX_ART_BYTES
@@ -35,6 +38,30 @@ TOKEN = re.compile(
 )
 IDENT = re.compile(r"[A-Za-z_]\w*")
 READER = "t2-mission-v3.0"
+
+
+def append_source_script(tokens, start, rows):
+    depth = 0
+    statement = []
+    for token in tokens[start:]:
+        statement.append(token)
+        if token in ("(", "{", "["):
+            depth += 1
+        elif token in (")", "}", "]"):
+            depth -= 1
+        end_function = token == "}" and statement[0].casefold() == "function"
+        if depth == 0 and (token == ";" or end_function):
+            if statement == [";"]:
+                statement.clear()
+                continue
+            text = " ".join(statement)
+            source_class = COMMAND_CLASS if CALL_PREFIX.search(text) else "MissionStatement"
+            rows.append(dict(id=len(rows) + 1, parent=None, name="", source_class=source_class,
+                             properties={"statement": text[:4096]}))
+            statement.clear()
+    if statement:
+        rows.append(dict(id=len(rows) + 1, parent=None, name="", source_class="MissionStatement",
+                         properties={"statement": " ".join(statement)[:4096]}))
 
 
 def parse_mission(raw, *, legacy=False):
@@ -105,6 +132,11 @@ def parse_mission(raw, *, legacy=False):
                              properties={"statement": " ".join(tokens[start:i])}))
             i += 1
             continue
+        if not legacy and not stack and rows:
+            # The mission object section is complete. Keep trailing script
+            # as data so nested construction and calls cannot become objects.
+            append_source_script(tokens, i, rows)
+            break
         if not stack or not IDENT.fullmatch(token):
             raise ValueError(
                 f"Unsupported mission statement at token {i}: {token[:60]}"
@@ -163,6 +195,10 @@ def convert_rows(rows, profile):
         kind = rules.get(props.get("datablock", "").lower(), rules.get("*"))
         if cls in profile["groups"]:
             row.update(status="group", reason="Hierarchy retained")
+        elif row["source_class"] == COMMAND_CLASS:
+            row.update(status="review", reason="Source interior light command.")
+        elif not row["parent"] and row["source_class"] == "MissionStatement":
+            row.update(status="review", reason="Source script retained for review.")
         elif modes and "ctf" not in re.findall(r"\w+", modes.lower()):
             row.update(status="excluded", reason="Other game mode: " + modes)
         elif cls == profile["terrain_class"]:
@@ -475,11 +511,26 @@ def convert(source, output, mission=None, terrain=None, *, dif_decoder=None, dif
         header["minimap"] = settings
     if environment:
         header["environment"] = environment
+    audio_root = audio_assets or dif_assets or dts_assets
+    audio, receipts, inherited = collect_audio(
+        rows, terrain_data, source.resolve(), Path(audio_root).resolve() if audio_root else None)
+    acoustic_version = None
     if dif_decoder is not None:
         from mission_interiors import collect_interiors
 
+        emitters = json.loads(audio[AUDIO_INDEX])['emitters'] if AUDIO_INDEX in audio else ()
+        outside_audio = any(emitter['settings'].get('outside_only') is True for emitter in emitters)
         found, review, geometry = collect_interiors(
-            rows, source.resolve(), Path(dif_decoder), Path(dif_assets).resolve() if dif_assets else None)
+            rows, source.resolve(), Path(dif_decoder), Path(dif_assets).resolve() if dif_assets else None,
+            include_acoustics=outside_audio)
+        if outside_audio:
+            for name in found.values():
+                acoustic = json.loads(geometry[name]).get('acoustics')
+                if acoustic:
+                    acoustic_version = T2_ACOUSTICS_VERSION
+                    if 'collision' in acoustic:
+                        acoustic_version = T2_ACOUSTIC_COLLISION_VERSION
+                        break
         if found or review:
             header.update(format=4, reader="t2-mission-v4.0", interiors=found, interior_review=review)
             files.update(geometry)
@@ -534,14 +585,11 @@ def convert(source, output, mission=None, terrain=None, *, dif_decoder=None, dif
         header.update(format=T2_DIF_LOD_VERSION, reader="t2-mission-v43.0")
     if generator_scopes:
         header.update(format=T2_GENERATOR_SCOPE_VERSION, reader="t2-mission-v46.0")
-    audio_root = audio_assets or dif_assets or dts_assets
-    audio, receipts, inherited = collect_audio(
-        rows, terrain_data, source.resolve(), Path(audio_root).resolve() if audio_root else None)
     if audio:
         files.update(audio)
         header['files'].update({name: sha(data) for name, data in audio.items()})
         header['sources'].extend(receipts)
-        version = T2_AUDIO_PROFILES_VERSION if inherited else T2_AUDIO_VERSION
+        version = acoustic_version or (T2_AUDIO_PROFILES_VERSION if inherited else T2_AUDIO_VERSION)
         header.update(format=version, reader=f't2-mission-v{version}.0')
     return publish_intake(header, files, output)
 
