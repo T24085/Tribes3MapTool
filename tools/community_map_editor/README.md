@@ -375,8 +375,10 @@ senders remain in review, so a draft never installs only part of a chain.
 Vengeance version 130/27 drafts with placed static meshes use
 [intake version 27](intake-v27.schema.json). The importer matches the full
 object path in the map or a listed companion `.pkg`. It preserves the
-placement's position, rotation and scale, and keeps the first UV channel,
-material slot names and authored triangle collision. Actors explicitly
+placement's position, rotation and scale, and keeps the material slot names
+and authored triangle collision. [Intake version 55](intake-v55.schema.json)
+adds saved vertex normals and secondary UV channels to the private geometry.
+The editor still opens older intakes. Actors explicitly
 marked hidden or nonblocking carry those settings into the draft. The
 review lists missing companion packages. When the importer resolves any
 static-mesh textures, it writes [intake version 28](intake-v28.schema.json)

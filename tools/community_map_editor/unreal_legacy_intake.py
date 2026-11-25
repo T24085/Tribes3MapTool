@@ -14,7 +14,8 @@ from ascend_static_mesh import read_placed_meshes as read_ascend_meshes
 from ascend_texture_cache import AscendTextureCache
 from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, NATIVE_ENVIRONMENT_VERSION,
                              NATIVE_LOCAL_LIGHTS_VERSION, PLAYABLE_BOUNDS,
-                             UNREAL_READER, UNREAL_SCENE, bounded, finite, validate_minimap)
+                             UNREAL_READER, UNREAL_SCENE, VENGEANCE_VERTEX_ATTRIBUTES_VERSION,
+                             bounded, finite, validate_minimap)
 from interior_geometry import MAX_GEOMETRY_BYTES
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
@@ -596,7 +597,9 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
         header["sources"][1]["origin"] = "Editor import settings"
     if environment:
         header["environment"] = environment
-    if any("local_light" in row for row in rows):
+    if game == "vengeance" and any(mesh.keys() & {"vertex_normals", "extra_uvs"} for mesh in mesh_docs.values()):
+        header.update(format=VENGEANCE_VERTEX_ATTRIBUTES_VERSION, scene_format=version)
+    elif any("local_light" in row for row in rows):
         header.update(format=NATIVE_LOCAL_LIGHTS_VERSION, scene_format=version)
     elif environment:
         header.update(format=NATIVE_ENVIRONMENT_VERSION, scene_format=version)

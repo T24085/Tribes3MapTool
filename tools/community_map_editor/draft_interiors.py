@@ -110,16 +110,20 @@ def install_simple_collision(asset, simple):
 def dynamic_mesh(data, lighting, texture_sizes):
     mesh = unreal.DynamicMesh()
     sections = []
-    for source_slot, material, vertices, uv, triangles, light_uv, normal, alarm, *extra_uv in render_sections(
+    for source_slot, material, vertices, uv, triangles, light_uv, normal, alarm, *extras in render_sections(
             data, lighting, texture_sizes):
-        alarm_uv = extra_uv[0] if extra_uv else ()
+        buffers = {'uv1': [unreal.Vector2D(*value) for value in light_uv]}
+        if data['format'] == 3:
+            buffers['uv2'] = [unreal.Vector2D(*value) for value in extras[0]]
+        elif extras:
+            for key, values in extras[0].items():
+                vector = unreal.Vector if key == 'normals' else unreal.Vector2D
+                buffers[key] = [vector(*value) for value in values]
         mesh.append_buffers_to_mesh(
             unreal.GeometryScriptSimpleMeshBuffers(
                 vertices=[unreal.Vector(*value) for value in vertices],
                 uv0=[unreal.Vector2D(*value) for value in uv],
-                uv1=[unreal.Vector2D(*value) for value in light_uv],
-                uv2=[unreal.Vector2D(*value) for value in alarm_uv],
-                triangles=[unreal.IntVector(*value) for value in triangles]),
+                triangles=[unreal.IntVector(*value) for value in triangles], **buffers),
             material_id=len(sections))
         sections.append((source_slot, normal, alarm))
     return mesh, sections
@@ -195,7 +199,7 @@ def build_asset(data, digest, package, lighting=None, texture_sizes=None, proxy=
         mode = (unreal.CollisionTraceFlag.CTF_USE_SIMPLE_AND_COMPLEX if simple['mode'] == 'both'
                 else unreal.CollisionTraceFlag.CTF_USE_SIMPLE_AS_COMPLEX)
     options = unreal.GeometryScriptCreateNewStaticMeshAssetOptions(
-        enable_recompute_normals=True, enable_recompute_tangents=True, enable_collision=has_collision,
+        enable_recompute_normals='vertex_normals' not in data, enable_recompute_tangents=True, enable_collision=has_collision,
         collision_mode=mode)
     asset, status = unreal.GeometryScript_NewAssetUtils.create_new_static_mesh_asset_from_mesh(mesh, package, options)
     if not isinstance(asset, unreal.StaticMesh) or status != unreal.GeometryScriptOutcomePins.SUCCESS:

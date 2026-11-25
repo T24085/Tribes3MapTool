@@ -102,11 +102,15 @@ def vengeance_mesh_buffers():
     data = bytes(41) + struct.pack("<3i", 3, 1, 3) + compact(2)
     data += struct.pack("<I5HI5H", 0, 0, 0, 2, 1, 1, 0, 3, 3, 5, 1, 1)
     data += bytes(25) + struct.pack("<3i", 3, 0, 1) + compact(len(positions))
-    data += b"".join(struct.pack("<6f", *point, 0, 0, 1) for point in positions)
+    normals = [(0, 0, 1)] * 3 + [(0.6, 0, 0.8)] * 3
+    data += b"".join(struct.pack("<6f", *point, *normal) for point, normal in zip(positions, normals))
     data += bytes(4) + compact(0)  # Vertex stream revision and empty tangent stream.
     data += (compact(0) + bytes(4)) * 2
-    data += compact(1) + compact(len(positions))
-    data += b"".join(struct.pack("<2f", *uv) for uv in ((0, 0), (0, 1), (1, 0)) * 2) + bytes(8)
+    data += compact(4)
+    for layer in range(4):
+        data += compact(len(positions))
+        data += b"".join(struct.pack("<2f", u / (layer + 1) + layer * 0.125, v)
+                         for u, v in ((0, 0), (0, 1), (1, 0)) * 2) + bytes(8)
     data += compact(6) + struct.pack("<6H", *range(6)) + bytes(4) + compact(0) + bytes(4)
     data += compact(0) + compact(1) + struct.pack("<6f4H", 0, 0, 40, 100, 40, 40, 1, 0, 0, 0)
     return data + compact(1) + struct.pack("<4H", 0, 1, 2, 0)
@@ -1342,6 +1346,8 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 root = Path(directory)
                 source = binary_draft_fixture(root, "vengeance", static_mesh=mode)
                 manifest = convert_unreal(source, root / "Intakes")
+                raw = json.loads(manifest.read_bytes())
+                self.assertEqual((raw["format"], raw["scene_format"]), (55, 27))
                 header, _, rows = load_intake(manifest)
                 self.assertEqual(header["format"], 27)
                 name = header["interiors"][reference]
@@ -1350,6 +1356,11 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 self.assertEqual(geometry["triangles"], [[0, 0, 1, 2, 0, 0, 0, 1, 1, 0],
                                                         [1, 3, 4, 5, 0, 0, 0, 1, 1, 0]])
                 self.assertEqual(geometry["collision"]["triangles"], [[0, 1, 2]])
+                first, second = render_sections(geometry)
+                self.assertEqual(first[-1]["normals"], [[0, 0, 1]] * 3)
+                self.assertAlmostEqual(second[-1]["normals"][0][0], 0.6)
+                self.assertEqual(second[-1]["uv1"], [[0.125, 0], [0.125, 1], [0.625, 0]])
+                self.assertEqual(second[-1]["uv3"], [[0.375, 0], [0.375, 1], [0.625, 0]])
                 deck, decorative = [row for row in rows if row.get("model_reference") == reference]
                 self.assertEqual(deck["transform"]["position_cm"], [60, 160, 400])
                 self.assertEqual(decorative["properties"]["bBlockHavok"], "False")
@@ -1358,6 +1369,10 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 public = export_public_layout(manifest, root / "Share.zip")
                 with ZipFile(public) as archive:
                     self.assertNotIn(name, archive.namelist())
+                    self.assertEqual(json.loads(archive.read("manifest.json"))["format"], 22)
+                manifest.write_text(json.dumps(header), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "vertex attributes require intake version 55"):
+                    load_intake(manifest)
                 if mode == "companion":
                     self.assertEqual(geometry["source"]["sha256"], sha256((root / "Fixture.pkg").read_bytes()).hexdigest())
                     manifest.write_text(json.dumps(dict(header, sources=header["sources"][:-1])), encoding="utf-8")

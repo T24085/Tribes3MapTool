@@ -36,6 +36,8 @@ def validate_geometry(data):
         fields.update(('collision', 'render'))
     elif data['format'] >= 6:
         fields.add('animation')
+    if data['format'] == VENGEANCE_STATIC_MESH:
+        fields.update(data.keys() & {'vertex_normals', 'extra_uvs'})
     if set(data) != fields:
         raise ValueError('Invalid Tribes geometry fields.')
     source = data['source']
@@ -89,6 +91,18 @@ def validate_geometry(data):
             or not isinstance(triangles, list) or not 1 <= len(triangles) <= 250_000):
         raise ValueError('Invalid interior mesh dimensions or materials.')
     validate_mesh_triangles(triangles, len(vertices), len(materials))
+    if 'vertex_normals' in data:
+        normals = data['vertex_normals']
+        if not isinstance(normals, list) or len(normals) != len(vertices) or not all(map(valid_vertex_normal, normals)):
+            raise ValueError('Invalid source vertex normals.')
+    if 'extra_uvs' in data:
+        layers = data['extra_uvs']
+        if (not isinstance(layers, list) or not 1 <= len(layers) <= 7
+                or any(not isinstance(layer, list) or len(layer) != len(vertices)
+                       or any(not isinstance(point, list) or len(point) != 2
+                              or not all(finite(value, 1e6) for value in point) for point in layer)
+                       for layer in layers)):
+            raise ValueError('Invalid secondary source UV channels.')
     if 'acoustics' in data:
         from dif_acoustics import validate_acoustics
 
@@ -112,6 +126,11 @@ def validate_geometry(data):
         if data['format'] == 7 and not animated_only_slots(data):
             raise ValueError('A version 7 DTS shape needs at least one animated-only material slot.')
     return data
+
+
+def valid_vertex_normal(normal):
+    return (isinstance(normal, list) and len(normal) == 3 and all(finite(value, 2) for value in normal)
+            and 0.5 <= sum(value * value for value in normal) <= 1.5)
 
 
 def validate_mesh_triangles(triangles, vertex_count, material_count):
@@ -287,10 +306,13 @@ def render_groups(data):
 
 def render_sections(data, lighting=None, texture_sizes=None):
     materials, vertices = data['materials'], data['vertices_m']
+    normals = data.get('vertex_normals', ())
+    secondary_uvs = data.get('extra_uvs', ())
     result = []
     for (slot, normal, alarm), triangles in triangle_groups(data, lighting):
         width, height = texture_sizes.get(slot, (1, 1)) if texture_sizes else (1, 1)
         points, coords, faces, light_uv, alarm_uv = [], [], [], [], []
+        source_indices = []
         for (_, a, b, c, *uv), projection in triangles:
             start = len(points)
             source = vertices[a], vertices[b], vertices[c]
@@ -298,6 +320,8 @@ def render_sections(data, lighting=None, texture_sizes=None):
             points.extend((x * 100, y_sign * y * 100, z * 100) for x, y, z in source)
             coords.extend((u / width, v / height) for u, v in zip(uv[::2], uv[1::2]))
             faces.append((start, start + 1, start + 2))
+            if normals or secondary_uvs:
+                source_indices.extend((a, b, c))
             if projection and data['format'] == 3:
                 for channel, target in zip(projection, (light_uv, alarm_uv)):
                     sx, sy, dx, dy = channel or (0, 0, 0, 0)
@@ -306,7 +330,14 @@ def render_sections(data, lighting=None, texture_sizes=None):
                 ax, ay, sx, sy, dx, dy = projection
                 light_uv.extend((point[ax] * sx + dx, point[ay] * sy + dy) for point in source)
         section = (slot, materials[slot], points, coords, faces, light_uv, normal, alarm)
-        result.append((*section, alarm_uv) if data['format'] == 3 else section)
+        if data['format'] == 3:
+            section = (*section, alarm_uv)
+        elif source_indices:
+            attributes = {'normals': [normals[index] for index in source_indices]} if normals else {}
+            attributes.update((f'uv{channel}', [layer[index] for index in source_indices])
+                              for channel, layer in enumerate(secondary_uvs, 1))
+            section = (*section, attributes)
+        result.append(section)
     if not result:
         raise ValueError('The interior contains no playable surfaces.')
     return result

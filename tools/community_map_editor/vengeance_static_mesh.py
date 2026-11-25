@@ -4,7 +4,7 @@ from hashlib import sha256
 from pathlib import Path
 import struct
 
-from interior_geometry import VENGEANCE_STATIC_MESH, validate_geometry
+from interior_geometry import VENGEANCE_STATIC_MESH, valid_vertex_normal, validate_geometry
 from unreal_binary_scene import property_tag, read_properties
 from unreal_package_reader import Cursor
 from vengeance_terrain import HEIGHT_LAYOUT
@@ -55,8 +55,10 @@ def vertex_and_uv_streams(cursor, units_per_m):
     if (marker, schema) != (3, 0) or tangents not in (0, 1):
         raise ValueError("Unsupported Vengeance vertex stream header.")
     count = array_count(cursor, MAX_VERTICES)
-    vertices = [[x / units_per_m, y / units_per_m, z / units_per_m]
-                for x, y, z, *_ in struct.iter_unpack(cursor.endian + "6f", cursor.take(count * 24))]
+    vertices, normals = [], []
+    for x, y, z, nx, ny, nz in struct.iter_unpack(cursor.endian + "6f", cursor.take(count * 24)):
+        vertices.append([x / units_per_m, y / units_per_m, z / units_per_m])
+        normals.append([nx, ny, nz])
     cursor.take(4)  # Vertex stream revision.
     if tangents:
         tangent_count = array_count(cursor, MAX_VERTICES)
@@ -72,15 +74,14 @@ def vertex_and_uv_streams(cursor, units_per_m):
     if not uv_layers:
         raise ValueError("Vengeance static mesh has no texture UV stream.")
     uv = []
-    for layer in range(uv_layers):
+    for _ in range(uv_layers):
         points = array_count(cursor, MAX_VERTICES)
         if points != count:
             raise ValueError("Vengeance static mesh UV and vertex counts disagree.")
         coordinates = cursor.take(points * 8)
-        if layer == 0:
-            uv = list(struct.iter_unpack(cursor.endian + "2f", coordinates))
+        uv.append([list(point) for point in struct.iter_unpack(cursor.endian + "2f", coordinates)])
         cursor.take(8)  # UV channel and stream revision.
-    return vertices, uv
+    return vertices, normals, uv
 
 
 def render_triangles(sections, indices, vertices, uv):
@@ -116,7 +117,7 @@ def read_mesh(report, stream, export, objects, units_per_m, decoder_sha):
     if len(materials) != len(sections):
         raise ValueError("Vengeance static mesh section and material counts disagree.")
     cursor.take(25)  # Serialized mesh bounds.
-    vertices, uv = vertex_and_uv_streams(cursor, units_per_m)
+    vertices, normals, uv = vertex_and_uv_streams(cursor, units_per_m)
     indices = [value for value, in struct.iter_unpack(
         cursor.endian + "H", cursor.take(array_count(cursor, MAX_TRIANGLES * 3) * 2))]
     cursor.take(4)
@@ -135,11 +136,15 @@ def read_mesh(report, stream, export, objects, units_per_m, decoder_sha):
     source = dict(name=report["source"]["name"], sha256=report["source"]["sha256"],
                   decoder_sha256=decoder_sha, export=export["index"], object_path=export["object_path"])
     names = [objects[index]["object_path"] if index else "DefaultMaterial" for index, _ in materials]
-    triangles = render_triangles(sections, indices, vertices, uv)
-    geometry = validate_geometry(dict(format=VENGEANCE_STATIC_MESH, source=source, materials=names,
-                                      vertices_m=vertices, triangles=triangles, render=True,
-                                      collision=dict(detail=0, vertices_m=vertices, triangles=collision)))
-    return geometry, [(index, 0) for index, _ in materials]
+    triangles = render_triangles(sections, indices, vertices, uv[0])
+    geometry = dict(format=VENGEANCE_STATIC_MESH, source=source, materials=names,
+                    vertices_m=vertices, triangles=triangles, render=True,
+                    collision=dict(detail=0, vertices_m=vertices, triangles=collision))
+    if all(map(valid_vertex_normal, normals)):
+        geometry["vertex_normals"] = normals
+    if len(uv) > 1:
+        geometry["extra_uvs"] = uv[1:]
+    return validate_geometry(geometry), [(index, 0) for index, _ in materials]
 
 
 def read_placed_meshes(report, stream, units_per_m, references, *, companion=False, artwork=None):
