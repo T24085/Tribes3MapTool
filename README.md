@@ -30,6 +30,13 @@ To reopen the workspace, run
 
 See the [editor guide](tools/community_map_editor/README.md) for conversion, cooking, offline playtests and host export requirements. The source snapshot contains no installed game, Unreal Editor binaries or cooked maps.
 
+On a compatible Direct Host, exports scope shared assets to the maps that
+use them. An isolated host and Starter HTTPS test added a draft with six
+new palette files, verified both draft downloads and preserved the
+existing map fingerprints. Rollback restored the original catalog.
+The release view compares the expected fingerprint, objectives and
+minimap against the running host before reporting a match.
+
 Open Docked Object Review from the TRIBES Map Editor menu to install
 the plugin for the workspace's exact UE 5.3 build. See the
 [Object Review installation guide](tools/community_map_editor/README.md#dock-object-review-inside-unreal).

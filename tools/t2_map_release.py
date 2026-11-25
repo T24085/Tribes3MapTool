@@ -108,6 +108,22 @@ def verify_minimap_runtime(host, files):
             raise ValueError(message)
 
 
+def supports_shared_file_runtime(host, files):
+    launcher = 'playtest.py'
+    if launcher not in files and not (host/launcher).exists() and not (host/launcher).is_symlink():
+        return True  # Inventory-only staging rehearsal.
+    message = 'Choose a verified Direct Host bundle that supports per-file shared map assets.'
+    components = {
+        'lib/community_maps.py': b'def shared_content_owners(',
+        'lib/compare_map_packages.py': b'shared_content_owners',
+        'lib/portable_maps.py': b'declared_shared_content(merged, definitions)',
+    }
+    try:
+        return all(marker in verified_host_source(host, files, path, message) for path, marker in components.items())
+    except ValueError:
+        return False
+
+
 def verify_flag_boundary_runtime(host, files, features):
     capabilities = {}
     if 'floor' in features or 'ceiling' in features:
@@ -137,6 +153,21 @@ def safe_member(name):
 
 def descriptor_paths(map_id):
     return {f'lua/{map_id}/map.json', f'lua/{map_id}/manifest.json'}
+
+
+def projected_manifest(host, payload, projection, central, map_id):
+    # Retain the installed descriptors when checking a proposed release.
+    for root in (host, payload):
+        for descriptor in (root/'lua').glob('*/map.json'):
+            if root == host and descriptor.parent.name == map_id:
+                continue
+            target = projection / descriptor.relative_to(root)
+            target.parent.mkdir(parents=True)
+            shutil.copyfile(descriptor, target)
+            inventory = descriptor.with_name('manifest.json')
+            if inventory.is_file():
+                shutil.copyfile(inventory, target.with_name(inventory.name))
+    return merge_map_manifests(projection, central)
 
 
 def create_plan(result, host, map_id, prior_names, next_names, catalog_before, catalog_after):
@@ -190,6 +221,7 @@ def release_plan(package):
         raise ValueError('The release has no file changes or too many changes.')
     definition = MapDefinition(map_id, map_id, map_id, f'Arena_{map_id}_P')
     descriptors = descriptor_paths(map_id)
+    retired = set()
     seen = set()
     for name, states in changes.items():
         if (not safe_member(name) or name.casefold() in seen or not isinstance(states, dict)
@@ -197,10 +229,12 @@ def release_plan(package):
             raise ValueError('Invalid or duplicate release file change.')
         seen.add(name.casefold())
         local_png = bool(re.fullmatch(rf'lua/{map_id}/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.png', name))
-        shared = (name.startswith('content/Community/') and name.endswith(COOKED_SUFFIXES)
-                  and states['before'] is None)
-        if not (name == CENTRAL or name in descriptors or local_png or owned_path(name, definition) or shared):
-            raise ValueError(f'The release file is outside {map_id}: {name}')
+        if not (name == CENTRAL or name in descriptors or local_png or owned_path(name, definition)):
+            if (not name.startswith('content/Community/') or not name.endswith(COOKED_SUFFIXES)
+                    or (states['before'] is not None and states['after'] is not None)):
+                raise ValueError(f'The release file is outside {map_id}: {name}')
+            if states['after'] is None:
+                retired.add(name)
         for state, directory in (('before', 'previous'), ('after', 'payload')):
             row = states[state]
             if row is None:
@@ -212,6 +246,19 @@ def release_plan(package):
     if CENTRAL in changes and (changes[CENTRAL]['after'] is None or not changes[CENTRAL]['before']
                                or changes[CENTRAL]['before']['sha256'] != plan['central_before']):
         raise ValueError('The release must preserve a verified central manifest in both states.')
+    if retired:
+        if CENTRAL not in changes:
+            raise ValueError('Retiring shared files requires a central inventory change.')
+        before = load_json(package/'previous'/CENTRAL, MAX_PACKAGE_MANIFEST_BYTES)
+        after = load_json(package/'payload'/CENTRAL, MAX_PACKAGE_MANIFEST_BYTES)
+        if (not isinstance(before, dict) or not isinstance(before.get('shared_content'), dict)
+                or not isinstance(after, dict) or not isinstance(after.get('shared_content'), dict)
+                or not isinstance(after.get('files'), list)
+                or any(not isinstance(row, dict) or not isinstance(row.get('path'), str) for row in after['files'])):
+            raise ValueError('Invalid central inventory for retired shared files.')
+        remaining = {row['path'] for row in after['files']} | after['shared_content'].keys()
+        if retired & remaining or any(before['shared_content'].get(name) != [map_id] for name in retired):
+            raise ValueError('The release can only retire shared files owned solely by this map.')
     guards = plan['guards']
     if not isinstance(guards, dict) or guards.keys() != descriptors:
         raise ValueError('The release is missing its verified map descriptors.')
@@ -321,6 +368,9 @@ def stage_release(package, source, destination, *, rollback=False, link_content=
             if regular_row(candidate, name) != states[new]:
                 raise ValueError(f'The release file changed while staging: {name}')
         installed = verify_package(candidate, merge_manifest=merge_map_manifests)
+        if (any(not scope.endswith('/') for scope in installed.get('shared_content', {}))
+                and not supports_shared_file_runtime(source, {row['path']: row for row in initial['files']})):
+            raise ValueError('Use a Direct Host bundle that supports per-file shared map assets.')
         verify_descriptors(candidate, plan, new)
         expected_members = (members - changes.keys()) | {name for name, states in changes.items() if states[new] is not None}
         if bundle_members(candidate, installed) != expected_members:

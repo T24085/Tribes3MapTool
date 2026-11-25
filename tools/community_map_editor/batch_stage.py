@@ -5,10 +5,10 @@ import re
 from uuid import uuid4
 
 if __package__:
-    from .conversion_rules import checksum, read, sha256_file, write
+    from .conversion_rules import HEX, checksum, read, sha256_file, write
     from .source_profiles import IMPORT_DRAFT
 else:
-    from conversion_rules import checksum, read, sha256_file, write
+    from conversion_rules import HEX, checksum, read, sha256_file, write
     from source_profiles import IMPORT_DRAFT
 
 
@@ -113,8 +113,19 @@ def portable_fingerprint(destination, draft, label, base_digest):
     receipt = read(destination / "export-receipt.json")
     if receipt.get("map") != draft or receipt.get("base_inventory_sha256") != base_digest:
         raise ValueError(f"The portable receipt does not match {draft} or its host baseline.")
-    if receipt.get("release_plan_sha256") != files.get("map-release.json"):
+    plan_hash = files.get("map-release.json")
+    if receipt.get("release_plan_sha256") != plan_hash:
         raise ValueError("The map release plan differs from the export receipt.")
+    content_hash = None
+    if plan_hash is not None:
+        plan_path = destination / "map-release.json"
+        plan = read(plan_path, 16 * 1024 * 1024)
+        catalog = plan.get("after_catalog") if isinstance(plan, dict) else None
+        content_hash = catalog.get(draft) if isinstance(catalog, dict) else None
+        if (not isinstance(plan, dict) or sha256_file(plan_path) != plan_hash or plan.get("map") != draft
+                or plan.get("central_before") != base_digest
+                or not isinstance(content_hash, str) or not HEX.fullmatch(content_hash)):
+            raise ValueError("The map release plan has an invalid catalog fingerprint.")
     runtime = destination / "payload" / "lua" / draft
     definition = read(runtime / "map.json")
     if definition.get("id") != draft or definition.get("label") != label:
@@ -135,4 +146,5 @@ def portable_fingerprint(destination, draft, label, base_digest):
                 or files.get("payload/" + path) != row["sha256"]
                 or (destination / "payload" / relative).stat().st_size != row["bytes"]):
             raise ValueError(f"Staged file failed verification: {path}")
-    return {"receipt_sha256": files["export-receipt.json"], "files_sha256": checksum(files), "files": len(files)}
+    return {"receipt_sha256": files["export-receipt.json"], "files_sha256": checksum(files), "files": len(files),
+            "content_hash": content_hash}

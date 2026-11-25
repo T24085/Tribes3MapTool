@@ -187,11 +187,11 @@ def show_releases(library, draft=None, release_tool=None):
         host_map = live[entry["draft"].casefold()]
 
         def match():
-            verify_release(entry)
-            return service.compare(host_map, entry)
+            proof = verify_release(entry)
+            return service.compare(host_map, dict(entry, content_hash=proof["content_hash"]))
 
         def report(same):
-            result = "Map-owned files, objectives, and minimap match" if same else "The live map differs from this build"
+            result = "The live map matches this build" if same else "The live map differs from this build"
             status.set(f"{result} · {live_source.get()} · {host_map['manifestHash'][:12]}")
 
         check_async("Comparing the staged map with the host manifest…", match, report)

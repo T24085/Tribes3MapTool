@@ -12,11 +12,11 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from community_maps import MapDefinition, valid_label
-from map_sync_contract import MINIMAP_MAX_IMAGE, map_catalog, minimap_payload, png_dimensions
+from map_sync_contract import MINIMAP_MAX_IMAGE, map_catalog, map_groups, minimap_payload, png_dimensions
 from portable_maps import host_definitions, load_json, merge_map_manifests, owned_path
-from tools.t2_map_release import (DRAFT, create_plan, descriptor_paths, flag_boundary_features, publish_directory,
+from tools.t2_map_release import (DRAFT, create_plan, descriptor_paths, flag_boundary_features, projected_manifest, publish_directory,
                                   regular_row, verified_host_source, verify_draft_world_settings, verify_flag_boundary_runtime,
-                                  verify_minimap_runtime)
+                                  verify_minimap_runtime, supports_shared_file_runtime)
 from verified_file_cache import MAX_PACKAGE_MANIFEST_BYTES
 
 
@@ -300,8 +300,8 @@ def installed_release(host, central, merged, definition, *, replace_existing):
         raise ValueError('The draft ID is already in the catalog. Select Update this map ID to prepare a replacement.')
     if (existing.native or existing.asset_group != map_id or existing.level != definition.level
             or merged['map_runtime'].get(map_id)
-            or any(prefix.casefold() == f'content/community/{map_id.casefold()}/' and set(owners) != {map_id}
-                   for prefix, owners in merged.get('shared_content', {}).items())
+            or any(scope.casefold().startswith(f'content/community/{map_id.casefold()}/') and set(owners) != {map_id}
+                   for scope, owners in merged.get('shared_content', {}).items())
             or any(owned_path(row['path'], definition) for row in central['files'])):
         raise ValueError('This update requires an independently owned portable draft.')
     folder = host / 'lua' / map_id
@@ -314,21 +314,6 @@ def installed_release(host, central, merged, definition, *, replace_existing):
         if file_row(host, name) != row:
             raise ValueError(f'The installed map failed verification: {name}')
     return metadata, members
-
-
-def projected_catalog(host, payload, projection, proposed, map_id):
-    # Merge the proposed central inventory with the same sidecars staging will install.
-    for root in (host, payload):
-        for descriptor in (root/'lua').glob('*/map.json'):
-            if root == host and descriptor.parent.name == map_id:
-                continue
-            target = projection / descriptor.relative_to(root)
-            target.parent.mkdir(parents=True)
-            shutil.copyfile(descriptor, target)
-            inventory = descriptor.with_name('manifest.json')
-            if inventory.is_file():
-                shutil.copyfile(inventory, target.with_name(inventory.name))
-    return map_catalog(merge_map_manifests(projection, proposed))
 
 
 def export_draft(run, host, destination, *, label, minimap=None, equipment_adapter=None, replace_existing=False):
@@ -355,6 +340,9 @@ def export_draft(run, host, destination, *, label, minimap=None, equipment_adapt
     previous, old_members = installed_release(host, central, merged, definition, replace_existing=replace_existing)
     existing = {row['path'].casefold(): row for row in merged['files']}
     verify_draft_world_settings(host, existing)
+    exact_shared = supports_shared_file_runtime(host, existing)
+    old_scopes = central.get('shared_content', {})
+    scopes = dict(old_scopes)
     if minimap is not None or 'minimap' in previous:
         verify_minimap_runtime(host, existing)
     prior_keys = {name.casefold() for name in old_members}
@@ -368,10 +356,11 @@ def export_draft(run, host, destination, *, label, minimap=None, equipment_adapt
         payload = result / 'payload'
         sidecar = payload / 'lua' / map_id
         sidecar.mkdir(parents=True)
-        members, shared_additions = [], []
+        members, shared_additions, cooked_paths, shared_paths = [], [], set(), set()
         dependencies = set(previous.get('shared_content', []))
         for row, group in cooked_members(preview, preview_manifest, definition):
             name = row['path']
+            cooked_paths.add(name)
             old = existing.get(name.casefold())
             if old is not None and name not in old_members:
                 if group is None or old != row or old != file_row(host, name):
@@ -382,7 +371,27 @@ def export_draft(run, host, destination, *, label, minimap=None, equipment_adapt
                 copy_member(preview, payload, row)
                 (members if group is None else shared_additions).append(row)
             if group is not None:
-                dependencies.add(group)
+                if exact_shared:
+                    shared_paths.add(name)
+                else:
+                    dependencies.add(group)
+
+        retired = set()
+        if exact_shared:
+            _, installed_files = map_groups(merged)
+            for name in shared_paths:
+                owners = {owner for owner, paths in installed_files.items() if name in paths}
+                if map_id not in owners:
+                    scopes[name] = sorted(owners | {map_id})
+            for name, owners in old_scopes.items():
+                if name.endswith('/') or name in cooked_paths or map_id not in owners:
+                    continue
+                remaining = sorted(owner for owner, paths in installed_files.items() if owner != map_id and name in paths)
+                if remaining:
+                    scopes[name] = remaining
+                else:
+                    del scopes[name]
+                    retired.add(name)
 
         level = payload/f'content/Maps/Community/{map_id}/{definition.level}.umap'
         flag_features = flag_boundary_features(level)
@@ -414,17 +423,22 @@ def export_draft(run, host, destination, *, label, minimap=None, equipment_adapt
         write_json(sidecar / 'manifest.json', {'format': 1, 'files': members})
 
         before_catalog = map_catalog(merged)
-        proposed = dict(central, files=[*central['files'], *shared_additions])
-        after_catalog = projected_catalog(host, payload, Path(work)/'catalog', proposed, map_id)
+        proposed = dict(central, files=[row for row in central['files'] if row['path'] not in retired] + shared_additions)
+        if scopes != old_scopes:
+            proposed['shared_content'] = scopes
+        after_catalog = map_catalog(projected_manifest(host, payload, Path(work)/'catalog', proposed, map_id))
         if {key: value for key, value in after_catalog.items() if key != map_id} != {
                 key: value for key, value in before_catalog.items() if key != map_id}:
+            if not exact_shared:
+                raise ValueError('This release needs a Direct Host bundle that supports per-file shared map assets.')
             raise ValueError('This release would change another map’s catalog entry.')
-        if shared_additions:
+        central_changed = proposed != central
+        if central_changed:
             write_json(payload / base_path.name, proposed)
         descriptors = descriptor_paths(map_id)
-        prior_names = set(old_members) | (descriptors if previous else set())
+        prior_names = set(old_members) | retired | (descriptors if previous else set())
         next_names = descriptors | {row['path'] for row in (*members, *shared_additions)}
-        if shared_additions:
+        if central_changed:
             prior_names.add(base_path.name)
             next_names.add(base_path.name)
         plan_hash = create_plan(result, host, map_id, prior_names, next_names, before_catalog, after_catalog)

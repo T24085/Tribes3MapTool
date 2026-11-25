@@ -71,7 +71,10 @@ def merge_map_manifests(root, manifest):
     maps = list(manifest.get('community_maps', LEGACY_MAPS))
     runtime = dict(manifest.get('map_runtime', {name: [] for name in maps}))
     labels, adapters, sidecars, minimaps = {}, {}, {}, {}
-    shared = {prefix: list(owners) for prefix, owners in declared_shared_content(manifest, existing).items()}
+    scopes = manifest.get('shared_content', {})
+    if not isinstance(scopes, dict):
+        raise ValueError('Shared content ownership must be an object.')
+    shared = dict(scopes)
     ids = {name.casefold(): name for name in maps}
     builtins = {name.casefold() for name in BY_ID}
     for folder in folders:
@@ -93,9 +96,12 @@ def merge_map_manifests(root, manifest):
         for group in dependencies:
             if not isinstance(group, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', group):
                 raise ValueError(f'Invalid portable map asset dependency: {name}')
-            owners = shared.setdefault(f'content/Community/{group}/', [])
+            prefix = f'content/Community/{group}/'
+            owners = shared.get(prefix, [])
+            if not isinstance(owners, list):
+                raise ValueError(f'Invalid portable map asset owners: {name}')
             if name not in owners:
-                owners.append(name)
+                shared[prefix] = [*owners, name]
         adapter = data.get('adapter')
         if adapter is not None and (not isinstance(adapter, str) or adapter not in ADAPTERS):
             raise ValueError(f'Unknown map adapter: {name}')
@@ -128,6 +134,7 @@ def merge_map_manifests(root, manifest):
                   shared_content=shared, _portable_labels=labels, _portable_adapters=adapters,
                   _portable_minimaps=minimaps)
     definitions = host_definitions(merged)
+    declared_shared_content(merged, definitions)
     if len({row.label.casefold() for row in definitions.values()}) != len(definitions):
         raise ValueError('Duplicate host map label.')
     original = manifest['files']

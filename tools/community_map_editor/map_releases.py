@@ -66,6 +66,8 @@ def capture_export(library, folder, *, expected_draft=None, expected_label=None,
     entry = {"format": 1, "draft": draft, "label": label, "recorded": recorded, "folder": str(folder),
              "base_inventory_sha256": base, "files_sha256": fingerprint, "receipt_sha256": proof["receipt_sha256"],
              "members": members, "minimap": definition.get("minimap")}
+    if proof.get("content_hash") is not None:
+        entry["content_hash"] = proof["content_hash"]
     write(path, entry)
     return entry
 
@@ -79,6 +81,7 @@ def release_history(library, draft=None):
                     and isinstance(entry["draft"], str) and DRAFT_ID.fullmatch(entry["draft"])
                     and is_label(entry["label"]) and isinstance(entry["recorded"], str)
                     and isinstance(entry["folder"], str) and isinstance(entry["members"], dict)
+                    and ("content_hash" not in entry or is_hash(entry["content_hash"]))
                     and all(is_hash(entry.get(key)) for key in ("receipt_sha256", "base_inventory_sha256"))):
                 entries.append(entry)
         except (OSError, TypeError, ValueError, KeyError, AttributeError):
@@ -90,6 +93,9 @@ def verify_release(entry):
     proof = portable_fingerprint(Path(entry["folder"]), entry["draft"], entry["label"], entry["base_inventory_sha256"])
     if any(proof[key] != entry[key] for key in ("files_sha256", "receipt_sha256")):
         raise ValueError("The export folder changed since this release was recorded.")
+    if "content_hash" in entry and proof["content_hash"] != entry["content_hash"]:
+        raise ValueError("The recorded map catalog fingerprint differs from the verified release plan.")
+    return proof
 
 
 def file_rows(rows):
@@ -150,6 +156,11 @@ class HostCatalog:
         if (digest != live["manifestHash"] or not isinstance(document, dict) or document.get("format") != 3
                 or document.get("id") != live["id"] or document.get("contentHash") != live["contentHash"]):
             raise ValueError("The host catalog changed. Refresh before comparing again.")
+        expected = release.get("content_hash")
+        if expected is not None and expected != document["contentHash"]:
+            return False
+        if expected is None and document.get("sharedHash") is not None:
+            raise ValueError("This older export has no catalog fingerprint to verify its shared files.")
         minimap = document.get("minimap")
         rows = document["files"] + document["objectives"]
         if minimap and minimap["image"] is not None:

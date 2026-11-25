@@ -110,16 +110,31 @@ def declared_shared_content(manifest, definitions=None):
     groups=manifest.get('shared_content',{})
     if not isinstance(groups,dict):raise ValueError('Shared content ownership must be an object.')
     result={}
-    for prefix,owners in groups.items():
-        if not isinstance(prefix,str):raise ValueError('Shared content prefix must be a string.')
-        path=PurePosixPath(prefix)
-        if (len(path.parts)!=3 or path.parts[:2]!=('content','Community')
-                or path.as_posix()+'/'!=prefix or ':'in prefix or'\\'in prefix
-                or path.parts[-1]in('.','..')):
-            raise ValueError('Shared content prefix must name one community asset group.')
+    for scope,owners in groups.items():
+        if not isinstance(scope,str):raise ValueError('Shared content scope must be a string.')
+        path=PurePosixPath(scope)
+        group = (len(path.parts)==3 and path.as_posix()+'/'==scope and path.name not in ('.','..')
+                 and ':' not in scope and '\\' not in scope)
+        member = (4 <= len(path.parts) and len(scope) <= 240 and path.as_posix()==scope
+                  and all(re.fullmatch(r'[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*', part) for part in path.parts)
+                  and path.suffix in ('.umap','.uexp','.uasset','.ubulk','.uptnl'))
+        if path.parts[:2]!=('content','Community') or not (group or member):
+            raise ValueError('Shared content must name a community asset group or a cooked file.')
         selected=map_ids(owners,maps)
-        result[prefix]=selected
+        result[scope]=selected
+    available = {row['path'] for row in manifest.get('files', [])
+                 if isinstance(row, dict) and isinstance(row.get('path'), str)}
+    if any(scope not in available for scope in result if not scope.endswith('/')):
+        raise ValueError('A shared cooked file is missing from the inventory.')
     return result
+
+
+def shared_content_owners(scopes, path):
+    """File ownership overrides legacy asset-group ownership."""
+    if path in scopes:
+        return scopes[path]
+    parts = path.split('/', 3)
+    return scopes.get('/'.join(parts[:3])+'/', ()) if len(parts)==4 else ()
 
 
 def options(ids, definitions=BY_ID):

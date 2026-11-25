@@ -11,11 +11,12 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from map_sync_contract import map_catalog
+from map_sync_contract import map_catalog, map_groups
 from portable_maps import load_json, merge_map_manifests
 from tools.t2_map_release import (
-    CENTRAL, DRAFT, bundle_members, descriptor_paths, flag_boundary_features, publish_directory, regular_row,
-    release_plan, verify_descriptors, verify_draft_world_settings, verify_flag_boundary_runtime, verify_minimap_runtime,
+    CENTRAL, DRAFT, bundle_members, descriptor_paths, flag_boundary_features, projected_manifest,
+    publish_directory, regular_row, release_plan, supports_shared_file_runtime,
+    verify_descriptors, verify_draft_world_settings, verify_flag_boundary_runtime, verify_minimap_runtime,
 )
 from verified_file_cache import MAX_PACKAGE_MANIFEST_BYTES, verify_package
 
@@ -44,17 +45,19 @@ def batch_exports(batch):
     return exports
 
 
-def shared_rows(payload, central, changes):
+def shared_changes(payload, central, changes, groups, draft):
     if CENTRAL not in changes:
-        return []
+        return central, [], {}
     proposed = load_json(payload/CENTRAL, MAX_PACKAGE_MANIFEST_BYTES)
     if not isinstance(proposed, dict) or not isinstance(proposed.get('files'), list):
         raise ValueError('Invalid central inventory in a batch export.')
     original = central['files']
     rows = proposed['files']
-    if (proposed.keys() != central.keys() or any(proposed[key] != central[key] for key in central if key != 'files')
-            or rows[:len(original)] != original or len(rows) <= len(original)):
-        raise ValueError('A batch export can only append shared files to the central inventory.')
+    mutable = {'files', 'shared_content'}
+    if ({key: val for key, val in proposed.items() if key not in mutable}
+            != {key: val for key, val in central.items() if key not in mutable}
+            or rows[:len(original)] != original):
+        raise ValueError('A batch export can only add shared files or assign them to the new map.')
     added = rows[len(original):]
     seen = set()
     for row in added:
@@ -66,18 +69,32 @@ def shared_rows(payload, central, changes):
                 or changes[name]['after'] != {'bytes': row['bytes'], 'sha256': row['sha256']}):
             raise ValueError(f'Unverified shared file in batch export: {name}')
         seen.add(name.casefold())
-    return added
+    previous = central.get('shared_content', {})
+    scopes = proposed.get('shared_content', {})
+    if not isinstance(scopes, dict) or not previous.keys() <= scopes.keys():
+        raise ValueError('A batch export cannot remove existing shared ownership.')
+    scope_additions = {name: owners for name, owners in scopes.items() if previous.get(name) != owners}
+    for name, owners in scope_additions.items():
+        if not isinstance(name, str) or name.endswith('/') or not isinstance(owners, list):
+            raise ValueError('A batch export must assign individual cooked files to the new map.')
+        expected = {map_id for map_id, paths in groups.items() if name in paths} | {draft}
+        if owners != sorted(expected):
+            raise ValueError(f'A batch export changes existing shared file ownership: {name}')
+    if not (added or scope_additions):
+        raise ValueError('The batch export has no shared inventory changes.')
+    return proposed, added, scope_additions
 
 
-def release_additions(package, plan, source, central, initial, old_catalog, baseline_hash, inventory):
+def release_additions(package, plan, source, central, initial, old_catalog, baseline_hash, inventory, groups):
     draft, changes = plan['map'], plan['changes']
     if draft in old_catalog or plan['before_catalog'] != old_catalog or plan['central_before'] != baseline_hash:
         raise ValueError(f'The batch draft does not match this host baseline: {draft}')
     verify_descriptors(source, plan, 'before')
     payload = package/'payload'
-    shared = shared_rows(payload, central, changes)
+    proposed, shared, scopes = shared_changes(payload, central, changes, groups, draft)
     original_rows = initial['files']
-    declared = merge_map_manifests(payload, dict(initial, files=[*original_rows, *shared]))
+    with TemporaryDirectory(prefix='t3-map-catalog-') as projection:
+        declared = projected_manifest(source, payload, Path(projection), proposed, draft)
     if draft in declared.get('_portable_minimaps', {}):
         verify_minimap_runtime(source, inventory)
     rows = {row['path']: row for row in declared['files']}
@@ -96,7 +113,7 @@ def release_additions(package, plan, source, central, initial, old_catalog, base
     level = f'content/Maps/Community/{draft}/Arena_{draft}_P.umap'
     if features := flag_boundary_features(payload/level):
         verify_flag_boundary_runtime(source, inventory, features)
-    return payload, shared, additions
+    return payload, shared, scopes, additions
 
 
 def stage_batch(batch, source, destination, *, link_content=False):
@@ -111,15 +128,16 @@ def stage_batch(batch, source, destination, *, link_content=False):
     central = load_json(source/CENTRAL, MAX_PACKAGE_MANIFEST_BYTES)
     initial = verify_package(source, merge_manifest=merge_map_manifests)
     old_catalog = map_catalog(initial)
+    _, groups = map_groups(initial)
     inventory = {row['path']: row for row in initial['files']}
     verify_draft_world_settings(source, inventory)
     members = bundle_members(source, initial)
     baseline_paths = {name.casefold() for name in members}
     baseline_descriptors = {name: regular_row(source, name) for name in members - inventory.keys() - {CENTRAL}}
-    additions, shared, paths = {}, {}, {}
+    additions, shared, scopes, paths, exact_catalog = {}, {}, {}, {}, {}
     for package, plan in exports:
-        payload, new_shared, new_files = release_additions(
-            package, plan, source, central, initial, old_catalog, baseline_hash, inventory)
+        payload, new_shared, new_scopes, new_files = release_additions(
+            package, plan, source, central, initial, old_catalog, baseline_hash, inventory, groups)
         new_shared = {row['path']: row for row in new_shared}
         for name, row in new_files.items():
             key = name.casefold()
@@ -134,6 +152,12 @@ def stage_batch(batch, source, destination, *, link_content=False):
             paths[key] = name
             additions[name] = (payload, row)
         shared.update(new_shared)
+        for name, owners in new_scopes.items():
+            scopes.setdefault(name, set()).update(owners)
+        if new_scopes:
+            exact_catalog[plan['map']] = plan['after_catalog'][plan['map']]
+    if scopes and not supports_shared_file_runtime(source, inventory):
+        raise ValueError('Use a Direct Host bundle that supports per-file shared map assets.')
 
     with TemporaryDirectory(dir=destination.parent) as staging:
         candidate = Path(staging)/'host'
@@ -153,8 +177,11 @@ def stage_batch(batch, source, destination, *, link_content=False):
             shutil.copyfile(payload/name, target)
             if regular_row(candidate, name) != row:
                 raise ValueError(f'A batch file changed while staging: {name}')
-        if shared:
+        if shared or scopes:
             combined = dict(central, files=[*central['files'], *(shared[name] for name in sorted(shared))])
+            if scopes:
+                combined['shared_content'] = central.get('shared_content', {}) | {
+                    name: sorted(owners) for name, owners in scopes.items()}
             (candidate/CENTRAL).write_text(json.dumps(combined, indent=2) + '\n', encoding='utf-8')
         else:
             shutil.copyfile(source/CENTRAL, candidate/CENTRAL)
@@ -171,6 +198,8 @@ def stage_batch(batch, source, destination, *, link_content=False):
         if (catalog.keys() != old_catalog.keys() | {plan['map'] for _, plan in exports}
                 or any(catalog[name] != previous for name, previous in old_catalog.items())):
             raise ValueError('The combined bundle changes an existing map catalog entry.')
+        if any(catalog[name] != expected for name, expected in exact_catalog.items()):
+            raise ValueError('The combined bundle changes a draft’s verified shared files.')
         for _, plan in exports:
             verify_descriptors(candidate, plan, 'after')
         if (regular_row(source, CENTRAL)['sha256'] != baseline_hash

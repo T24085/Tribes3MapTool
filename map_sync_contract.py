@@ -3,7 +3,7 @@ import hashlib
 import json
 import re
 
-from community_maps import MAX_MAPS, declared_definitions, declared_shared_content, valid_id, valid_label
+from community_maps import MAX_MAPS, declared_definitions, declared_shared_content, shared_content_owners, valid_id, valid_label
 from verified_file_cache import MAX_PACKAGE_FILES, MAX_PACKAGE_MANIFEST_BYTES
 
 VERSION = 1
@@ -200,13 +200,13 @@ def map_groups(manifest):
     base = None
     for row in manifest['files']:
         name = row['path']
-        owners = {owner for prefix, names in shared.items() if name.startswith(prefix) for owner in names}
+        owners = set(shared_content_owners(shared, name))
         for map_id in maps:
             definition = definitions[map_id]
             level = f'content/Maps/Community/{definition.asset_group}/{definition.level}.'
             assets = f'content/Community/{definition.asset_group}/'
             common = f'content/Community/{definition.shared_group}/'
-            if (name.startswith((level, assets)) or (definition.shared_group and name.startswith(common))
+            if (name.startswith((level, assets)) or (name not in shared and definition.shared_group and name.startswith(common))
                     or name in runtime[map_id]):
                 owners.add(map_id)
         if name.startswith('content/') and not owners:
