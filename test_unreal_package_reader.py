@@ -96,9 +96,10 @@ def build_package(game, strings, imported_objects, exported_objects, *, compress
     if modern:
         header += pack("2i", 42, 3)
         if compressed:
-            blocks = [table_bytes[i:i+64] for i in range(0, len(table_bytes), 64)]
+            block_size = 256 if len(table_bytes) > 256 * 1024 else 64
+            blocks = [table_bytes[i:i + block_size] for i in range(0, len(table_bytes), block_size)]
             payloads = [zlib.compress(block) for block in blocks]
-            packed = (pack("I3i", TAG, 64, sum(map(len, payloads)), len(table_bytes))
+            packed = (pack("I3i", TAG, block_size, sum(map(len, payloads)), len(table_bytes))
                       + b"".join(pack("ii", len(data), len(block)) for block, data in zip(blocks, payloads))
                       + b"".join(payloads))
             header += pack("2I4i", 1, 1, prefix, len(table_bytes), prefix, len(packed))

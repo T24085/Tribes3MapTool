@@ -5,6 +5,7 @@ from hashlib import sha256
 import math
 import sys
 
+from ascend_terrain_layers import read_ascend_paint
 from intake_contract import finite, intake_file_limit
 from minimap import grayscale_png
 from source_profiles import UNREAL_INTAKE_VERSION
@@ -13,7 +14,7 @@ from unreal_binary_scene import actor_scene
 from unreal_legacy_reader import descendants
 from unreal_package_reader import Cursor, open_package
 from vengeance_terrain import read_heightfield
-from vengeance_terrain_layers import TerrainPaint, read_terrain_paint
+from vengeance_terrain_layers import read_terrain_paint
 
 
 HEIGHT_MIDPOINT = 32768
@@ -121,7 +122,7 @@ def ascend_heightfield(actor, node, scene, stream, endian):
     return (width, height), raw, flags, origin, (sx, sy, sz / HEIGHT_UNITS), HEIGHT_MIDPOINT, provenance
 
 
-def decode_terrain(scene, report, stream, selected, *, companions=None):
+def decode_terrain(scene, report, stream, selected, *, companions=None, rtc=None):
     vengeance = report["summary"]["game"] == "vengeance"
     source_class = "terraininfo" if vengeance else "terrain"
     endian = report["summary"]["endian"]
@@ -158,16 +159,17 @@ def decode_terrain(scene, report, stream, selected, *, companions=None):
                    cm_per_m=100, material_layers=[], tile_grid=grid, terrain_blocks=blocks)
     scene["native_terrain"] = dict(provenance, object_path=actor["object_path"], export_index=actor["line"],
                                   vertices=[width, height], metres_per_height_unit=scale_m, height_midpoint=midpoint)
-    paint = TerrainPaint()
     if vengeance:
         paint = read_terrain_paint(node, report, stream, companions, units)
-        if paint.layers:
-            terrain["material_layers"] = [[layer["slot"], layer["surface"]] for layer in paint.layers]
-            scene["native_terrain"]["paint_layers"] = paint.layers
-        if paint.review:
-            scene["native_terrain"]["paint_review"] = paint.review
-        if paint.art_review:
-            scene["native_terrain"]["art_review"] = paint.art_review
+    else:
+        paint = read_ascend_paint(node, report, stream, companions, size, rtc)
+    if paint.layers:
+        terrain["material_layers"] = [[layer["slot"], layer["surface"]] for layer in paint.layers]
+        scene["native_terrain"]["paint_layers"] = paint.layers
+    if paint.review:
+        scene["native_terrain"]["paint_review"] = paint.review
+    if paint.art_review:
+        scene["native_terrain"]["art_review"] = paint.art_review
     raw, px_width, px_height = preview_samples(terrain)
     return terrain, grayscale_png(raw, 16, px_width, px_height), paint
 

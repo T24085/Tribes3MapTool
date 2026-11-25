@@ -423,6 +423,17 @@ Unusable hulls, mixed collision flags, lower-detail models, and ambiguous
 component placements appear in Object Review. Public layout exports
 omit the mesh files and source package receipts.
 
+[Intake version 52](intake-v52.schema.json) keeps the selected Ascend
+terrain's painted layers in their original order and resolution. It keeps
+hidden layers for inspection. When slot zero is visible, it supplies the
+base surface even when its saved paint mask is empty. Use **Terrain
+layers…** to select replacements from the project palette. When a supplied
+companion resolves a supported source color, the draft can use that color
+with the project texture repeat. Missing material packages, procedural
+filters and original shader inputs needing a manual assignment appear in
+**Object Review**. Public layout exports omit the original paint and
+artwork.
+
 [Intake version 51](intake-v51.schema.json) imports a version 805 Ascend
 level's compiled BSP as editable static geometry. It keeps the saved
 texture coordinates and material slots. The collision mesh includes

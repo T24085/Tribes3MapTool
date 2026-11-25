@@ -84,10 +84,11 @@ def apply_source_color(editor, material, ident, folder, header, choices, mask_si
                                     -310, y - 250, parameter_name=FALLBACK + "Color")
     output = "RGB"
     world = node(unreal.MaterialExpressionWorldPosition, -1450, y) if header["terrain_uv"] else None
+    paint = header["terrain_paint"]
     for slot, name, choice in sorted(choices):
+        if slot in paint.get("hidden_slots", ()):
+            continue
         key = str(slot)
-        alpha = texture_sample(slot, header["terrain_paint"]["masks"][key], mask=True, y=y)
-        connect(mask_coordinates(mask_sizes[slot], y), "", alpha, "UVs")
         if choice == SOURCE_ART:
             color = texture_sample(slot, artwork[slot], mask=False, y=y)
             axes = header["terrain_uv"].get(key)
@@ -97,6 +98,12 @@ def apply_source_color(editor, material, ident, folder, header, choices, mask_si
             surface = choice or suggested_surface(name) or FALLBACK
             color = editor.palette_sample(material, surface, "Color", unreal.MaterialSamplerType.SAMPLERTYPE_COLOR,
                                           -310, y, parameter_name=surface + "Color")
+        if slot == paint.get("base_slot"):
+            current, output = color, "RGB"
+            y += 470
+            continue
+        alpha = texture_sample(slot, paint["masks"][key], mask=True, y=y)
+        connect(mask_coordinates(mask_sizes[slot], y), "", alpha, "UVs")
         blend = node(unreal.MaterialExpressionLinearInterpolate, 10, y)
         connect(current, output, blend, "A")
         connect(color, "RGB", blend, "B")

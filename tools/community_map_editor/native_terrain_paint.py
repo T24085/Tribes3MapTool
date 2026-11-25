@@ -66,6 +66,8 @@ class NativeTerrainPaint:
         paint = header["terrain_paint"]
         self.width, self.height = paint["vertices"]
         self.fallback = palette.index(fallback)
+        base_slot = paint.get("base_slot")
+        hidden_slots = set(paint.get("hidden_slots", ()))
         self.masks = []
         self.mask_sizes = {}
         for slot, _, surface in sorted(choices):
@@ -78,7 +80,11 @@ class NativeTerrainPaint:
                 raise ValueError("Terrain paint mask changed after validation.")
             width, height, alpha = decode_mask(raw)
             self.mask_sizes[slot] = (width, height)
-            self.masks.append((palette.index(surface or fallback), width, height, alpha))
+            channel = palette.index(surface or fallback)
+            if slot == base_slot:
+                self.fallback = channel
+            elif slot not in hidden_slots:
+                self.masks.append((channel, width, height, alpha))
         self.channels = tuple(sorted({self.fallback, *(row[0] for row in self.masks)}))
 
     def tile_weights(self, col, row):

@@ -17,7 +17,7 @@ from intake_contract import (MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES, PL
 from interior_geometry import MAX_GEOMETRY_BYTES
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
-from source_profiles import (ASCEND_BSP_INTAKE_VERSION, ASCEND_CONVEX_COLLISION_VERSION,
+from source_profiles import (ASCEND_BSP_INTAKE_VERSION, ASCEND_CONVEX_COLLISION_VERSION, ASCEND_TERRAIN_PAINT_VERSION,
                              ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION,
                              ASCEND_PLACEMENT_ART_VERSION,
                              ASCEND_SIMPLE_COLLISION_VERSION,
@@ -303,7 +303,8 @@ def convert_unreal(source, output, metadata=None):
                                for row in report["imports"] if row["class_name"].casefold() == "staticmesh"}
             if native:
                 terrain, raw, paint = decode_terrain(
-                    scene, report, stream, settings.get("terrain_actor"), companions=companions)
+                    scene, report, stream, settings.get("terrain_actor"), companions=companions,
+                    rtc=rtc if game == "ascend" else None)
                 height_package = scene["native_terrain"].get("height_package")
                 if height_package:
                     paint.packages[height_package["name"]] = height_package
@@ -483,6 +484,8 @@ def convert_unreal(source, output, metadata=None):
                                                                       "ascend_texture_cache.py", "ascend_bsp.py", "vengeance_bsp.py"))
     if native:
         scripts.append(Path(__file__).with_name("unreal_native_terrain.py"))
+        if game == "ascend":
+            scripts.append(Path(__file__).with_name("ascend_terrain_layers.py"))
     version = UNREAL_INTAKE_VERSIONS[0]
     if mesh_docs and game == "ascend":
         version = ASCEND_MODEL_ART_VERSION if mesh_artwork else ASCEND_MESH_INTAKE_VERSION
@@ -497,9 +500,9 @@ def convert_unreal(source, output, metadata=None):
     if models and game == "ascend":
         version = ASCEND_BSP_INTAKE_VERSION
     if paint.masks:
-        version = VENGEANCE_PAINT_INTAKE_VERSION
+        version = ASCEND_TERRAIN_PAINT_VERSION if game == "ascend" else VENGEANCE_PAINT_INTAKE_VERSION
     terrain_art = any("file" in item for item in paint.artwork.values())
-    if terrain_art:
+    if terrain_art and game == "vengeance":
         version = VENGEANCE_ART_INTAKE_VERSION
     if TEXTURE_INDEX in files and game == "vengeance":
         version = VENGEANCE_BSP_MATERIALS_VERSION
@@ -546,6 +549,10 @@ def convert_unreal(source, output, metadata=None):
         header.update(interiors=interiors, interior_review={})
     if paint.masks:
         header["terrain_paint"] = dict(vertices=scene["native_terrain"]["vertices"], masks=paint.masks)
+        if version == ASCEND_TERRAIN_PAINT_VERSION:
+            hidden = sorted(row["slot"] for row in paint.layers if row["hidden"])
+            base = 0 if "0" in paint.masks and 0 not in hidden else None
+            header["terrain_paint"].update(base_slot=base, hidden_slots=hidden)
     if terrain_art:
         header.update(terrain_art=paint.artwork, terrain_uv=paint.projection)
     return publish_intake(header, files, Path(output))

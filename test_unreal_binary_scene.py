@@ -129,6 +129,10 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                        "RelayToggle", "RelayOn", "RelayOff", "DoorRelayOn", "DoorRelayOff", "DoorEnable", "DoorDisable",
                        "DoorToggleSpare")
     strings = (*STRINGS, *sector_names, *door_names)
+    if modern and painted:
+        paint_names = ("Name", "StrProperty", "ArrayProperty", "Layers", "Setup", "AlphaMapIndex", "Hidden",
+                       "TerrainLayerSetup", "TerrainMaterial", "LayerSetup", "PaintMaterial", "Materials", "MappingScale")
+        strings = tuple(dict.fromkeys((*strings, *paint_names)))
     if modern and mesh_artwork:
         artwork_names = ("Texture2D", "MeshColor", "AscendColor", "ByteProperty", "EPixelFormat", "PF_A8R8G8B8",
                          "TextureParameterValues", "ParameterName", "ParameterValue", "NameProperty", "ArrayProperty",
@@ -259,9 +263,11 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
         dims = [("NumVerticesX", width), ("NumVerticesY", height),
                 ("NumPatchesX", width - 1), ("NumPatchesY", height - 1)]
         props = [prop(key, "IntProperty", pack("i", number)) for key, number in dims]
-        data = object_bytes(vector("Location", -1000, -1000, -300), vector("DrawScale3D", 8, 8, 64), *props)
-        data += pack("i", count) + heights + pack("i", count) + holes
+        terrain_fields = [vector("Location", -1000, -1000, -300), vector("DrawScale3D", 8, 8, 64), *props]
+        terrain_arrays = pack("i", count) + heights + pack("i", count) + holes
+        data = object_bytes(*terrain_fields) + terrain_arrays
         imports.append(("Core", "Class", -1, "Terrain"))
+        terrain_export = len(exports)
         exports.append((-len(imports), 1, "Terrain_1", 0, data, 3))
     if legacy_ground:
         width, height = 512, 256
@@ -765,6 +771,30 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
             exports[6] = (-6, 6, "DeckMesh", 0, object_bytes(materials_prop, component=True), 3)
             sibling = prop("Materials", "ArrayProperty", pack("2i", 1, -50000))
             exports.append((-6, 6, "Unmapped", 0, object_bytes(sibling, component=True), 3))
+    if modern and native_terrain and painted:
+        setup_index = 0
+        if source_artwork:
+            assert mesh_artwork
+            setup_index = len(exports) + 1
+            imports.extend((("Core", "Class", -1, "TerrainLayerSetup"), ("Core", "Class", -1, "TerrainMaterial"),
+                            ("Fixture", "MaterialInstanceConstant", -1, "FixtureStone")))
+            layer = reference("Material", setup_index + 1) + name("None")
+            setup = object_bytes(prop("Materials", "ArrayProperty", pack("i", 1) + layer))
+            material = object_bytes(reference("Material", -len(imports)), prop("MappingScale", "FloatProperty", pack("f", 4)))
+            exports.extend(((-len(imports) + 2, 0, "LayerSetup", 0, setup, 3),
+                            (-len(imports) + 1, 0, "PaintMaterial", 0, material, 3)))
+        layer_records = []
+        for surface, index, hidden in (("Grass base", 1, False), ("Rock overlay", 0, False), ("Hidden forest", 2, True)):
+            encoded_surface = surface.encode("ascii") + bytes(1)
+            layer_records.append(prop("Name", "StrProperty", pack("i", len(encoded_surface)) + encoded_surface)
+                                 + reference("Setup", setup_index if index == 1 else 0)
+                                 + prop("AlphaMapIndex", "IntProperty", pack("i", index))
+                                 + prop("Hidden", "BoolProperty", bytes([hidden])) + name("None"))
+        terrain_fields.append(prop("Layers", "ArrayProperty", pack("i", len(layer_records)) + b"".join(layer_records)))
+        overlay = bytes(row % 256 if col >= 255 else 0 for row in range(height) for col in range(width))
+        terrain_arrays += pack("i", 3) + pack("i", count - int(painted == "bad-length")) + overlay
+        terrain_arrays += pack("i", count) + bytes(count) + pack("i", count) + bytes([255]) * count
+        exports[terrain_export] = (*exports[terrain_export][:4], object_bytes(*terrain_fields) + terrain_arrays, 3)
     package = build_package(game, strings, imports, exports, compressed=modern, licensee=27, version=130)
     source.write_bytes(package)
     if legacy_ground and not external_height:
@@ -1363,6 +1393,55 @@ class UnrealBinarySceneTests(unittest.TestCase):
             metadata.write_text(json.dumps(settings), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, r"FixtureTerrain\.pkg in asset_packages"):
                 convert_unreal(source, root / "MissingIntakes")
+
+    def test_ascend_paint_keeps_base_visibility_and_exact_samples_with_mesh_art(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "ascend", native_terrain=True, painted=True, source_artwork=True,
+                                          bsp_world=True, static_mesh="companion", mesh_artwork=True, ascend_body="convex")
+            manifest = convert_unreal(source, root / "Intakes")
+            header, terrain, rows = load_intake(manifest)
+            self.assertEqual(header["format"], 52)
+            self.assertEqual(header["terrain_paint"]["base_slot"], 0)
+            self.assertEqual(header["terrain_paint"]["hidden_slots"], [2])
+            self.assertEqual(terrain["material_layers"], [[0, "Grass base"], [1, "Rock overlay"], [2, "Hidden forest"]])
+            scene = json.loads((manifest.parent / "source-scene.json").read_bytes())
+            layers = scene["native_terrain"]["paint_layers"]
+            self.assertEqual([layer["alpha_map_index"] for layer in layers], [1, 0, 2])
+            width, height, raw = decode_mask((manifest.parent / "terrain-alpha-01.png").read_bytes())
+            self.assertEqual((width, height), (259, 257))
+            self.assertEqual(raw[200 * width + 254:200 * width + 259], bytes([0, 200, 200, 200, 200]))
+            paint = NativeTerrainPaint(manifest.parent, header, [(0, "", "Grass"), (1, "", "Rock"), (2, "", "Forest")],
+                                       ("Grass", "Rock", "Forest"), "Rock")
+            west, east = paint.tile_weights(0, 0), paint.tile_weights(1, 0)
+            self.assertEqual(west[200 * 257 + 254], (1, 0, 0))
+            self.assertAlmostEqual(west[200 * 257 + 256][1], 200 / 255)
+            self.assertEqual(west[200 * 257 + 256], east[200 * 257])
+            self.assertEqual(paint.channels, (0, 1))
+            self.assertEqual(header["terrain_art"]["0"]["source"], "MeshColor.upk")
+            self.assertEqual(layers[0]["mapping"]["mappingscale"], 4)
+            self.assertIn("model-textures.json", header["files"])
+            self.assertTrue(any(reference.startswith("unrealmesh:bsp.") for reference in header["interiors"]))
+            self.assertTrue(any("texture repeat" in row.get("reason", "") for row in rows))
+            share = export_public_layout(manifest, root / "Share.zip")
+            public, public_terrain, _ = load_intake(unpack_intake(share, root / "Public"))
+            self.assertEqual(public["format"], 22)
+            self.assertNotIn("terrain_paint", public)
+            self.assertFalse(public_terrain["material_layers"])
+            header["terrain_paint"]["hidden_slots"] = []
+            manifest.write_text(json.dumps(header), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "paint visibility"):
+                load_intake(manifest)
+
+    def test_ascend_malformed_alpha_keeps_terrain_geometry_and_reports_the_error(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "ascend", native_terrain=True, painted="bad-length")
+            header, terrain, rows = load_intake(convert_unreal(source, root / "Intakes"))
+            self.assertEqual(header["format"], 22)
+            self.assertNotIn("terrain_paint", header)
+            self.assertEqual(terrain["tile_grid"], [[0, 1]])
+            self.assertTrue(any("alpha arrays do not match" in row.get("reason", "") for row in rows))
 
     def test_ascend_level_bsp_keeps_compiled_uvs_and_separates_collision(self):
         with TemporaryDirectory() as directory:

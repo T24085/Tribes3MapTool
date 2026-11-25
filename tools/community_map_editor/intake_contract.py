@@ -16,7 +16,8 @@ from native_terrain_paint import MAX_PAINT_BYTES, MAX_PAINT_LAYERS, MAX_PAINT_PN
 from sky_intake import MAX_SKIES, MAX_SKY_BYTES, MAX_SKY_SLOTS, SKY_INDEX, SKY_PNG, validate_sky_artwork
 from source_profiles import (ASCEND, ASCEND_ART_VERSIONS, ASCEND_BSP_INTAKE_VERSION,
                              ASCEND_COLLISION_VERSIONS, ASCEND_CONVEX_COLLISION_VERSION,
-                             ASCEND_PLACEMENT_ART_VERSION, ASCEND_PRIVATE_MESH_VERSIONS,
+                             ASCEND_LEVEL_VERSIONS, ASCEND_PLACEMENT_ART_VERSION, ASCEND_PRIVATE_MESH_VERSIONS,
+                             ASCEND_TERRAIN_PAINT_VERSION,
                              BRUSH_PREVIEW_REFERENCE, NAMES, T2, T2_ACOUSTIC_COLLISION_VERSION, T2_ACOUSTIC_VERSIONS,
                              T2_AUDIO_PROFILES_VERSION, T2_AUDIO_VERSIONS,
                              T2_DIF_ANIMATION_VERSION, T2_DIF_LOD_LIGHT_VERSION,
@@ -55,9 +56,12 @@ def intake_filename(name, version):
     if version in UNREAL_INTAKE_VERSIONS:
         return (name in {"objects.json", "terrain.json", "height.png", "minimap.png", UNREAL_SCENE}
                 or INTERIOR_FILE.fullmatch(name)
-                or version in (*VENGEANCE_TERRAIN_VERSIONS, *VENGEANCE_MODEL_VERSIONS) and PAINT_FILE.fullmatch(name)
-                or version in (VENGEANCE_ART_INTAKE_VERSION, *VENGEANCE_MODEL_VERSIONS) and ART_FILE.fullmatch(name)
-                or version in (*VENGEANCE_MODEL_VERSIONS, *ASCEND_ART_VERSIONS, *ASCEND_COLLISION_VERSIONS)
+                or version in (*VENGEANCE_TERRAIN_VERSIONS, *VENGEANCE_MODEL_VERSIONS, ASCEND_TERRAIN_PAINT_VERSION)
+                and PAINT_FILE.fullmatch(name)
+                or version in (VENGEANCE_ART_INTAKE_VERSION, *VENGEANCE_MODEL_VERSIONS, ASCEND_TERRAIN_PAINT_VERSION)
+                and ART_FILE.fullmatch(name)
+                or version in (*VENGEANCE_MODEL_VERSIONS, *ASCEND_ART_VERSIONS, *ASCEND_COLLISION_VERSIONS,
+                               *ASCEND_LEVEL_VERSIONS)
                 and (name == TEXTURE_INDEX or TEXTURE_FILE.fullmatch(name)))
     if 11 <= version <= 21:
         return name in {"objects.json", "terrain.json", "height.png", "minimap.png"} or (
@@ -79,9 +83,9 @@ def intake_filename(name, version):
 
 def max_intake_files(version):
     if version in UNREAL_INTAKE_VERSIONS:
-        if version in VENGEANCE_MODEL_VERSIONS:
+        if version in (*VENGEANCE_MODEL_VERSIONS, ASCEND_TERRAIN_PAINT_VERSION):
             return 6 + MAX_INTAKE_INTERIORS + 2 * MAX_PAINT_LAYERS + MAX_TEXTURES
-        if version in (*ASCEND_ART_VERSIONS, *ASCEND_COLLISION_VERSIONS):
+        if version in (*ASCEND_ART_VERSIONS, *ASCEND_COLLISION_VERSIONS, ASCEND_BSP_INTAKE_VERSION):
             return 6 + MAX_INTAKE_INTERIORS + MAX_TEXTURES
         return (5 + MAX_INTAKE_INTERIORS + (MAX_PAINT_LAYERS if version in VENGEANCE_TERRAIN_VERSIONS else 0)
                 + (MAX_PAINT_LAYERS if version == VENGEANCE_ART_INTAKE_VERSION else 0))
@@ -210,7 +214,9 @@ def validate_tiled_heightfield(terrain, height_header, *, painted, legacy=True):
 
 def validate_native_paint(header, terrain, scene, mask_metadata):
     field = header["terrain_paint"]
-    if (not isinstance(field, dict) or set(field) != {"vertices", "masks"}
+    ascend = header["format"] == ASCEND_TERRAIN_PAINT_VERSION
+    keys = {"vertices", "masks", "base_slot", "hidden_slots"} if ascend else {"vertices", "masks"}
+    if (not isinstance(field, dict) or set(field) != keys
             or not isinstance(field["vertices"], list) or len(field["vertices"]) != 2
             or not isinstance(field["masks"], dict) or not field["masks"]):
         raise ValueError("Invalid native terrain paint inventory.")
@@ -222,7 +228,7 @@ def validate_native_paint(header, terrain, scene, mask_metadata):
     if (not isinstance(ground, dict) or ground.get("vertices") != field["vertices"]
             or not isinstance(ground.get("paint_layers"), list) or not ground["paint_layers"]):
         raise ValueError("Native terrain paint does not match its source terrain.")
-    names, layers = {}, []
+    names, layers, hidden_slots = {}, [], []
     for item in ground["paint_layers"]:
         if not isinstance(item, dict):
             raise ValueError("Invalid source terrain layer.")
@@ -241,10 +247,24 @@ def validate_native_paint(header, terrain, scene, mask_metadata):
         if (not isinstance(dimensions, list) or len(dimensions) != 2 or item.get("filename") != filename
                 or mask_metadata.get(filename) != (*dimensions, item.get("alpha_sha256"))):
             raise ValueError("Native terrain alpha pixels do not match the source layer.")
+        if ascend:
+            if (dimensions != field["vertices"] or type(item.get("hidden")) is not bool
+                    or type(item.get("alpha_map_index")) is not int
+                    or not -1 <= item["alpha_map_index"] < MAX_PAINT_LAYERS):
+                raise ValueError("Invalid Ascend terrain layer metadata.")
+            if item["hidden"]:
+                hidden_slots.append(slot)
         names[str(slot)] = filename
         layers.append([slot, surface])
     if field["masks"] != names or set(names.values()) != set(mask_metadata) or terrain["material_layers"] != sorted(layers):
         raise ValueError("Native terrain paint does not match its material slots.")
+    if ascend:
+        base = 0 if "0" in names and 0 not in hidden_slots else None
+        if ((field["base_slot"] is not None and type(field["base_slot"]) is not int)
+                or field["base_slot"] != base or not isinstance(field["hidden_slots"], list)
+                or any(type(slot) is not int for slot in field["hidden_slots"])
+                or field["hidden_slots"] != sorted(hidden_slots)):
+            raise ValueError("Ascend paint visibility does not match its layers.")
     if "terrain_uv" in header:
         projection = header["terrain_uv"]
         slots = {slot for slot, bind in header["terrain_art"].items() if "file" in bind}
@@ -658,7 +678,8 @@ def load_intake(manifest):
     unreal = header["format"] in UNREAL_INTAKE_VERSIONS
     native_models = header["format"] in VENGEANCE_MODEL_VERSIONS
     ascend_art = header["format"] in ASCEND_ART_VERSIONS
-    ascend_bsp = header["format"] == ASCEND_BSP_INTAKE_VERSION
+    ascend_level = header["format"] in ASCEND_LEVEL_VERSIONS
+    ascend_paint = header["format"] == ASCEND_TERRAIN_PAINT_VERSION
     ascend_simple_collision = header["format"] in ASCEND_COLLISION_VERSIONS
     ascend_convex = header["format"] == ASCEND_CONVEX_COLLISION_VERSION
     ascend_placement_art = header["format"] == ASCEND_PLACEMENT_ART_VERSION
@@ -667,9 +688,9 @@ def load_intake(manifest):
     surface_detail = header["format"] == VENGEANCE_SURFACE_DETAIL_VERSION
     vengeance_static = header["format"] in VENGEANCE_MESH_VERSIONS or shader_inputs or brush_intake
     vengeance_mesh_art = header["format"] == VENGEANCE_MESH_MATERIALS_VERSION
-    native_paint = header["format"] in VENGEANCE_TERRAIN_VERSIONS or native_models and "terrain_paint" in header
+    native_paint = ascend_paint or header["format"] in VENGEANCE_TERRAIN_VERSIONS or native_models and "terrain_paint" in header
     native_art = (header["format"] == VENGEANCE_ART_INTAKE_VERSION
-                  or native_models and "terrain_art" in header and native_paint)
+                  or (native_models or ascend_paint) and "terrain_art" in header and native_paint)
     if (
         not isinstance(inventory, dict)
         or not {"objects.json", "terrain.json", "height.png"} <= inventory.keys()
@@ -806,7 +827,7 @@ def load_intake(manifest):
             if model_format == ASCEND_BSP:
                 source = geometry["source"]
                 receipt = header["sources"][0]
-                if (not ascend_bsp or model_files[name] != f"unrealmesh:bsp.{source['export']}"
+                if (not ascend_level or model_files[name] != f"unrealmesh:bsp.{source['export']}"
                         or any(source[key] != receipt[key] for key in ("name", "sha256"))):
                     raise ValueError("BSP model does not match the Ascend package source.")
                 ascend_bsp_files.add(name)
@@ -841,14 +862,14 @@ def load_intake(manifest):
                 if model_format == ASCEND_STATIC_MESH:
                     simple = geometry["collision"].get("simple")
                     if simple:
-                        if not (ascend_simple_collision or ascend_bsp):
+                        if not (ascend_simple_collision or ascend_level):
                             raise ValueError("Ascend simple collision requires intake version 41 or later.")
                         has_simple_collision = True
                         if any(shape["kind"] == "convex" for shape in simple["shapes"]):
-                            if not (ascend_convex or ascend_bsp):
+                            if not (ascend_convex or ascend_level):
                                 raise ValueError("Ascend convex collision requires intake version 42.")
                             has_convex = True
-                    if ascend_art or (ascend_simple_collision or ascend_bsp) and has_textures:
+                    if ascend_art or (ascend_simple_collision or ascend_level) and has_textures:
                         slots[name] = {str(slot) for slot in material_slots(geometry)}
                 if model_format == VENGEANCE_STATIC_MESH:
                     vengeance_mesh_files.add(name)
@@ -942,15 +963,15 @@ def load_intake(manifest):
         raise ValueError("Ascend collision intake requires authored simple shapes.")
     if ascend_convex and not has_convex:
         raise ValueError("Ascend convex collision intake requires an authored hull.")
-    if ascend_bsp and not ascend_bsp_files:
+    if header["format"] == ASCEND_BSP_INTAKE_VERSION and not ascend_bsp_files:
         raise ValueError("Ascend BSP intake requires compiled level geometry.")
-    if (ascend_simple_collision or ascend_bsp) and has_textures and isinstance(docs[TEXTURE_INDEX], dict):
+    if (ascend_simple_collision or ascend_level) and has_textures and isinstance(docs[TEXTURE_INDEX], dict):
         ascend_placement_art = any(key.startswith("placement-") for key in docs[TEXTURE_INDEX])
     if has_textures and not ascend_placement_art:
-        legacy_art = legacy_textures or native_models or ascend_art or ascend_simple_collision or ascend_bsp
+        legacy_art = legacy_textures or native_models or ascend_art or ascend_simple_collision or ascend_level
         validate_bindings(docs[TEXTURE_INDEX], slots, inventory,
                           legacy_sizes=texture_sizes if legacy_art else None,
-                          receipts=receipts, native_bsp=native_models or ascend_art or ascend_simple_collision or ascend_bsp,
+                          receipts=receipts, native_bsp=native_models or ascend_art or ascend_simple_collision or ascend_level,
                           shader_inputs=shader_inputs or brush_intake,
                           surface_detail=surface_detail or brush_intake, require_extended=not brush_intake)
         if vengeance_mesh_art and not any("file" in binding for filename in vengeance_mesh_files

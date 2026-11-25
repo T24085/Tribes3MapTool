@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 52",
+  "description": "Private Ascend draft with ordered terrain paint, optional source color, and optional meshes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "profile", "source_game", "name", "reader", "profile_sha256", "sources", "files", "coverage", "minimap", "terrain_paint"],
+  "properties": {
+    "format": {"const": 52},
+    "profile": {"$ref": "intake-v41.schema.json#/properties/profile"},
+    "source_game": {"$ref": "intake-v41.schema.json#/properties/source_game"},
+    "name": {"$ref": "intake-v41.schema.json#/properties/name"},
+    "reader": {"$ref": "intake-v41.schema.json#/properties/reader"},
+    "profile_sha256": {"$ref": "intake-v41.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v41.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v41.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v41.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v41.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v41.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v41.schema.json#/properties/interior_review"},
+    "terrain_paint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vertices", "masks", "base_slot", "hidden_slots"],
+      "properties": {
+        "vertices": {"$ref": "intake-v24.schema.json#/properties/terrain_paint/properties/vertices"},
+        "masks": {"$ref": "intake-v24.schema.json#/properties/terrain_paint/properties/masks"},
+        "base_slot": {"enum": [0, null]},
+        "hidden_slots": {
+          "type": "array", "maxItems": 32, "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 0, "maximum": 31}
+        }
+      }
+    },
+    "terrain_art": {"$ref": "intake-v25.schema.json#/properties/terrain_art"},
+    "terrain_uv": {"$ref": "intake-v25.schema.json#/properties/terrain_uv"},
+    "files": {
+      "type": "object",
+      "maxProperties": 454,
+      "required": ["objects.json", "terrain.json", "height.png", "minimap.png", "source-scene.json"],
+      "propertyNames": {"anyOf": [
+        {"enum": ["objects.json", "terrain.json", "height.png", "minimap.png", "source-scene.json", "model-textures.json"]},
+        {"pattern": "^interior-[0-9]{4}\\.json$"},
+        {"pattern": "^texture_[a-f0-9]{32}\\.png$"},
+        {"pattern": "^terrain-alpha-(?:0[0-9]|[12][0-9]|3[01])\\.png$"},
+        {"pattern": "^terrain-art-[a-f0-9]{32}\\.png$"}
+      ]},
+      "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    }
+  },
+  "dependentRequired": {
+    "interiors": ["interior_review"],
+    "interior_review": ["interiors"],
+    "terrain_art": ["terrain_uv"],
+    "terrain_uv": ["terrain_art"]
+  }
+}
