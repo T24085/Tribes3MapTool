@@ -768,6 +768,21 @@ textures. Use **Export public layout…** for sharing layouts. The GLB ZIP
 is a mesh export. Map placement, terrain, objectives, animation, and the
 original shader and lighting data stay in the verified intake.
 
+### Export and reopen a private intake
+
+Choose **Export private intake…** to save the complete intake in one ZIP
+with its portable GLBs, if the intake has exportable meshes. Use **Open
+source or intake…** to reopen it. The editor reads placement, terrain,
+objectives, and lighting from the original intake members. Other tools
+can use the files under `assets/meshes/` independently.
+
+The ZIP keeps the original `manifest.json` and its inventoried files.
+When GLBs are present, `mesh-export.json` also contains the SHA-256 of
+the original manifest under `intake_sha256`. Import checks the linked
+receipt, exact file inventory, and each GLB before adding the intake to
+the source library. Keep this ZIP private because it can include original
+artwork and audio.
+
 ### Inspect source objects and feature support
 
 The **All** tab pins blocked objects first, followed by rows that need

@@ -15,6 +15,7 @@ from tempfile import TemporaryDirectory
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from intake_contract import bounded, load_intake, load_intake_geometry
+from intake_mesh_assets import MAX_ASSET_BYTES, MAX_ASSET_TOTAL, MAX_RECEIPT_BYTES, RECEIPT, mesh_models
 from interior_geometry import UNREAL_GEOMETRY, VENGEANCE_BSP, dif_detail_mesh, render_sections, visible_material
 from model_textures import MAX_TEXTURE_BYTES, load_texture_index
 
@@ -135,17 +136,9 @@ def render_mesh(data, bindings):
         yield slot, label, [gltf_axes(point, .01) for point in points], uv, triangles, values
 
 
-def export_meshes(manifest, destination):
-    manifest = Path(manifest).resolve(strict=True)
-    destination = Path(destination)
-    if destination.suffix.casefold() != '.zip':
-        raise ValueError('Save the private mesh assets as a ZIP file.')
-    header, _, _ = load_intake(manifest)
-    models = {**header.get('interiors', {}), **header.get('shapes', {})}
-    if not models:
-        raise ValueError('This intake contains no decoded model geometry.')
+def write_mesh_assets(bundle, folder, header, *, intake_sha256=None):
+    models = mesh_models(header)
     inventory = header['files']
-    folder = manifest.parent
     artwork = load_texture_index(folder, inventory)
 
     def read_texture(filename):
@@ -158,43 +151,61 @@ def export_meshes(manifest, destination):
         return gltf_base_color(data)
 
     records, files = [], {}
+    total = 0
+    for reference, filename in sorted(models.items()):
+        checksum = inventory[filename]
+        model, _ = load_intake_geometry(folder, filename, checksum)
+        stem = Path(filename).stem
+        bindings = artwork.get(filename, {})
+        record = dict(reference=reference, geometry_sha256=checksum, levels=[])
+
+        def add(suffix, sections, materials):
+            nonlocal total
+            name = f'assets/meshes/{stem}{suffix}.glb'
+            data = make_glb(reference + suffix, sections, materials, read_texture)
+            total += len(data)
+            if len(data) > MAX_ASSET_BYTES or total > MAX_ASSET_TOTAL:
+                raise ValueError('The GLB inventory exceeds the mesh archive size limit.')
+            bundle.writestr(name, data)
+            files[name] = sha256(data).hexdigest()
+            return name
+
+        if model.get('render', True) and any(visible_material(model, row[0]) for row in model['triangles']):
+            record['levels'].append(dict(lod=0, file=add('', render_mesh(model, bindings), bindings)))
+        for index, level in enumerate(model.get('lods', {}).get('secondary', ()), 1):
+            detail = dif_detail_mesh(model, level)
+            if any(visible_material(detail, row[0]) for row in detail['triangles']):
+                record['levels'].append(dict(lod=index, source_detail=level['source_detail'], min_pixels=level['min_pixels'],
+                                             file=add(f'-lod{index}', render_mesh(detail, bindings), bindings)))
+        collision = model.get('collision', {})
+        if collision.get('triangles'):
+            sign = 1 if model['format'] in UNREAL_GEOMETRY else -1
+            points = [(x, z, sign * y) for x, y, z in collision['vertices_m']]
+            record['triangle_collision'] = add('-collision', [(0, 'Collision', points, (), collision['triangles'], {})], {})
+        records.append(record)
+    if files:
+        receipt = dict(format=1, kind='tribes-private-mesh-export', profile=header['profile'],
+                       units='metres', up='+Y', handedness='right', models=records, files=files)
+        if intake_sha256 is not None:
+            receipt['intake_sha256'] = intake_sha256
+        raw = json.dumps(receipt, indent=2, ensure_ascii=False).encode('utf-8')
+        if len(raw) > MAX_RECEIPT_BYTES:
+            raise ValueError('The GLB inventory receipt exceeds the size limit.')
+        bundle.writestr(RECEIPT, raw)
+    return len(files)
+
+
+def export_meshes(manifest, destination):
+    manifest = Path(manifest).resolve(strict=True)
+    destination = Path(destination)
+    if destination.suffix.casefold() != '.zip':
+        raise ValueError('Save the private mesh assets as a ZIP file.')
+    header, _, _ = load_intake(manifest)
     with TemporaryDirectory(dir=destination.parent) as work:
         archive = Path(work) / 'meshes.zip'
         with ZipFile(archive, 'w', ZIP_DEFLATED) as bundle:
-            for reference, filename in sorted(models.items()):
-                checksum = inventory[filename]
-                model, _ = load_intake_geometry(folder, filename, checksum)
-                stem = Path(filename).stem
-                bindings = artwork.get(filename, {})
-                record = dict(reference=reference, geometry_sha256=checksum, levels=[])
-
-                def add(suffix, sections, materials):
-                    name = f'assets/meshes/{stem}{suffix}.glb'
-                    data = make_glb(reference + suffix, sections, materials, read_texture)
-                    bundle.writestr(name, data)
-                    files[name] = sha256(data).hexdigest()
-                    return name
-
-                if model.get('render', True) and any(visible_material(model, row[0]) for row in model['triangles']):
-                    record['levels'].append(dict(lod=0, file=add('', render_mesh(model, bindings), bindings)))
-                for index, level in enumerate(model.get('lods', {}).get('secondary', ()), 1):
-                    detail = dif_detail_mesh(model, level)
-                    if any(visible_material(detail, row[0]) for row in detail['triangles']):
-                        record['levels'].append(dict(lod=index, source_detail=level['source_detail'],
-                                                     min_pixels=level['min_pixels'],
-                                                     file=add(f'-lod{index}', render_mesh(detail, bindings), bindings)))
-                collision = model.get('collision', {})
-                if collision.get('triangles'):
-                    sign = 1 if model['format'] in UNREAL_GEOMETRY else -1
-                    points = [(x, z, sign * y) for x, y, z in collision['vertices_m']]
-                    record['triangle_collision'] = add('-collision', [(0, 'Collision', points, (),
-                                                                        collision['triangles'], {})], {})
-                records.append(record)
-            if not files:
+            if not write_mesh_assets(bundle, manifest.parent, header):
                 raise ValueError('The intake has no static render or collision triangles to export.')
-            receipt = dict(format=1, kind='tribes-private-mesh-export', profile=header['profile'],
-                           units='metres', up='+Y', handedness='right', models=records, files=files)
-            bundle.writestr('mesh-export.json', json.dumps(receipt, indent=2, ensure_ascii=False))
         os.replace(archive, destination)
     return destination
 

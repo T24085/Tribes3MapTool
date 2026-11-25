@@ -12,6 +12,7 @@ import zipfile
 from conversion_rules import checksum, sha256_file, write
 from boundary_polygon_window import show_polygon
 from intake_contract import load_intake, load_mission_audio, playable_bounds
+from intake_exchange import export_private_intake
 from map_pipeline import PipelineRun, pipeline_config
 from interior_lighting import lighting_coverage, load_lighting_index
 from mesh_glb import export_meshes
@@ -867,6 +868,7 @@ def run(library, meshes=(), drafts=()):
             artwork_button.pack_forget()
         rule_button.configure(state="normal")
         public_button.configure(state="normal")
+        private_button.configure(state="normal")
         mesh_export_button.configure(state="normal" if state["models"] else "disabled")
 
     def decode(event=None):
@@ -942,6 +944,7 @@ def run(library, meshes=(), drafts=()):
         artwork_button.pack_forget()
         rule_button.configure(state="disabled")
         public_button.configure(state="disabled")
+        private_button.configure(state="disabled")
         mesh_export_button.configure(state="disabled")
 
     def import_unreal(path, parent):
@@ -1046,6 +1049,7 @@ def run(library, meshes=(), drafts=()):
         boundary_button.configure(state="disabled")
         rule_button.configure(state="disabled")
         public_button.configure(state="disabled")
+        private_button.configure(state="disabled")
         mesh_export_button.configure(state="disabled")
         notice.set("Select a mission from the archive.")
         table.delete(*table.get_children())
@@ -1243,6 +1247,23 @@ def run(library, meshes=(), drafts=()):
             return
         notice.set("Public layout saved. Reopen the ZIP with Open source or intake.")
 
+    def save_private_intake():
+        path = filedialog.asksaveasfilename(
+            parent=root, title="Export private intake with original assets",
+            initialfile="private-map-intake.zip", defaultextension=".zip", filetypes=[("Intake ZIP", "*.zip")],
+        )
+        if not path:
+            return
+        notice.set("Exporting and verifying the private intake…")
+        root.update_idletasks()
+        try:
+            export_private_intake(state["manifest"], path)
+        except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
+            notice.set("Private intake export failed.")
+            messagebox.showerror("Export private intake", str(exc), parent=root)
+            return
+        notice.set("Private intake saved. Reopen the ZIP with Open source or intake.")
+
     def save_mesh_assets():
         path = filedialog.asksaveasfilename(
             parent=root, title="Export private GLB mesh assets",
@@ -1287,6 +1308,8 @@ def run(library, meshes=(), drafts=()):
                show_source_library(root, library, drafts, open_saved_intake)).pack(side="left", padx=(0, 8))
     public_button = ttk.Button(bar, text="Export public layout…", state="disabled", command=save_public_layout)
     public_button.pack(side="left", padx=(0, 8))
+    private_button = ttk.Button(bar, text="Export private intake…", state="disabled", command=save_private_intake)
+    private_button.pack(side="left", padx=(0, 8))
     choices.pack(side="left")
     choices.bind("<<ComboboxSelected>>", choose_archive_mission)
     def bind_review():

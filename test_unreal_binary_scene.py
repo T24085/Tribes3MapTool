@@ -1941,6 +1941,54 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 self.assertEqual(texture["extensions"]["KHR_texture_transform"]["scale"], [2.0, .5])
                 self.assertEqual(len(asset["images"]), 2)
 
+    def test_private_intake_reopens_with_verified_glbs_and_keeps_public_layout_clean(self):
+        from intake_exchange import export_private_intake
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "ascend", static_mesh="companion", mesh_artwork=True,
+                                          ascend_shader="vertex-rgb", ascend_vertices="half")
+            manifest = convert_unreal(source, root / "Intakes")
+            archive = export_private_intake(manifest, root / "Private.zip")
+            with ZipFile(archive) as bundle:
+                contents = {name: bundle.read(name) for name in bundle.namelist()}
+            self.assertEqual(contents["manifest.json"], manifest.read_bytes())
+            receipt = json.loads(contents["mesh-export.json"])
+            self.assertEqual(receipt["intake_sha256"], sha256(manifest.read_bytes()).hexdigest())
+            model, = receipt["models"]
+            render = model["levels"][0]["file"]
+            collision = model["triangle_collision"]
+            self.assertEqual(set(contents), {"manifest.json", "mesh-export.json", render, collision,
+                                             *load_intake(manifest)[0]["files"]})
+
+            library = root / "Imported"
+            plain = root / "Plain.zip"
+            with ZipFile(plain, "w") as bundle:
+                for name in set(contents) - {"mesh-export.json", render, collision}:
+                    bundle.writestr(name, contents[name])
+            plain_manifest = unpack_intake(plain, library)
+            reopened = unpack_intake(archive, library)
+            self.assertNotEqual(plain_manifest, reopened)
+            self.assertEqual(load_intake(reopened), load_intake(manifest))
+            for name in (render, collision):
+                self.assertEqual((reopened.parent / name).read_bytes(), contents[name])
+            self.assertEqual(unpack_intake(archive, library), reopened)
+
+            public = export_public_layout(reopened, root / "Public.zip")
+            with ZipFile(public) as bundle:
+                self.assertFalse(set(bundle.namelist()) & {"mesh-export.json", render, collision})
+
+            corrupt = contents[render][:-1] + bytes([contents[render][-1] ^ 1])
+            with ZipFile(root / "Corrupt.zip", "w") as bundle:
+                for name, data in contents.items():
+                    bundle.writestr(name, corrupt if name == render else data)
+            with self.assertRaisesRegex(ValueError, "GLB asset checksum mismatch"):
+                unpack_intake(root / "Corrupt.zip", library)
+
+            (reopened.parent / render).write_bytes(corrupt)
+            with self.assertRaisesRegex(ValueError, "GLB asset checksum mismatch"):
+                unpack_intake(archive, library)
+
     def test_world_bsp_exports_distinct_visual_and_collision_sections(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

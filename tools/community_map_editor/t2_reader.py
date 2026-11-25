@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path, PurePosixPath
 import re
+from shutil import copyfileobj
 import struct
 import tempfile
 import zipfile
@@ -16,6 +17,7 @@ from intake_contract import (
     MAX_INTAKE_INTERIOR_BYTES, MAX_MANIFEST_BYTES, PLAYABLE_BOUNDS,
     bounded, intake_file_limit, intake_filename, intake_scene_format, load_intake, max_intake_files, validate_minimap,
 )
+from intake_mesh_assets import MAX_ASSET_BYTES, MAX_ASSET_FILES, MAX_ASSET_TOTAL, MAX_RECEIPT_BYTES, RECEIPT, validate_receipt, verify_files
 from minimap import framing, grayscale_png, terrain_png
 from mission_audio import AUDIO_INDEX, AUDIO_MEMBER, MAX_AUDIO_BYTES, MAX_CLIPS, collect_audio
 from mission_equipment import mission_equipment
@@ -625,13 +627,13 @@ def publish_intake(header, files, output):
 
 
 def unpack_intake(source, library):
-    """Read only inventoried flat members. Verify hashes before publishing the folder."""
+    """Read only inventoried members and verify hashes before publishing the intake."""
     with zipfile.ZipFile(source) as archive:
         entries = [i for i in archive.infolist() if not i.is_dir()]
         manifests = [
             i for i in entries if PurePosixPath(i.filename).name == "manifest.json"
         ]
-        if len(manifests) != 1 or len(entries) > 1 + MAX_INTAKE_FILES:
+        if len(manifests) != 1 or len(entries) > 2 + MAX_INTAKE_FILES + MAX_ASSET_FILES:
             raise ValueError("Choose a ZIP with one intake manifest.")
         entry = manifests[0]
         if entry.file_size > MAX_MANIFEST_BYTES:
@@ -639,18 +641,30 @@ def unpack_intake(source, library):
         manifest = read_member(archive, entry.filename)
         header = json.loads(manifest)
         version = intake_scene_format(header)
-        names = header["files"]
+        names = header.get("files")
         if not isinstance(names, dict):
             raise ValueError("Invalid intake file list.")
-        prefix = entry.filename[: -len("manifest.json")]
-        if (
-            set(i.filename for i in entries)
-            != {prefix + n for n in ["manifest.json", *names]}
-            or len(entries) != len(names) + 1
-        ):
-            raise ValueError("ZIP members do not match the manifest.")
+        if len(names) > max_intake_files(version):
+            raise ValueError("Oversized intake inventory.")
         if any(not intake_filename(n, version) for n in names):
             raise ValueError("Unexpected intake member.")
+        prefix = entry.filename[: -len("manifest.json")]
+        members = {info.filename: info for info in entries}
+        expected = {prefix + n for n in ["manifest.json", *names]}
+        receipt = None
+        assets = {}
+        if receipt_info := members.get(prefix + RECEIPT):
+            if receipt_info.file_size > MAX_RECEIPT_BYTES:
+                raise ValueError("Oversized GLB asset receipt.")
+            receipt = archive.read(receipt_info)
+            assets = validate_receipt(receipt, manifest, header)
+            expected.update(prefix + n for n in [RECEIPT, *assets])
+        if members.keys() != expected or len(entries) != len(expected):
+            raise ValueError("ZIP members do not match the manifest.")
+        asset_members = {n: members[prefix + n] for n in assets}
+        if (any(info.file_size > MAX_ASSET_BYTES for info in asset_members.values())
+                or sum(info.file_size for info in asset_members.values()) > MAX_ASSET_TOTAL):
+            raise ValueError("Oversized GLB asset inventory.")
         if sum(archive.getinfo(prefix + n).file_size for n in names if INTERIOR_FILE.fullmatch(n) or SHAPE_FILE.fullmatch(n)) > MAX_INTAKE_INTERIOR_BYTES:
             raise ValueError("Oversized intake model geometry.")
         if sum(archive.getinfo(prefix + n).file_size for n in names if TEXTURE_FILE.fullmatch(n)) > MAX_TEXTURE_BYTES:
@@ -666,11 +680,10 @@ def unpack_intake(source, library):
         audio = [archive.getinfo(prefix + n) for n in names if AUDIO_MEMBER.fullmatch(n)]
         if len(audio) > MAX_CLIPS or sum(entry.file_size for entry in audio) > MAX_AUDIO_BYTES:
             raise ValueError("Oversized intake mission audio.")
-        if len(names) > max_intake_files(version):
-            raise ValueError("Oversized intake inventory.")
         library = Path(library)
         library.mkdir(parents=True, exist_ok=True)
-        destination = library / ("intake-" + hashlib.sha256(manifest).hexdigest()[:16])
+        identity = manifest if receipt is None else manifest + b"\0" + receipt
+        destination = library / ("intake-" + hashlib.sha256(identity).hexdigest()[:16])
         with tempfile.TemporaryDirectory(dir=library) as tmp:
             stage = Path(tmp) / "intake"
             stage.mkdir()
@@ -680,15 +693,26 @@ def unpack_intake(source, library):
                     raise ValueError("Oversized intake member.")
                 (stage / n).write_bytes(archive.read(info))
             (stage / "manifest.json").write_bytes(manifest)
+            if receipt is not None:
+                (stage / RECEIPT).write_bytes(receipt)
+                (stage / "assets" / "meshes").mkdir(parents=True)
+                for name, info in asset_members.items():
+                    with archive.open(info) as incoming, (stage / name).open("xb") as outgoing:
+                        copyfileobj(incoming, outgoing)
+                verify_files(stage.resolve(), assets)
             load_intake(stage / "manifest.json")
             try:
                 stage.rename(destination)
             except OSError:
                 if not destination.is_dir():
                     raise
-            if (destination / "manifest.json").read_bytes() != manifest:
-                raise ValueError("Intake library collision.")
-            load_intake(destination / "manifest.json")
+                if bounded(destination / "manifest.json", MAX_MANIFEST_BYTES) != manifest:
+                    raise ValueError("Intake library collision.")
+                if receipt is not None:
+                    if bounded(destination / RECEIPT, MAX_RECEIPT_BYTES) != receipt:
+                        raise ValueError("GLB asset receipt changed in the intake library.")
+                    verify_files(destination.resolve(), assets)
+                load_intake(destination / "manifest.json")
         return destination / "manifest.json"
 
 
