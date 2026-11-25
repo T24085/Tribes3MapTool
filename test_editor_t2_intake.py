@@ -27,7 +27,7 @@ from interior_lighting import (LIGHTING_INDEX, alarm_switches_material, lighting
                                load_lighting_index, model_lighting)
 from map_pipeline import PipelineRun, pipeline_config, validate_pipeline
 from mesh_mappings import placements, source_reference, source_transform
-from mission_audio import AUDIO_INDEX, AUDIO_MEMBER, audio_playback
+from mission_audio import AUDIO_INDEX, AUDIO_MEMBER, audio_playback, audio_review, fixed_layout, write_pcm16
 from mission_weather import cloud_layers, precipitation_emitters
 from object_catalog import build_rows, classify, load_catalog, source_fields
 from minimap import export_host_minimap, framing, terrain_pixels, view_transform
@@ -91,6 +91,11 @@ class IntakeTests(unittest.TestCase):
             isLooping="1"; is3D="0"; outsideAmbient="0"; useProfileDescription="0";
             loopCount="2"; minLoopGap="350";
           };
+          new AudioEmitter(Fixed) {
+            position="2 3 4"; fileName="fx/private/alias.wav"; volume="0.25";
+            isLooping="1"; is3D="0"; outsideAmbient="0"; useProfileDescription="0";
+            loopCount="2"; minLoopGap="350"; maxLoopGap="350";
+          };
         };''', encoding="utf-8")
         clip = io.BytesIO()
         with wave.open(clip, "wb") as audio:
@@ -142,9 +147,33 @@ class IntakeTests(unittest.TestCase):
         self.assertIn("delay bounds", by_name["Incomplete"]["reason"])
         allowed = {row["id"] for row in rows}
         planned = audio_playback(index, allowed)
-        self.assertEqual(planned, [(index["emitters"][1], index["clips"]["fx/private/alias.wav"])])
+        alias = index["clips"]["fx/private/alias.wav"]
+        layout = {"plays": 3, "gap_frames": 2800, "looping": False, "size": 11484}
+        self.assertEqual(planned, [(index["emitters"][1], alias, None), (index["emitters"][-1], alias, layout)])
         self.assertEqual(audio_playback(index, allowed, repeat_tools=True),
-                         planned + [(index["emitters"][-2], index["clips"]["fx/private/alias.wav"])])
+                         [planned[0], (index["emitters"][-3], alias, None), planned[1]])
+        self.assertIsNone(fixed_layout((10000, 600, 600), alias["pcm"]))
+        baked = self.folder / "baked.wav"
+        write_pcm16(raw, baked, layout=layout)
+        with wave.open(str(baked), "rb") as audio:
+            samples = b"\x00\x01" * 40
+            self.assertEqual(audio.getnframes(), 5720)
+            self.assertEqual(audio.readframes(5720), (samples + bytes(5600)) * 2 + samples)
+        loop_layout = fixed_layout((-1, .35, .35), alias["pcm"])
+        self.assertTrue(loop_layout["looping"])
+        write_pcm16(raw, baked, layout=loop_layout)
+        with wave.open(str(baked), "rb") as audio:
+            self.assertEqual(audio.getnframes(), 2840)
+            self.assertEqual(audio.readframes(2840), samples + bytes(5600))
+        long_schedules = [
+            {**planned[1][0], "source_id": source_id, "settings": {
+                **planned[1][0]["settings"], "loop_count": 700, "min_gap_s": delay, "max_gap_s": delay}}
+            for source_id, delay in enumerate((.70, .71, .72, .73), 1)
+        ]
+        long_index = {**index, "emitters": long_schedules}
+        self.assertEqual(len(audio_playback(long_index, {1, 2, 3, 4})), 3)
+        self.assertIn("draft PCM budget", audio_review(long_index)[4])
+        self.assertEqual(len(audio_playback(long_index, {1, 2, 3, 4}, repeat_tools=True)), 4)
         self.assertEqual(audio_playback(index, {main["source_id"]}), [])
         draft = object_review_document("DraftT2001", header, terrain, rows, catalog, {}, audio=index,
                                        placed_audio={planned[0][0]["source_id"]})

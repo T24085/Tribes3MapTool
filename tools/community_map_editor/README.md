@@ -1101,13 +1101,15 @@ their source bytes. Both Object Review views show missing, unreadable,
 ambiguous, or over-budget sounds and source fields that need review.
 The draft maps fully specified indoor-and-outdoor, non-directional
 emitters to Unreal ambient sound actors. It supports one-shots and
-continuous loops with zero repeat delay. Build the updated
-[Community Map Motion editor plugin](Plugins/CommunityMapMotion) for
-finite repeats and timed gaps. The generated Sound Cue plays the clip
-once immediately, then uses the authored delay bounds for each repeat.
+continuous loops with zero repeat delay. Fixed schedules up to 8 MiB
+each and 24 MiB combined build into PCM SoundWaves, with silence measured
+in samples between plays. These schedules build without an editor
+plugin. Variable delay ranges and fixed schedules beyond the PCM
+budget use stock Sound Cues made by the updated
+[Community Map Motion editor plugin](Plugins/CommunityMapMotion).
 A count of `0` plays once, a positive count adds that many repeats,
-and `-1` repeats indefinitely. The saved cue uses stock Unreal sound
-nodes and can cook and play without the authoring plugin.
+and `-1` repeats indefinitely. Both asset types cook and play without
+the authoring plugin.
 Spatial emitters use mono sound and spherical linear attenuation between
 the authored full-volume and cutoff distances. A WAV used for both
 one-shot and continuous playback gets two SoundWave assets. Identical

@@ -1,22 +1,28 @@
 """Build supported mission emitters using stock Unreal audio assets."""
 
 from hashlib import sha256
-from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import wave
 
 import unreal
 
 from intake_contract import bounded
-from mission_audio import MAX_WAVE_BYTES, repeat_schedule
+from mission_audio import MAX_WAVE_BYTES, repeat_schedule, write_pcm16
 
 
 ACTOR_TAG = "T3MissionAudio_"
 
 
-def import_wave(folder, source, clip, looping):
-    name = "SW_Ambient_" + clip["source_sha256"][:32] + ("_Loop" if looping else "")
+def schedule_key(schedule):
+    return sha256(repr(schedule).encode("ascii")).hexdigest()[:16]
+
+
+def import_wave(folder, source, clip, looping, *, layout=None, schedule=None):
+    name = "SW_Ambient_" + clip["source_sha256"][:32]
+    if layout is not None:
+        name += "_Fixed_" + schedule_key(schedule)
+    elif looping:
+        name += "_Loop"
     path = (Path(source) / clip["file"]).resolve(strict=True)
     if path.parent != Path(source).resolve():
         raise ValueError("Mission audio WAV is outside the intake.")
@@ -25,22 +31,7 @@ def import_wave(folder, source, clip, looping):
         raise ValueError("Mission audio WAV changed during draft creation.")
     with TemporaryDirectory(prefix="t3-mission-audio-") as scratch:
         path = Path(scratch) / (name + ".wav")
-        if clip["pcm"]["sample_bits"] == 16:
-            path.write_bytes(raw)
-        else:
-            # The Unreal import uses 16-bit PCM. The intake keeps the original.
-            with wave.open(BytesIO(raw), "rb") as original:
-                width = original.getsampwidth()
-                samples = original.readframes(original.getnframes())
-                if width == 1:
-                    pcm16 = bytes(value for sample in samples for value in (0, sample ^ 0x80))
-                else:
-                    pcm16 = bytearray()
-                    for start in range(width - 2, len(samples), width):
-                        pcm16.extend(samples[start:start + 2])
-                with wave.open(str(path), "wb") as converted:
-                    converted.setparams((original.getnchannels(), 2, original.getframerate(), 0, "NONE", ""))
-                    converted.writeframes(pcm16)
+        write_pcm16(raw, path, layout=layout)
         task = unreal.AssetImportTask()
         task.set_editor_property("automated", True)
         task.set_editor_property("destination_path", folder)
@@ -51,6 +42,8 @@ def import_wave(folder, source, clip, looping):
         raise RuntimeError(f"Could not import mission sound {name}.")
     sound = imported[0]
     sound.set_editor_property("looping", looping)
+    if layout is not None:
+        sound.set_sound_asset_compression_type(unreal.SoundAssetCompressionType.PCM)
     if looping:
         sound.set_editor_property("virtualization_mode", unreal.VirtualizationMode.PLAY_WHEN_SILENT)
     if not unreal.EditorAssetLibrary.save_loaded_asset(sound, False):
@@ -60,8 +53,7 @@ def import_wave(folder, source, clip, looping):
 
 def repeat_cue(folder, wave_asset, schedule):
     count, minimum, maximum = schedule
-    schedule_hash = sha256(repr(schedule).encode("ascii")).hexdigest()[:16]
-    name = "SC_" + wave_asset.get_name() + "_" + schedule_hash
+    name = "SC_" + wave_asset.get_name() + "_" + schedule_key(schedule)
     cue = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
         name, folder, unreal.SoundCue.static_class(), unreal.SoundCueFactoryNew())
     if cue is None or not unreal.CommunityMapMotionLibrary.configure_ambient_repeat(
@@ -77,16 +69,17 @@ def repeat_cue(folder, wave_asset, schedule):
 def place_audio(actors, draft, source, planned):
     folder = f"/Game/Community/{draft}/Audio"
     sounds, cues, placed = {}, {}, set()
-    for emitter, clip in planned:
+    for emitter, clip, layout in planned:
         settings = emitter["settings"]
         spatial = settings["spatial"]
         schedule = repeat_schedule(settings)
         continuous = settings["looping"] and settings["loop_count"] == -1 and schedule is None
-        key = (clip["source_sha256"], continuous)
+        key = (clip["source_sha256"], continuous, schedule if layout is not None else None)
         if key not in sounds:
-            sounds[key] = import_wave(folder, source, clip, continuous)
+            looping = layout["looping"] if layout is not None else continuous
+            sounds[key] = import_wave(folder, source, clip, looping, layout=layout, schedule=schedule)
         sound = sounds[key]
-        if schedule is not None:
+        if schedule is not None and layout is None:
             cue_key = (key, schedule)
             if cue_key not in cues:
                 cues[cue_key] = repeat_cue(folder, sound, schedule)

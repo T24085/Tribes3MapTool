@@ -163,6 +163,47 @@ def repeat_schedule(settings):
     return None
 
 
+def fixed_layout(schedule, pcm):
+    if schedule is None or schedule[1] != schedule[2]:
+        return None
+    count, delay, _ = schedule
+    gap_frames = round(delay * pcm['sample_rate'])
+    looping = count == -1
+    plays = 1 if looping else count + 1
+    gaps = 1 if looping else count
+    size = (pcm['frames'] * plays + gap_frames * gaps) * pcm['channels'] * 2 + 44
+    if size > MAX_WAVE_BYTES:
+        return None
+    return dict(plays=plays, gap_frames=gap_frames, looping=looping, size=size)
+
+
+def write_pcm16(raw, path, *, layout=None):
+    """Write one clip or a fixed schedule. Keep timing in the sample data."""
+    with wave.open(BytesIO(raw), 'rb') as original:
+        width, channels, rate = original.getsampwidth(), original.getnchannels(), original.getframerate()
+        if layout is None and width == 2:
+            path.write_bytes(raw)
+            return
+        samples = original.readframes(original.getnframes())
+    if width == 1:
+        samples = bytes(value for sample in samples for value in (0, sample ^ 0x80))
+    elif width > 2:
+        pcm16 = bytearray()
+        for start in range(width - 2, len(samples), width):
+            pcm16.extend(samples[start:start + 2])
+        samples = pcm16
+    with wave.open(str(path), 'wb') as converted:
+        converted.setparams((channels, 2, rate, 0, 'NONE', ''))
+        if layout is None:
+            converted.writeframes(samples)
+        else:
+            silence = bytes(layout['gap_frames'] * channels * 2)
+            for play in range(layout['plays']):
+                converted.writeframesraw(samples)
+                if layout['looping'] or play + 1 < layout['plays']:
+                    converted.writeframesraw(silence)
+
+
 def playback_issue(emitter, clip, *, repeat_tools=False):
     settings = emitter['settings']
     if emitter['review'] or not clip or 'file' not in clip:
@@ -183,26 +224,44 @@ def playback_issue(emitter, clip, *, repeat_tools=False):
         if 'loop_count' not in settings or (settings['loop_count'] != 0
                 and not {'min_gap_s', 'max_gap_s'} <= settings.keys()):
             return 'Looping audio needs an explicit repeat count and delay bounds.'
-        if not repeat_tools and repeat_schedule(settings) is not None:
-            return 'Finite or delayed repeats require the updated Community Map Motion editor plugin.'
+        schedule = repeat_schedule(settings)
+        if schedule is not None and not repeat_tools and fixed_layout(schedule, clip['pcm']) is None:
+            return 'This repeat schedule requires the updated Community Map Motion editor plugin.'
     return None
 
 
 def audio_playback(index, allowed, *, repeat_tools=False):
     if index is None:
         return []
-    playable = []
+    playable, fixed_assets, total_fixed_size = [], {}, 0
     for emitter in index['emitters']:
         if emitter['source_id'] in allowed:
             clip = index['clips'].get(emitter['settings'].get('clip'))
-            if playback_issue(emitter, clip, repeat_tools=repeat_tools) is None:
-                playable.append((emitter, clip))
+            if playback_issue(emitter, clip, repeat_tools=True) is not None:
+                continue
+            schedule = repeat_schedule(emitter['settings'])
+            layout = None
+            if schedule is not None:
+                key = (clip['source_sha256'], schedule)
+                if key not in fixed_assets:
+                    layout = fixed_layout(schedule, clip['pcm'])
+                    if layout is not None and total_fixed_size + layout['size'] <= MAX_AUDIO_BYTES:
+                        total_fixed_size += layout['size']
+                    else:
+                        layout = None
+                    fixed_assets[key] = layout
+                layout = fixed_assets[key]
+                if layout is None and not repeat_tools:
+                    continue
+            playable.append((emitter, clip, layout))
     return playable
 
 
 def audio_review(index, placed=()):
     if index is None:
         return {}
+    allowed = {row['source_id'] for row in index['emitters']}
+    ready = {row['source_id'] for row, _, _ in audio_playback(index, allowed)}
     reasons = {
         'missing': 'The WAV was missing from the supplied content.',
         'ambiguous': 'Multiple WAVs matched the source reference.',
@@ -219,7 +278,12 @@ def audio_review(index, placed=()):
         elif emitter['source_id'] in placed:
             detail = 'Mapped to an Unreal ambient sound actor in the saved draft.'
         else:
-            detail = playback_issue(emitter, clip) or 'Ready for ambient playback when the draft is built.'
+            detail = playback_issue(emitter, clip)
+            if detail is None:
+                if emitter['source_id'] in ready:
+                    detail = 'Ready for ambient playback when the draft is built.'
+                else:
+                    detail = 'The fixed schedule needs the Community Map Motion plugin after the draft PCM budget is used.'
         if emitter['review']:
             detail += ' Review source fields: ' + ', '.join(emitter['review']) + '.'
         results[emitter['source_id']] = detail

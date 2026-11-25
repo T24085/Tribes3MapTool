@@ -6,10 +6,11 @@ This is the in-development Windows source for the TRIBES 3 community map editor.
 
 Tribes 2 intakes can preserve private PCM WAVs and authored ambient
 emitter settings. Compatible one-shots and continuous loops play through
-standard Unreal ambient sound actors. The updated Community Map Motion
-editor plugin builds finite repeats and timed gaps into stock Sound Cues.
-Object Review identifies emitters that need additional mapping. Shared
-layouts omit the audio.
+standard Unreal ambient sound actors. Fixed repeats within the draft
+audio budget keep their timing in PCM. The updated Community Map Motion
+editor plugin authors stock Sound Cues for variable gaps and larger
+schedules. Object Review identifies emitters that need additional
+mapping. Shared layouts omit the audio.
 See [intake packages](tools/community_map_editor/README.md#intake-packages).
 
 For the Windows ZIP, extract the archive and double-click **Start TRIBES 3 Map Editor.bat**. The launcher creates or reopens the workspace under `%LOCALAPPDATA%\Tribes3MapTool`.
