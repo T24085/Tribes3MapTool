@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from conversion_rules import read
+from host_compatibility import issue_draft
 from tk_runtime import configure_tk
 
 
@@ -56,8 +57,12 @@ def show_pipeline(library, draft=None, *, parent=None):
     status = ttk.Label(body, wraplength=760)
     status.pack(anchor="w", pady=(7, 0))
     reports = []
+    shareable_issue = ""
 
     def update(_event=None):
+        nonlocal shareable_issue
+        shareable_issue = ""
+        copy_issue.configure(state="disabled")
         grid.delete(*grid.get_children())
         i = picker.current()
         if i < 0:
@@ -69,6 +74,18 @@ def show_pipeline(library, draft=None, *, parent=None):
             state = row["status"]
             time = "" if row["seconds"] is None else row["seconds"]
             grid.insert("", "end", values=(row["label"], state.title(), time, row["detail"]), tags=(state,))
+        if "host_compatibility" in report:
+            try:
+                shareable_issue = issue_draft(report["draft"], report["host_compatibility"])
+            except (KeyError, ValueError):
+                return
+            copy_issue.configure(state="normal")
+
+    def copy():
+        if shareable_issue:
+            window.clipboard_clear()
+            window.clipboard_append(shareable_issue)
+            status.configure(text="Host issue draft copied.")
 
     def refresh():
         selected = reports[picker.current()][0] if picker.current() >= 0 else None
@@ -83,6 +100,8 @@ def show_pipeline(library, draft=None, *, parent=None):
         update()
 
     ttk.Button(top, text="Refresh", command=refresh).pack(side="right", padx=(8, 0))
+    copy_issue = ttk.Button(top, text="Copy host issue draft", command=copy, state="disabled")
+    copy_issue.pack(side="right", padx=(8, 0))
     picker.bind("<<ComboboxSelected>>", update)
     window.bind("<Escape>", lambda _event: window.destroy())
     refresh()

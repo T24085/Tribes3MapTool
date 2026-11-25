@@ -50,6 +50,7 @@ def prepare_batch(editor, library, ident):
                 path.mkdir()
                 write(path / "build-request.json", editor.marker_snapshot())
                 editor.write_host_equipment(path, editor.host_equipment(draft))
+                editor.write_host_boundary_features(draft, path)
                 editor.write_outside_audio(draft, path)
                 editor.record_build_rules(draft, path)
                 intake = verified_draft_intake(library, draft)

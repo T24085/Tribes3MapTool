@@ -320,6 +320,23 @@ def write_host_equipment(destination, equipment):
         review_path.write_text(json.dumps(review_data), encoding='utf-8')
 
 
+def write_host_boundary_features(draft, directory):
+    from conversion_rules import write
+    from perimeter import FLAG_CAPS, FLAG_REQUIREMENTS, FLAG_RETURN_TIMER
+
+    tags = {str(tag) for actor in ACTORS.get_all_level_actors() for tag in actor.tags}
+    features = []
+    if tags.intersection(FLAG_CAPS.values()):
+        features.append('flag-height-limits')
+    if FLAG_REQUIREMENTS[FLAG_RETURN_TIMER] in tags:
+        features.append('flag-return-timer')
+    path = directory/'host-boundary-features.json'
+    if features:
+        write(path, {'map': draft, 'features': features})
+    else:
+        path.unlink(missing_ok=True)
+
+
 def request_build(kind='playtest'):
     if kind == 'playtest' and os.environ.get('T3_EDITOR_PLAYTEST') == '0':
         raise ValueError('Configure the offline playtest paths before building a game preview.')
@@ -337,6 +354,7 @@ def request_build(kind='playtest'):
     record_build_rules(payload['map'], request.parent)
     if kind == 'host':
         write_host_equipment(request.parent, equipment)
+        write_host_boundary_features(payload['map'], request.parent)
     write_outside_audio(payload['map'], request.parent)
     temporary = request.with_suffix('.tmp')
     with temporary.open('x', encoding='utf-8') as stream:

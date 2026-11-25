@@ -356,6 +356,7 @@ def authored_host_stamp(host):
 def run_host_pipeline(project, engine, preview_base, attempt, env, exporter, adapter, draft, selection,
                       *, cancellation_path=None, record_export=True):
     from tools.community_map_editor.conversion_rules import verify_snapshot
+    from tools.community_map_editor.host_compatibility import bundle_blockers, issue_draft, read_flag_features
     from tools.community_map_editor.map_pipeline import PipelineRun, pipeline_config
     from tools.community_map_editor.map_releases import capture_export
 
@@ -365,32 +366,53 @@ def run_host_pipeline(project, engine, preview_base, attempt, env, exporter, ada
     profile = pipeline_config(library, snapshot=snapshot, recorded=True)
     run = PipelineRun(profile, 'host', library=library, draft=draft, title=selection['label'])
     markers = cooked = result = base_digest = None
+    needs_station = False
     authoring_only = env.get('T3_EDITOR_AUTHORING_ONLY') == '1'
 
     def preflight(_):
-        nonlocal markers, base_digest
+        nonlocal markers, base_digest, needs_station
         map_id, markers = build_request(read_json(attempt/'build-request.json', 32768))
         if draft != map_id or not exporter.is_file():
             raise ValueError('The Direct Host build request does not match the draft or the exporter is unavailable.')
         if not (selection['host']/'package-manifest.json').is_file():
             raise ValueError('The Direct Host baseline is missing its package manifest.')
-        base_digest = (authored_host_stamp(selection['host']) if authoring_only
-                       else digest(selection['host']/'package-manifest.json'))
+        base_digest = digest(selection['host']/'package-manifest.json')
+        blockers = []
+        placements = None
+        if authoring_only:
+            try:
+                if authored_host_stamp(selection['host']) != base_digest:
+                    raise ValueError('The Direct Host inventory changed while checking draft compatibility.')
+            except ValueError:
+                blockers.append('draft-world-settings')
         if any((attempt/name).is_file() for name in ('equipment-review.json', 'equipment.json')):
             if adapter is None or not adapter.is_file():
                 raise ValueError('Direct Host equipment needs the configured native equipment adapter.')
+            review_path = attempt/'equipment-review.json'
+            if not review_path.is_file() or not (attempt/'equipment.json').is_file():
+                raise ValueError('The build needs both the approved equipment review and its source records.')
+            review = read_json(review_path, 256 * 1024)
+            placements = review.get('placements') if isinstance(review, dict) else None
+            if (not isinstance(placements, list) or not all(isinstance(row, dict) for row in placements)
+                    or review.get('map') != draft):
+                raise ValueError('The equipment review does not contain valid placements for this draft.')
+            needs_station = any('station_floor_z_cm' in row for row in placements)
+        flags = attempt/'host-boundary-features.json'
+        flag_features = read_flag_features(read_json(flags, 1024), draft) if flags.is_file() else []
+        if placements is not None or flag_features:
+            blockers.extend(bundle_blockers(selection['host'].resolve(strict=True), base_digest, placements, flag_features))
+        if blockers:
+            compatibility = {'baseline': base_digest, 'blockers': blockers}
+            report = attempt/'host-compatibility-issue.md'
+            report.write_text(issue_draft(draft, compatibility), encoding='utf-8')
+            run.report['host_compatibility'] = compatibility
+            raise ValueError(f'Direct Host compatibility check failed. Issue draft saved at {report}')
 
     def cook_draft(_):
         nonlocal cooked
         kwargs = {'cancellation_path': cancellation_path} if cancellation_path is not None else {}
-        review = attempt/'equipment-review.json'
-        if review.is_file():
-            data = read_json(review, 256 * 1024)
-            placements = data.get('placements') if isinstance(data, dict) else None
-            if not isinstance(placements, list) or not all(isinstance(row, dict) for row in placements):
-                raise ValueError('The equipment review does not contain valid placements.')
-            if any('station_floor_z_cm' in row for row in placements):
-                kwargs['station_package'] = inventory_station_package(draft)
+        if needs_station:
+            kwargs['station_package'] = inventory_station_package(draft)
         if authoring_only or 'station_package' in kwargs:
             kwargs['plugins'] = editor_plugin_args(project, engine, smoke=True, authoring_only=authoring_only)
         if ('station_package' in kwargs

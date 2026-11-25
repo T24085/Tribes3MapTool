@@ -333,6 +333,104 @@ class EditorHostExportTests(unittest.TestCase):
             with self.subTest(stock=stock):
                 self.check_host_roundtrip(stock)
 
+    def test_host_compatibility_stops_before_cook_and_saves_a_shareable_issue(self):
+        from tools.community_map_editor.host_compatibility import issue_draft
+
+        with TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            host = root / 'Private host 192.0.2.10'
+            library = root / 'Library'
+            host.mkdir()
+            write_authored_host(host)
+            (host / 'playtest.py').write_bytes(b'# Old launcher')
+            exporter, adapter = root / 'export_t2_draft.py', root / 'attach_t2_equipment.py'
+            exporter.touch()
+            adapter.touch()
+            selection = dict(host=host, destination=root / 'Export', label='Private map name https://example.test',
+                             minimap=None)
+            env = {'T3_CONVERTER_LIBRARY': str(library), 'T3_EDITOR_AUTHORING_ONLY': '1'}
+            placements = [{'half_size_cm': [20, 100, 150], 'on_power_loss': 'weaken'},
+                          {'station_floor_z_cm': 50}]
+
+            def attempt(name):
+                path = root / name
+                path.mkdir()
+                (path / 'build-request.json').write_text(json.dumps(REQUEST), encoding='utf-8')
+                (path / 'equipment.json').write_text('{}', encoding='utf-8')
+                (path / 'equipment-review.json').write_text(
+                    json.dumps(dict(map=DRAFT, placements=placements)), encoding='utf-8')
+                (path / 'host-boundary-features.json').write_text(
+                    json.dumps(dict(map=DRAFT, features=['flag-height-limits', 'flag-return-timer'])), encoding='utf-8')
+                return path
+
+            def execute(path):
+                return launch.run_host_pipeline(root / 'Draft.uproject', root, root, path, env,
+                                                exporter, adapter, DRAFT, selection)
+
+            before = (host / 'package-manifest.json').read_bytes()
+            failed = attempt('Failed attempt')
+            with patch.object(launch, 'cook') as cook:
+                with self.assertRaisesRegex(ValueError, 'compatibility check failed'):
+                    execute(failed)
+                cook.assert_not_called()
+            self.assertEqual((host / 'package-manifest.json').read_bytes(), before)
+            self.assertFalse(selection['destination'].exists())
+            run, = (library / 'PipelineRuns').glob('run-*.json')
+            journal = json.loads(run.read_bytes())
+            self.assertEqual([step['status'] for step in journal['steps']], ['failed', 'pending', 'pending', 'pending'])
+            report = journal['host_compatibility']
+            self.assertEqual(report, dict(baseline=sha256(before).hexdigest(),
+                                          blockers=['grouped-equipment', 'powered-shields',
+                                                    'shield-power-policies', 'inventory-stations',
+                                                    'portable-equipment-adapters', 'flag-height-limits', 'flag-return-timer']))
+            message = (failed / 'host-compatibility-issue.md').read_text(encoding='utf-8')
+            self.assertEqual(message, issue_draft(DRAFT, report))
+            for private in (str(root), selection['label'], host.name):
+                self.assertNotIn(private, message)
+            with self.assertRaises(ValueError):
+                issue_draft(DRAFT, dict(report, blockers=[str(host)]))
+
+            grouped = b'-- T3_EDITOR_GROUPED_EQUIPMENT_V1\n-- T3_EDITOR_GROUPED_SHIELDS_V1\n'
+            shields = b'-- T3_EDITOR_SHIELD_POWER_POLICIES_V1\n'
+            stations = b'-- T3_EDITOR_INVENTORY_STATIONS_V2\n'
+            flag_markers = (b'T3_EDITOR_FLAG_HEIGHT_LIMITS_V1', b'T3_EDITOR_FLAG_RETURN_TIMER_V1')
+            for name, data in (
+                    ('lua/network.lua', (host / 'lua/network.lua').read_bytes() + b'\n' + grouped + stations),
+                    ('lua/objective_layouts.lua', grouped + shields + stations),
+                    ('lua/powered_shields.lua', shields), ('lua/inventory_stations.lua', stations),
+                    ('playtest.py', b'merge_map_manifests runtime_paths'),
+                    ('lib/portable_maps.py', b'_portable_adapters'),
+                    ('match_roster.py', b'\n'.join(b'# ' + flag for flag in flag_markers)),
+                    ('runtime-fixes/mission_flag_limit.lua', b'\n'.join(b'-- ' + flag for flag in flag_markers))):
+                path = host / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+            files = [path for path in host.rglob('*') if path.is_file() and path.name != 'package-manifest.json']
+            (host / 'package-manifest.json').write_text(json.dumps({'files': [
+                dict(path=path.relative_to(host).as_posix(), bytes=path.stat().st_size,
+                     sha256=sha256(path.read_bytes()).hexdigest()) for path in files
+            ]}), encoding='utf-8')
+            passed = attempt('Passed attempt')
+            with patch.object(launch, 'editor_plugin_args', return_value=['', 'CommunityInventoryStationAuthoring']), \
+                    patch.object(launch, 'cook', side_effect=RuntimeError('cook reached')) as cook:
+                with self.assertRaisesRegex(RuntimeError, 'cook reached'):
+                    execute(passed)
+                cook.assert_called_once()
+                self.assertIn('BP_CommunityInventoryStation', cook.call_args.kwargs['station_package'])
+            self.assertFalse((passed / 'host-compatibility-issue.md').exists())
+
+            boundary = host / 'runtime-fixes/mission_flag_limit.lua'
+            boundary.write_bytes(boundary.read_bytes() + b'\n')
+            changed = attempt('Host changed')
+            with patch.object(launch, 'cook') as cook:
+                with self.assertRaisesRegex(ValueError, 'compatibility check failed'):
+                    execute(changed)
+                cook.assert_not_called()
+            report = (changed / 'host-compatibility-issue.md').read_text(encoding='utf-8')
+            self.assertIn('flag-height-limits', report)
+            self.assertIn('flag-return-timer', report)
+            self.assertNotIn('grouped-equipment', report)
+
     def check_host_roundtrip(self, stock):
         with TemporaryDirectory() as folder:
             root = Path(folder).resolve()

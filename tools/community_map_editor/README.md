@@ -908,6 +908,19 @@ review. Each run records the profile checksum, elapsed time by step, and
 details for failed or skipped work. The import window also has a
 **Pipeline status…** button for decoder results.
 
+Direct Host preflight checks the selected bundle before cooking single
+drafts and batch entries. The check covers authored World Settings,
+generator-linked equipment, powered shields and their power-loss
+policies, inventory stations and their portable launcher adapter, and
+authored flag-only heights and return timers. The bundle must inventory
+the runtime files with matching checksums.
+
+When a runtime capability is missing or cannot be verified, the build
+saves `host-compatibility-issue.md` with the draft ID, baseline inventory
+hash, and required support. Select that run in **Pipeline status…** and
+use **Copy host issue draft**. The copied text omits local paths, map
+titles, host addresses, and logs.
+
 To customize the sequence, copy the bundled
 [Tribes 2 pipeline profile](tribes2_pipeline.json) to
 `Saved/T3MapIntakes/tribes2_pipeline.json` in the authoring project.
