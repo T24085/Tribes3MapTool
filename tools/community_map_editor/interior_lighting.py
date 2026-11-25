@@ -337,14 +337,14 @@ def model_lighting(index, filename, geometry):
 def prepared_level(record):
     if not record or "surface_rects" not in record.get("animation", {}):
         return record
-    from dif_light_animation import ambient_atlas_tracks
+    from dif_light_animation import looping_atlas_tracks
 
-    animated, warnings = ambient_atlas_tracks(record)
+    animated, warnings = looping_atlas_tracks(record)
     atlases = list(record["atlases"])
     variants = {}
     for key, tracks in animated.items():
         variants[key] = len(atlases)
-        atlases.append({**atlases[key[1]], "ambient_loops": tracks})
+        atlases.append({**atlases[key[1]], "animated_loops": tracks})
     surfaces = [[source, first, count, variants.get((0, normal), normal), variants.get((1, alarm), alarm), uv]
                 for source, first, count, normal, alarm, uv in record["surfaces"]]
     return {**record, "atlases": atlases, "surfaces": surfaces, "animation_warnings": list(warnings)}
@@ -357,21 +357,30 @@ def alarm_switches_material(lighting):
 
 
 def lighting_coverage(index):
-    models = {}
+    from dif_light_animation import TRIGGERED_LOOP_FLAGS, looping_atlas_tracks, supported_triggers
+
+    models, triggers = {}, {}
     for key, record in index.items():
         filename, _, _ = key.partition("#")
         values = models.setdefault(filename, {"normal_surfaces": 0, "alarm_surfaces": 0, "levels": 0})
         values["normal_surfaces"] += sum(row[3] is not None for row in record["surfaces"])
         values["alarm_surfaces"] += sum(row[4] is not None for row in record["surfaces"])
         values["levels"] += bool(record["surfaces"])
+        if any(track[3] in TRIGGERED_LOOP_FLAGS for track in record.get("animation", {}).get("tracks", ())):
+            animated, _ = looping_atlas_tracks(record)
+            triggers.setdefault(filename, set()).update(supported_triggers(animated))
+    for filename, names in triggers.items():
+        if names:
+            models[filename]["triggerable_light_loops"] = sorted(names)
     return models
 
 
 def lighting_summary(record):
-    from dif_light_animation import ambient_atlas_tracks
+    from dif_light_animation import looping_atlas_tracks, supported_triggers
 
-    animated, warnings = ambient_atlas_tracks(record)
+    animated, warnings = looping_atlas_tracks(record)
     review = [*record["review"], *warnings]
+    trigger_names = sorted(supported_triggers(animated))
     return {
         "normal_surfaces": sum(row[3] is not None for row in record["surfaces"]),
         "alarm_surfaces": sum(row[4] is not None for row in record["surfaces"]),
@@ -381,6 +390,7 @@ def lighting_summary(record):
         "source_animated_lights": record["animated_lights"],
         "saved_animation_states": len(record.get("animation", {}).get("states", ())),
         "animated_atlases": len(animated),
+        **({"triggerable_light_loops": trigger_names} if trigger_names else {}),
         "review_count": len(review),
         "first_review_messages": review[:12],
         "source_sha256": record["source_sha256"],

@@ -174,7 +174,7 @@ def source_material(folder, inventory, record, *, destination, mode='opaque', tw
 
 
 def loop_expression(node, connect, uv, time, preview, dimensions, track, destination, y):
-    duration, states = track
+    duration, states, *activation = track
     width, height = dimensions
     png, tiles, columns, rows = mask_texture(states, width, height)
     digest = sha256(png).hexdigest()
@@ -187,10 +187,15 @@ def loop_expression(node, connect, uv, time, preview, dimensions, track, destina
     mask.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
     mask.set_editor_property('texture', intensity)
     custom = node(unreal.MaterialExpressionCustom, -650, y)
-    custom.set_editor_property('description', 'Tribes 2 ambient light loop')
+    custom.set_editor_property('description', 'Tribes 2 triggered light loop' if activation else 'Tribes 2 ambient light loop')
     custom.set_editor_property('output_type', unreal.CustomMaterialOutputType.CMOT_FLOAT3)
     pins = []
     inputs = [('UV', uv), ('Clock', time), ('PreviewTime', preview), ('Mask', mask)]
+    if activation:
+        start = node(unreal.MaterialExpressionScalarParameter, -1160, y + 220)
+        start.set_editor_property('parameter_name', activation[0])
+        start.set_editor_property('default_value', -1.0)
+        inputs.append(('StartTime', start))
     for key, _ in inputs:
         pin = unreal.CustomInput()
         pin.set_editor_property('input_name', key)
@@ -203,8 +208,13 @@ def loop_expression(node, connect, uv, time, preview, dimensions, track, destina
         return 'float3(' + ','.join(f'{channel}.0' for channel in rgb) + ')'
 
     # The DIF uses the active state's mask while its color ramps to the next state.
-    code = [f'float Phase = fmod(max(0.0, PreviewTime >= 0.0 ? PreviewTime : Clock) * 1000.0, {duration}.0);',
-            'float3 Color = float3(0.0,0.0,0.0);', 'float2 Tile = float2(0.0,0.0);']
+    code = []
+    clock = 'Clock'
+    if activation:
+        code.append('if (StartTime < 0.0 || (PreviewTime < 0.0 && Clock < StartTime)) return float3(0.0,0.0,0.0);')
+        clock = '(Clock - StartTime)'
+    code.extend([f'float Phase = fmod(max(0.0, PreviewTime >= 0.0 ? PreviewTime : {clock}) * 1000.0, {duration}.0);',
+                 'float3 Color = float3(0.0,0.0,0.0);', 'float2 Tile = float2(0.0,0.0);'])
     for i, (start, rgb, _) in enumerate(states):
         end = states[i + 1][0] if i + 1 < len(states) else duration
         next_color = states[(i + 1) % len(states)][1]
@@ -352,8 +362,8 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
                 alarm_map = atlases[alarm]['color']['file'] if alarm >= 0 else None
                 slots[component_slot] = lighted_material(folder, inventory, name, normal_map, alarm_map,
                                                          legacy=legacy, masked=mode == 'masked',
-                                                         normal_loops=atlases[normal].get('ambient_loops', ()) if normal >= 0 else (),
-                                                         alarm_loops=atlases[alarm].get('ambient_loops', ()) if alarm >= 0 else ())
+                                                         normal_loops=atlases[normal].get('animated_loops', ()) if normal >= 0 else (),
+                                                         alarm_loops=atlases[alarm].get('animated_loops', ()) if alarm >= 0 else ())
             elif not name:
                 continue
             else:

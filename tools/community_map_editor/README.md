@@ -962,9 +962,16 @@ Reimport the original mission to create a [version 45 intake](intake-v45.schema.
 with [animated mask placements](intake-v45.lighting.schema.json). The
 editor uses the source rectangles, intensity masks, and keyframe colors
 to play ambient loops on the authored detail levels. Alarm tracks appear
-only in the alarm state. Triggered and flickering tracks remain in the
-intake and appear in the review when unsupported. Older intakes still
-open with their baked lighting.
+only in the alarm state. Older intakes still open with their baked lighting.
+
+Named triggerable loops use a scalar on each affected material instance.
+The conversion review lists the supported names under **Source interior
+lighting**. The scalar name is `T2 Light Start ` followed by the lower-case
+source name. It defaults to `-1` (off). Map logic can set it to the current
+game time in seconds to start the loop, then set it back to `-1` to turn
+it off. Set the scalar on all affected slots of that interior instance.
+For inspection, set the start to `0` and use `T2 Light Preview Time` as
+elapsed seconds. Source script wiring, flicker, and ramps remain in review.
 
 The imported material multiplies the source base color by the baked
 color atlas on a second UV channel. The draft starts in its normal

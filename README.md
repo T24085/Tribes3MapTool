@@ -50,8 +50,16 @@ lights. Unreal imported both instances of Damnation's original power
 building with animated materials. Pixel readback matched its three alarm
 loops at seven points in each cycle across both detail levels. Normal
 lighting stayed steady. The Damnation draft, animated materials, and
-mask textures cooked for Windows. Triggered and flickering tracks remain
-in review.
+mask textures cooked for Windows.
+
+Named triggerable loops now import as inactive until map logic sets
+their start time. The conversion review lists the supported names. An
+Unreal 5.3.1 test draft used Damnation's original masks and colors with
+a test trigger. It imported all 18 animated slots in both buildings.
+Pixel readback confirmed off, on, and reset behavior at both authored
+detail levels. The Windows cook retained the map, 18 materials, and five
+mask textures. Automatic source script wiring, flicker, and ramp
+playback remain in review.
 
 Version 46 intakes recognize circuits from each team's generator groups.
 The original Damnation draft cooked and staged with two generators per

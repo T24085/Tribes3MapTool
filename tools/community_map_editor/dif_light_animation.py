@@ -1,26 +1,32 @@
-"""Translate ambient DIF light loops into timed colors and atlas masks."""
+"""Translate DIF light loops into timed colors and atlas masks."""
 
 import math
+import re
 
 
 MAX_TRACKS_PER_ATLAS = 8
 MAX_MASK_PIXELS = 8 * 1024 * 1024
+LIGHT_START_PREFIX = "T2 Light Start "
+TRIGGERED_LOOP_FLAGS = (2, 10)
+AMBIENT_LOOP_FLAGS = (3, 11)
 
 
-def ambient_atlas_tracks(record):
+def looping_atlas_tracks(record):
     animation = record.get("animation", {})
     if "surface_rects" not in animation:
         return {}, ()
     masks = bytes.fromhex(animation["state_masks_hex"])
+    names = bytes.fromhex(animation.get("names_hex", ""))
     rectangles = {row[0]: row[1:5] for row in animation["surface_rects"]}
     surfaces = {row[0]: row[3:5] for row in record["surfaces"]}
     atlases, warnings = {}, []
-    for track_id, (_, start, count, flags, duration) in enumerate(animation["tracks"]):
-        if flags not in (3, 11):
-            warnings.append(f"Light track {track_id} uses a trigger or flicker that needs review.")
+    for track_id, (name_offset, start, count, flags, duration) in enumerate(animation["tracks"]):
+        if flags not in TRIGGERED_LOOP_FLAGS + AMBIENT_LOOP_FLAGS:
+            warnings.append(f"Light track {track_id} uses ramp, flicker, or unknown flags ({flags}).")
             continue
         role = int(bool(flags & 8))
         try:
+            start_parameter = trigger_parameter(names, name_offset) if flags in TRIGGERED_LOOP_FLAGS else None
             frames = loop_frames(animation, start, count, duration, rectangles, surfaces, masks, role)
         except ValueError as error:
             warnings.append(f"Light track {track_id}: {error}")
@@ -30,8 +36,23 @@ def ambient_atlas_tracks(record):
             if len(tracks) == MAX_TRACKS_PER_ATLAS:
                 warnings.append(f"Light track {track_id} exceeds the animated tracks supported per atlas.")
                 continue
-            tracks.append([duration, states])
+            tracks.append([duration, states, start_parameter] if start_parameter else [duration, states])
     return atlases, warnings
+
+
+def trigger_parameter(names, offset):
+    if 0 <= offset < len(names) and (offset == 0 or names[offset - 1] == 0):
+        end = names.find(b"\0", offset, offset + 129)
+        if end != -1:
+            name = names[offset:end]
+            if re.fullmatch(rb"[!-~](?:[ -~]*[!-~])?", name):
+                return LIGHT_START_PREFIX + name.decode("ascii").lower()
+    raise ValueError("The triggerable loop does not have a valid source light name.")
+
+
+def supported_triggers(atlases):
+    return {track[2].removeprefix(LIGHT_START_PREFIX)
+            for tracks in atlases.values() for track in tracks if len(track) == 3}
 
 
 def loop_frames(animation, start, count, duration, rectangles, surfaces, masks, role):

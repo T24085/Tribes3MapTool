@@ -890,7 +890,7 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual(lighting["surfaces"][0][3:5], [0, 1])
         self.assertTrue(alarm_switches_material(lighting))
         self.assertEqual(lighting["animation_warnings"], [])
-        (duration, states), = lighting["atlases"][1]["ambient_loops"]
+        (duration, states), = lighting["atlases"][1]["animated_loops"]
         self.assertEqual(duration, 3000)
         self.assertEqual([state[0] for state in states], [0, 600, 2000])
         self.assertEqual([state[1] for state in states], [[255, 0, 0], [128, 0, 0], [0, 0, 0]])
@@ -901,6 +901,39 @@ class IntakeTests(unittest.TestCase):
             self.assertEqual(image.crop((0, 2, 12, 3)).tobytes(),
                              bytes([0, 0xab, 0x7f, 0, 0, 0x2f, 0x21, 0, 0, 0, 0, 0]))
             self.assertEqual(image.getpixel((1, 1)), 0)
+
+    def test_named_dif_loops_share_a_trigger_across_detail_levels(self):
+        record = {
+            "atlases": [{"color": {"file": "base.png"}}],
+            "surfaces": [[2, 0, 1, 0, 0, [0, 1, .25, .25, 0, 0]]],
+            "has_alarm": True, "animated_lights": 4, "source_sha256": "0" * 64, "review": [],
+            "animation": {
+                "tracks": [[5, 0, 2, 2, 700], [5, 0, 2, 10, 700], [6, 0, 2, 10, 700], [0, 0, 2, 5, 700]],
+                "names_hex": b"idle\0Room Alarm\0".hex(),
+                "states": [[255, 0, 0, 0, 0, 1], [0, 0, 0, 350, 1, 1]],
+                "surface_data": [[2, 0, 7], [2, -1, 7]],
+                "surface_rects": [[2, 1, 2, 2, 1, 7, 1]],
+                "state_masks_hex": "ffff",
+            },
+        }
+        filename = "interior-0001.json"
+        secondary = {**record, "animation": {**record["animation"],
+                     "names_hex": b"idle\0room alarm\0".hex(), "tracks": [[5, 0, 2, 10, 700]]}}
+        geometry = {"lods": {"secondary": [{}]}}
+        lighting = model_lighting({filename: record, f"{filename}#1": secondary}, filename, geometry)
+        self.assertEqual(len(lighting["animation_warnings"]), 2)
+        self.assertIn("valid source light name", lighting["animation_warnings"][0])
+        self.assertIn("flicker", lighting["animation_warnings"][1])
+        _, _, _, normal, alarm, _ = lighting["surfaces"][0]
+        self.assertNotEqual(normal, alarm)
+        self.assertEqual(lighting["lod_surfaces"][1][0][4], alarm)
+        for index in (normal, alarm):
+            self.assertEqual(lighting["atlases"][index]["animated_loops"],
+                             [[700, [[0, [255, 0, 0], [[1, 2, 2, 1, "ffff"]]], [350, [0, 0, 0], []]],
+                               "T2 Light Start room alarm"]])
+        self.assertEqual(lighting_summary(record)["triggerable_light_loops"], ["room alarm"])
+        self.assertEqual(lighting_coverage({filename: record, f"{filename}#1": secondary})[filename]
+                         ["triggerable_light_loops"], ["room alarm"])
 
     def test_duplicate_archive_interior_stays_in_review(self):
         source = self.folder / "Assets.vl2"
