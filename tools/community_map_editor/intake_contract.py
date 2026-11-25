@@ -45,7 +45,9 @@ BOUNDARY_RECIPE = "draft_boundary_recipe"
 NATIVE_ENVIRONMENT_VERSION = 53
 NATIVE_LOCAL_LIGHTS_VERSION = 54
 VENGEANCE_VERTEX_ATTRIBUTES_VERSION = 55
-NATIVE_SCENE_ENVELOPES = {NATIVE_ENVIRONMENT_VERSION, NATIVE_LOCAL_LIGHTS_VERSION, VENGEANCE_VERTEX_ATTRIBUTES_VERSION}
+ASCEND_VERTEX_ATTRIBUTES_VERSION = 56
+VERTEX_ATTRIBUTES_VERSIONS = {VENGEANCE_VERTEX_ATTRIBUTES_VERSION, ASCEND_VERTEX_ATTRIBUTES_VERSION}
+NATIVE_SCENE_ENVELOPES = {NATIVE_ENVIRONMENT_VERSION, NATIVE_LOCAL_LIGHTS_VERSION, *VERTEX_ATTRIBUTES_VERSIONS}
 LATEST_INTAKE_VERSION = max(*NATIVE_SCENE_ENVELOPES, UNREAL_INTAKE_VERSION, *T2_DIF_VERSIONS,
                             *T2_GENERATOR_SCOPE_VERSIONS)
 T1_SHAPE_INTAKE_VERSION = {4: 18, 5: 19, 6: 20, 7: 21}
@@ -401,7 +403,10 @@ def intake_scene_format(header):
                 or version == VENGEANCE_VERTEX_ATTRIBUTES_VERSION and
                 (header.get("profile") != VENGEANCE or header.get("reader") != UNREAL_READER
                  or scene not in (*VENGEANCE_MESH_VERSIONS, *VENGEANCE_EXTENDED_SHADER_VERSIONS,
-                                  *VENGEANCE_BRUSH_VERSIONS))):
+                                  *VENGEANCE_BRUSH_VERSIONS))
+                or version == ASCEND_VERTEX_ATTRIBUTES_VERSION and
+                (header.get("profile") != ASCEND or header.get("reader") != UNREAL_READER
+                 or scene not in ASCEND_PRIVATE_MESH_VERSIONS)):
             raise ValueError("Invalid versioned native scene intake.")
         return scene
     if "scene_format" in header:
@@ -691,7 +696,8 @@ def load_intake(manifest):
     header = intake_header(manifest)
     native_envelope = header["format"] in NATIVE_SCENE_ENVELOPES
     native_lights = header["format"] == NATIVE_LOCAL_LIGHTS_VERSION
-    vertex_attributes = header["format"] == VENGEANCE_VERTEX_ATTRIBUTES_VERSION
+    vertex_attributes = header["format"] in VERTEX_ATTRIBUTES_VERSIONS
+    allow_local_lights = native_lights or header["format"] == ASCEND_VERTEX_ATTRIBUTES_VERSION
     if native_envelope:
         # Geometry consumers use the existing scene and inventory contract.
         header["format"] = header.pop("scene_format")
@@ -853,7 +859,8 @@ def load_intake(manifest):
         if not intake_filename(name, header["format"]):
             raise ValueError("Unexpected intake filename.")
         if name in model_files:
-            from interior_geometry import ASCEND_BSP, ASCEND_STATIC_MESH, VENGEANCE_BSP, VENGEANCE_STATIC_MESH, material_slots
+            from interior_geometry import (ASCEND_BSP, ASCEND_STATIC_MESH, NATIVE_VERTEX_FIELDS, VENGEANCE_BSP,
+                                           VENGEANCE_STATIC_MESH, material_slots)
 
             geometry, size = load_intake_geometry(manifest.parent, name, digest)
             has_dif_lods |= 'lods' in geometry
@@ -904,6 +911,12 @@ def load_intake(manifest):
                 compatible = ascend_mesh if model_format == ASCEND_STATIC_MESH else vengeance_bsp and vengeance_static
                 if not compatible or not receipt_matches or model_files[name] != "unrealmesh:" + path.casefold():
                     raise ValueError("Static mesh does not match its Unreal package source.")
+                if geometry.keys() & NATIVE_VERTEX_FIELDS:
+                    if not vertex_attributes:
+                        game, version = (('Ascend', ASCEND_VERTEX_ATTRIBUTES_VERSION) if model_format == ASCEND_STATIC_MESH
+                                         else ('Vengeance', VENGEANCE_VERTEX_ATTRIBUTES_VERSION))
+                        raise ValueError(f"{game} vertex attributes require intake version {version}.")
+                    has_vertex_attributes = True
                 if model_format == ASCEND_STATIC_MESH:
                     simple = geometry["collision"].get("simple")
                     if simple:
@@ -917,10 +930,6 @@ def load_intake(manifest):
                     if ascend_art or (ascend_simple_collision or ascend_level) and has_textures:
                         slots[name] = {str(slot) for slot in material_slots(geometry)}
                 if model_format == VENGEANCE_STATIC_MESH:
-                    if geometry.keys() & {"vertex_normals", "extra_uvs"}:
-                        if not vertex_attributes:
-                            raise ValueError("Vengeance vertex attributes require intake version 55.")
-                        has_vertex_attributes = True
                     vengeance_mesh_files.add(name)
                     if vengeance_mesh_art or shader_inputs or brush_intake:
                         slots[name] = {str(slot) for slot in material_slots(geometry)}
@@ -1005,7 +1014,7 @@ def load_intake(manifest):
     if 19 <= header["format"] <= 21 and header["format"] != shape_version:
         raise ValueError("The newest DTS shape does not match the intake version.")
     if vertex_attributes and not has_vertex_attributes:
-        raise ValueError("Vengeance intake version 55 requires authored vertex attributes.")
+        raise ValueError("This intake version requires authored vertex attributes.")
     if brush_intake and not brush_files:
         raise ValueError("Vengeance brush intake requires authored brush geometry.")
     if vengeance_static and not (shader_inputs or brush_intake or vengeance_mesh_files):
@@ -1107,7 +1116,7 @@ def load_intake(manifest):
             raise ValueError("Invalid object record or parent relationship.")
         ids.add(row["id"])
         if unreal:
-            validate_unreal_row(row, allow_local_lights=native_lights)
+            validate_unreal_row(row, allow_local_lights=allow_local_lights)
         elif row.keys() & {"conversion_class", "transform", "model_reference", "local_light"}:
             raise ValueError("Unreal scene placement requires intake version 22.")
         if row["status"] == "marker":

@@ -5,7 +5,7 @@ from pathlib import Path
 import struct
 
 from ascend_collision import read_simple_collision
-from interior_geometry import ASCEND_STATIC_MESH, validate_geometry
+from interior_geometry import ASCEND_STATIC_MESH, valid_vertex_normal, validate_geometry
 from unreal_binary_scene import read_properties
 from unreal_package_reader import Cursor
 
@@ -66,13 +66,26 @@ def decode_lod(cursor, objects, units_per_m):
             or stride != 8 + uv_sets * (8 if full else 4)):
         raise ValueError("Invalid Ascend static mesh UV stream.")
     texture_stream = bulk_array(cursor, stride, MAX_VERTICES, count)
-    uv_format = cursor.endian + ("2f" if full else "2e")
-    uv = [struct.unpack_from(uv_format, texture_stream, idx * stride + 8) for idx in range(count)]
+    uv_format = struct.Struct(cursor.endian + ("2f" if full else "2e"))
+    uv = [[list(uv_format.unpack_from(texture_stream, idx * stride + 8 + channel * uv_format.size))
+           for idx in range(count)] for channel in range(uv_sets)]
+    attributes = {}
+    if uv_sets > 1:
+        attributes["extra_uvs"] = uv[1:]
+    if cursor.endian == "<":
+        # The PC stream stores packed TangentX, then TangentZ (the normal).
+        normals = [[value / 127.5 - 1 for value in texture_stream[offset + 4:offset + 7]]
+                   for offset in range(0, len(texture_stream), stride)]
+        if all(map(valid_vertex_normal, normals)):
+            attributes["vertex_normals"] = normals
     color_stride, colors = cursor.fields("2i")
     if colors:
         if color_stride != 4 or colors != count:
             raise ValueError("Invalid Ascend static mesh color stream.")
-        bulk_array(cursor, 4, MAX_VERTICES, count)
+        packed = bulk_array(cursor, 4, MAX_VERTICES, count)
+        if cursor.endian == "<":
+            attributes["vertex_colors"] = [[red, green, blue, alpha]
+                                           for blue, green, red, alpha in struct.iter_unpack("4B", packed)]
     if cursor.count(MAX_VERTICES) != count:
         raise ValueError("Ascend static mesh LOD vertex counts disagree.")
     index_bytes = bulk_array(cursor, 2, MAX_TRIANGLES * 3)
@@ -88,11 +101,11 @@ def decode_lod(cursor, objects, units_per_m):
             if any(not low <= idx <= high for idx in face):
                 raise ValueError("Ascend static mesh index exceeds its section's vertex range.")
             if len(set(face)) == 3:
-                triangles.append([slot, *face, *(coordinate for idx in face for coordinate in uv[idx])])
+                triangles.append([slot, *face, *(coordinate for idx in face for coordinate in uv[0][idx])])
         end = stop
     if end != len(indices):
         raise ValueError("Ascend static mesh sections leave unused render indices.")
-    return [row[1] for row in sections], vertices, triangles, [(row[0], 0) for row in sections]
+    return [row[1] for row in sections], vertices, triangles, [(row[0], 0) for row in sections], attributes
 
 
 def read_mesh(report, stream, export, objects, units_per_m, decoder_sha):
@@ -107,14 +120,14 @@ def read_mesh(report, stream, export, objects, units_per_m, decoder_sha):
     version, lods = cursor.fields("2i")
     if version != 18 or not 1 <= lods <= 32:
         raise ValueError("Unsupported Ascend static mesh revision or LOD count.")
-    materials, vertices, triangles, slots = decode_lod(cursor, objects, units_per_m)
+    materials, vertices, triangles, slots, attributes = decode_lod(cursor, objects, units_per_m)
     collision = [[a, b, c] for a, b, c, _ in struct.iter_unpack(cursor.endian + "4H", kdop)
                  if len({a, b, c}) == 3]
     source = dict(name=report["source"]["name"], sha256=report["source"]["sha256"],
                   decoder_sha256=decoder_sha, export=export["index"], object_path=export["object_path"])
     geometry = dict(format=ASCEND_STATIC_MESH, source=source, materials=materials,
                     vertices_m=vertices, triangles=triangles, render=True,
-                    collision=dict(detail=0, vertices_m=vertices, triangles=collision))
+                    collision=dict(detail=0, vertices_m=vertices, triangles=collision), **attributes)
     issue = None
     try:
         simple = read_simple_collision(body, tags, bool(collision), report, stream, objects, units_per_m)

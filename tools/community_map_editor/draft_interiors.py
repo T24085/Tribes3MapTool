@@ -117,8 +117,12 @@ def dynamic_mesh(data, lighting, texture_sizes):
             buffers['uv2'] = [unreal.Vector2D(*value) for value in extras[0]]
         elif extras:
             for key, values in extras[0].items():
-                vector = unreal.Vector if key == 'normals' else unreal.Vector2D
-                buffers[key] = [vector(*value) for value in values]
+                if key == 'vertex_colors':
+                    # Geometry Script converts these normalized sRGB values for the mesh builder.
+                    buffers[key] = [unreal.LinearColor(*(channel / 255 for channel in value)) for value in values]
+                else:
+                    vector = unreal.Vector if key == 'normals' else unreal.Vector2D
+                    buffers[key] = [vector(*value) for value in values]
         mesh.append_buffers_to_mesh(
             unreal.GeometryScriptSimpleMeshBuffers(
                 vertices=[unreal.Vector(*value) for value in vertices],

@@ -19,6 +19,7 @@ VENGEANCE_STATIC_MESH = 10
 ASCEND_BSP = 11
 UNREAL_STATIC_MESHES = {ASCEND_STATIC_MESH, VENGEANCE_STATIC_MESH}
 UNREAL_GEOMETRY = {VENGEANCE_BSP, ASCEND_BSP, *UNREAL_STATIC_MESHES}
+NATIVE_VERTEX_FIELDS = {'vertex_normals', 'extra_uvs', 'vertex_colors'}
 
 
 def validate_geometry(data):
@@ -36,8 +37,9 @@ def validate_geometry(data):
         fields.update(('collision', 'render'))
     elif data['format'] >= 6:
         fields.add('animation')
-    if data['format'] == VENGEANCE_STATIC_MESH:
-        fields.update(data.keys() & {'vertex_normals', 'extra_uvs'})
+    if data['format'] in UNREAL_STATIC_MESHES:
+        supported_fields = NATIVE_VERTEX_FIELDS if data['format'] == ASCEND_STATIC_MESH else NATIVE_VERTEX_FIELDS - {'vertex_colors'}
+        fields.update(data.keys() & supported_fields)
     if set(data) != fields:
         raise ValueError('Invalid Tribes geometry fields.')
     source = data['source']
@@ -103,6 +105,13 @@ def validate_geometry(data):
                               or not all(finite(value, 1e6) for value in point) for point in layer)
                        for layer in layers)):
             raise ValueError('Invalid secondary source UV channels.')
+    if 'vertex_colors' in data:
+        colors = data['vertex_colors']
+        if (not isinstance(colors, list) or len(colors) != len(vertices)
+                or any(not isinstance(color, list) or len(color) != 4
+                       or not all(type(channel) is int and 0 <= channel <= 255 for channel in color)
+                       for color in colors)):
+            raise ValueError('Invalid source vertex colors.')
     if 'acoustics' in data:
         from dif_acoustics import validate_acoustics
 
@@ -308,6 +317,7 @@ def render_sections(data, lighting=None, texture_sizes=None):
     materials, vertices = data['materials'], data['vertices_m']
     normals = data.get('vertex_normals', ())
     secondary_uvs = data.get('extra_uvs', ())
+    colors = data.get('vertex_colors', ())
     result = []
     for (slot, normal, alarm), triangles in triangle_groups(data, lighting):
         width, height = texture_sizes.get(slot, (1, 1)) if texture_sizes else (1, 1)
@@ -320,7 +330,7 @@ def render_sections(data, lighting=None, texture_sizes=None):
             points.extend((x * 100, y_sign * y * 100, z * 100) for x, y, z in source)
             coords.extend((u / width, v / height) for u, v in zip(uv[::2], uv[1::2]))
             faces.append((start, start + 1, start + 2))
-            if normals or secondary_uvs:
+            if normals or secondary_uvs or colors:
                 source_indices.extend((a, b, c))
             if projection and data['format'] == 3:
                 for channel, target in zip(projection, (light_uv, alarm_uv)):
@@ -334,6 +344,8 @@ def render_sections(data, lighting=None, texture_sizes=None):
             section = (*section, alarm_uv)
         elif source_indices:
             attributes = {'normals': [normals[index] for index in source_indices]} if normals else {}
+            if colors:
+                attributes['vertex_colors'] = [colors[index] for index in source_indices]
             attributes.update((f'uv{channel}', [layer[index] for index in source_indices])
                               for channel, layer in enumerate(secondary_uvs, 1))
             section = (*section, attributes)

@@ -408,8 +408,11 @@ For Ascend version 805 PC packages, the draft imports placed static meshes
 from the map and any companion packages you list in its import settings.
 Keep the companion files beside the map and add a setting such as
 `"asset_packages": ["MyMapArt.upk"]`. The draft keeps the highest-detail
-geometry, first UV channel, material slot names, actor transforms, and
-serialized triangle collision.
+geometry, material slot names, actor transforms, and serialized triangle
+collision. [Intake version 56](intake-v56.schema.json) also preserves the
+mesh's saved normals, vertex RGBA colors, and up to eight UV channels in
+private intakes. It can carry these meshes alongside local lights and
+global environment settings. Public layouts omit the mesh assets.
 
 [Intake version 39](intake-v39.schema.json) reads a direct RGB
 `DiffuseColor` texture sample that uses the mesh's first UV channel.

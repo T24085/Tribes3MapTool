@@ -56,7 +56,7 @@ STRINGS = ("None", "Core", "Class", "Fixture", *KINDS, "PersistentLevel", "BlueS
            "TriggerType", "bTriggerOnceOnly", "ReTriggerDelay", "RepeatTriggerTime", "LiftFastSwitch")
 
 
-def ascend_mesh_lod(materials):
+def ascend_mesh_lod(materials, vertex_stream=None):
     positions = [(0, 0, 40), (0, 40, 40), (100, 0, 40),
                  (0, 65, 70), (0, 105, 70), (100, 65, 70)]
     data = bytes(56) + struct.pack("<4i4H2i", 6, 0, 8, 1, 0, 1, 2, 0, 18, 1)
@@ -66,9 +66,23 @@ def ascend_mesh_lod(materials):
         data += struct.pack("<10iB", material, 1 - slot, 1 - slot, 1, first, 1, first, first + 2, slot, 0, 0)
     data += struct.pack("<4i", 12, len(positions), 12, len(positions))
     data += b"".join(struct.pack("<3f", *point) for point in positions)
-    data += struct.pack("<6i", 1, 16, len(positions), 1, 16, len(positions))
-    data += b"".join(struct.pack("<8x2f", *uv) for uv in ((0, 0), (0, 1), (1, 0)) * 2)
-    return data + struct.pack("<5i6H2i", 0, 0, len(positions), 2, 6, *range(6), 2, 0)
+    base_uvs = ((0, 0), (0, 1), (1, 0)) * 2
+    if vertex_stream:
+        full = vertex_stream == "full"
+        stride = 8 + 4 * (8 if full else 4)
+        data += struct.pack("<6i", 4, stride, len(positions), full, stride, len(positions))
+        normals = [(128, 128, 255, 255)] * 3 + [(204, 128, 230, 255)] * 3
+        for (u, v), normal in zip(base_uvs, normals):
+            data += struct.pack("<8B", 255, 128, 128, 128, *normal)
+            data += b"".join(struct.pack("<2f" if full else "<2e", u * .5 + layer * .125, v)
+                             for layer in range(4))
+        data += struct.pack("<4i", 4, len(positions), 4, len(positions))
+        data += bytes((153, 102, 51, 204)) * 3 + bytes((85, 0, 255, 255)) * 3
+    else:
+        data += struct.pack("<6i", 1, 16, len(positions), 1, 16, len(positions))
+        data += b"".join(struct.pack("<8x2f", *uv) for uv in base_uvs)
+        data += struct.pack("<2i", 0, 0)
+    return data + struct.pack("<3i6H2i", len(positions), 2, 6, *range(6), 2, 0)
 
 
 def ascend_bsp_payload(materials, *, corrupt=False):
@@ -120,7 +134,7 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                          bsp_world=False, static_mesh=None, external_height=False, painted=False, source_artwork=False,
                          bsp_artwork=False, mesh_artwork=False, shader_inputs=False, surface_detail=False, brush_mover=False,
                          ascend_shader=None, ascend_component_materials=None, ascend_body=None, spawn_base=None,
-                         environment=False, local_lights=False):
+                         environment=False, local_lights=False, ascend_vertices=None):
     exported, settings = unreal_draft_fixture(root, game)
     modern = game == "ascend"
     source = exported.with_suffix(".fmap" if modern else ".tvm")
@@ -684,11 +698,11 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
             source.with_suffix(".import.json").write_text(json.dumps(settings), encoding="utf-8")
         elif static_mesh == "embedded":
             imports.extend(materials)
-            mesh = object_bytes() + ascend_mesh_lod((-len(imports) + 1, -len(imports)))
+            mesh = object_bytes() + ascend_mesh_lod((-len(imports) + 1, -len(imports)), ascend_vertices)
             exports.append((-7, 0, "OriginalMesh", 0, mesh, 3))
         else:
             types = [("Core", "Package", 0, "Fixture"), ("Core", "Class", -1, "StaticMesh")]
-            mesh = object_bytes() + ascend_mesh_lod((-3, -4))
+            mesh = object_bytes() + ascend_mesh_lod((-3, -4), ascend_vertices)
             companion = source.with_name("Fixture.upk")
             companion.write_bytes(build_package(game, strings, [*types, *materials],
                                                  [(-2, 0, "OriginalMesh", 0, mesh, 3)]))
@@ -1601,6 +1615,34 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 self.assertNotIn(name, public["files"])
                 manifest.write_text(json.dumps(dict(header, format=22)), encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "Invalid intake interiors"):
+                    load_intake(manifest)
+
+    def test_ascend_vertex_attributes_from_full_and_half_precision_streams(self):
+        for mode, stream in (("embedded", "half"), ("companion", "full")):
+            with self.subTest(mode=mode), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = binary_draft_fixture(root, "ascend", static_mesh=mode, ascend_vertices=stream,
+                                              environment=True, local_lights=True)
+                manifest = convert_unreal(source, root / "Intakes")
+                raw = json.loads(manifest.read_bytes())
+                self.assertEqual((raw["format"], raw["scene_format"]), (56, 23))
+                header, _, rows = load_intake(manifest)
+                self.assertTrue(any("local_light" in row for row in rows))
+                name, = header["interiors"].values()
+                geometry, _ = load_intake_geometry(manifest.parent, name, header["files"][name])
+                self.assertEqual(geometry["vertex_colors"], [[51, 102, 153, 204]] * 3 + [[255, 0, 85, 255]] * 3)
+                self.assertAlmostEqual(geometry["vertex_normals"][3][0], .6)
+                first, second = render_sections(geometry)
+                self.assertEqual(first[3], [(0, 0), (0, 1), (.5, 0)])
+                self.assertEqual(second[-1]["uv3"], [[.375, 0], [.375, 1], [.875, 0]])
+                self.assertEqual(second[-1]["vertex_colors"], [[255, 0, 85, 255]] * 3)
+                public, _, public_rows = load_intake(unpack_intake(export_public_layout(manifest, root / "Share.zip"),
+                                                                   root / "Public"))
+                self.assertNotIn(name, public["files"])
+                self.assertFalse(any("local_light" in row for row in public_rows))
+                raw["format"] = 54
+                manifest.write_text(json.dumps(raw), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Ascend vertex attributes require intake version 56"):
                     load_intake(manifest)
 
     def test_ascend_mesh_artwork_binds_exact_companion_and_reports_unmapped_slots(self):
