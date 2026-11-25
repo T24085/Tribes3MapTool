@@ -92,6 +92,7 @@ def install_editor_scripts(project, env, *, include_seed=True):
                  'draft_materials.py',
                  'sky_contract.py', 'sky_intake.py', 'draft_sky.py', 'draft_clouds.py', 'draft_precipitation.py', 'precipitation_shelter.py',
                  'draft_interiors.py', 'draft_movers.py', 'vengeance_mover_plan.py', 'unreal_legacy_reader.py',
+                 'native_local_lights.py',
                  'draft_elevators.py', 'vengeance_elevators.py',
                  'interior_geometry.py', 'dif_acoustics.py', 't1_dts_motion.py', 'interior_lighting.py', 'dif_light_animation.py',
                  'lighting_preview_unreal.py', 'dts_preview.py', 'dts_preview_unreal.py', 'dts_bake_unreal.py',
