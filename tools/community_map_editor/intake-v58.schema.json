@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 58",
+  "description": "Vengeance native scenes with editable steady point or spot lights. scene_format selects the geometry contract, including authored mesh attributes when present.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "scene_format", "profile", "source_game", "name", "reader", "profile_sha256",
+               "sources", "files", "coverage", "minimap"],
+  "properties": {
+    "format": {"const": 58},
+    "scene_format": {"enum": [22, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38]},
+    "profile": {"const": "vengeance-ctf"},
+    "source_game": {"const": "Tribes: Vengeance"},
+    "reader": {"const": "legacy-unreal-intake-v1"},
+    "name": {"$ref": "intake-v53.schema.json#/properties/name"},
+    "profile_sha256": {"$ref": "intake-v53.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v53.schema.json#/properties/sources"},
+    "coverage": {"$ref": "intake-v53.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v53.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v53.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v53.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v53.schema.json#/properties/interior_review"},
+    "terrain_paint": {"$ref": "intake-v24.schema.json#/properties/terrain_paint"},
+    "terrain_art": {"$ref": "intake-v25.schema.json#/properties/terrain_art"},
+    "terrain_uv": {"$ref": "intake-v25.schema.json#/properties/terrain_uv"},
+    "files": {
+      "allOf": [
+        {"$ref": "intake-v53.schema.json#/properties/files"},
+        {"required": ["source-scene.json"]}
+      ]
+    }
+  },
+  "dependentRequired": {
+    "interiors": ["interior_review"], "interior_review": ["interiors"],
+    "terrain_art": ["terrain_uv"], "terrain_uv": ["terrain_art"]
+  },
+  "$defs": {"local_light": {"$ref": "intake-v54.schema.json#/$defs/local_light"}}
+}

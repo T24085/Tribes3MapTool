@@ -1,9 +1,10 @@
 """Project saved global light and fog inputs from native Unreal packages."""
 
 import math
+from colorsys import hsv_to_rgb
 
 from intake_contract import finite
-from native_local_lights import ASCEND_LIGHT_CLASSES
+from native_local_lights import ASCEND_LIGHT_CLASSES, VENGEANCE_LIGHT_CLASSES
 from unreal_package_reader import Cursor
 from unreal_legacy_reader import descendants
 
@@ -43,12 +44,12 @@ def fields(node, stream, endian, spec):
     return result
 
 
-def rgb(bgra):
-    def linear(channel):
-        unit = channel / 255
-        return unit / 12.92 if unit <= 0.04045 else ((unit + .055) / 1.055) ** 2.4
+def linear(unit):
+    return unit / 12.92 if unit <= 0.04045 else ((unit + .055) / 1.055) ** 2.4
 
-    return [linear(channel) for channel in reversed(bgra[:3])]
+
+def rgb(bgra):
+    return [linear(channel / 255) for channel in reversed(bgra[:3])]
 
 
 def direction(rotation):
@@ -153,6 +154,50 @@ def ascend_local_light(actor, node, stream, endian, cm_per_unit, kind):
     return result, "Imported editable local light. Baked shadows and lightmaps remain in review."
 
 
+def vengeance_local_light(actor, node, stream, endian, cm_per_unit, source_class):
+    values = fields(node, stream, endian, {
+        "lightradius": FLOAT, "lightbrightness": FLOAT, "lighthue": BYTE, "lightsaturation": BYTE,
+        "lighttype": BYTE, "lighteffect": BYTE, "lightcone": BYTE, "lightperiod": BYTE, "lightphase": BYTE,
+        "bcorona": BOOL, "bspeciallit": BOOL, "bonlyaffectcurrentzone": BOOL, "bdirectional": BOOL,
+        "bcastsvolumetricshadows": BOOL, "bdynamiclight": BOOL,
+    })
+    if not actor["transform"] or actor["references"].keys() & {"attachparent", "base"}:
+        raise ValueError("Local light needs an independent source transform.")
+    modulation = values.get("lighttype", 1)
+    if modulation == 0:
+        raise ValueError("Local light is disabled in the source.")
+    if modulation != 1:
+        raise ValueError("Modulated Vengeance light needs its source playback behavior.")
+    if any(values.get(key) for key in ("bcorona", "bspeciallit", "bonlyaffectcurrentzone", "bdynamiclight")):
+        raise ValueError("Corona, filtered lighting or dynamic light behavior needs manual conversion.")
+
+    # Vengeance's renderer enum is point, sun, spot. A saved value takes priority over the class default.
+    effect = values.get("lighteffect", 2 if source_class == "engine.spotlight" else 0)
+    if effect not in (0, 2) or effect == 0 and (source_class == "engine.spotlight" or values.get("bdirectional")):
+        raise ValueError("Directional or unsupported Vengeance light effect needs manual conversion.")
+    radius = bounded_scalar(values, "lightradius", 1e-6, 2e6 / (25 * cm_per_unit) - 1)
+    brightness = bounded_scalar(values, "lightbrightness", 0, 2040)
+    if radius is None or brightness is None:
+        raise ValueError("Vengeance local light needs saved radius and brightness or its source defaults.")
+
+    # Use the classic Unreal light scale and cone curve as editable approximations.
+    result = dict(kind="spot" if effect == 2 else "point", radius_cm=(radius + 1) * 25 * cm_per_unit,
+                  brightness=brightness / 255, cast_shadows=values.get("bcastsvolumetricshadows", False))
+    if effect == 2:
+        if "lightcone" not in values or "rotation" not in {tag["name"].casefold() for tag in node["tags"]}:
+            raise ValueError("Vengeance spotlight needs a saved light cone and rotation.")
+        outer = math.degrees(math.acos(1 - values["lightcone"] / 256))
+        if not 1 <= outer <= 89:
+            raise ValueError("Vengeance spotlight cone is outside the draft range.")
+        result.update(inner_angle=0, outer_angle=outer)
+    if "lighthue" in values and "lightsaturation" in values:
+        tint = hsv_to_rgb(values["lighthue"] / 255, 1 - values["lightsaturation"] / 255, 1)
+        result["color"] = [linear(channel) for channel in tint]
+    elif values.keys() & {"lighthue", "lightsaturation"}:
+        raise ValueError("Vengeance light tint needs both saved hue and saturation or its source defaults.")
+    return result, "Imported editable Vengeance light with approximate legacy attenuation and tint."
+
+
 def read_environment(scene, stream, endian):
     nodes = {node["line"]: node for node in descendants(scene["scene"][0])}
     by_class = {}
@@ -249,14 +294,10 @@ def read_environment(scene, stream, endian):
             light = record([actor], lambda: ascend_local_light(actor, node, stream, endian, cm_per_unit, kind))
             if light:
                 local_lights[str(actor["line"])] = light
-        elif not modern and source_class in {"engine.light", "engine.spotlight"}:
-            def legacy_light():
-                fields(node, stream, endian, {"lightradius": FLOAT, "lightbrightness": FLOAT, "lighthue": BYTE,
-                                              "lightsaturation": BYTE, "lighttype": BYTE, "lighteffect": BYTE,
-                                              "lightcone": BYTE, "bcorona": BOOL})
-                return {}, "Legacy local light retained for radius, attenuation and effect conversion."
-
-            record([actor], legacy_light)
+        elif not modern and source_class in VENGEANCE_LIGHT_CLASSES:
+            light = record([actor], lambda: vengeance_local_light(actor, node, stream, endian, cm_per_unit, source_class))
+            if light:
+                local_lights[str(actor["line"])] = light
     if notes:
         scene["environment_review"] = notes
     if local_lights:

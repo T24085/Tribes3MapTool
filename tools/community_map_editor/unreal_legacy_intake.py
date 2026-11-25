@@ -16,7 +16,7 @@ from intake_contract import (ASCEND_BASE_MATERIAL_VERSION, ASCEND_VERTEX_ATTRIBU
                              MAX_INTAKE_INTERIOR_BYTES,
                              NATIVE_ENVIRONMENT_VERSION,
                              NATIVE_LOCAL_LIGHTS_VERSION, PLAYABLE_BOUNDS,
-                             UNREAL_READER, UNREAL_SCENE, VENGEANCE_VERTEX_ATTRIBUTES_VERSION,
+                             UNREAL_READER, UNREAL_SCENE, VENGEANCE_LOCAL_LIGHTS_VERSION, VENGEANCE_VERTEX_ATTRIBUTES_VERSION,
                              bounded, finite, validate_minimap)
 from interior_geometry import MAX_GEOMETRY_BYTES, NATIVE_VERTEX_FIELDS
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
@@ -602,6 +602,8 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
         header["environment"] = environment
     if ascend_material:
         header.update(format=ASCEND_BASE_MATERIAL_VERSION, scene_format=version)
+    elif game == "vengeance" and any("local_light" in row for row in rows):
+        header.update(format=VENGEANCE_LOCAL_LIGHTS_VERSION, scene_format=version)
     elif any(mesh.keys() & NATIVE_VERTEX_FIELDS for mesh in mesh_docs.values()):
         vertex_version = ASCEND_VERTEX_ATTRIBUTES_VERSION if game == "ascend" else VENGEANCE_VERTEX_ATTRIBUTES_VERSION
         header.update(format=vertex_version, scene_format=version)

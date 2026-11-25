@@ -159,9 +159,13 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                              "Sunlight", "ZoneInfo", "bDistanceFog", "DistanceFogStart", "DistanceFogEnd",
                              "DistanceFogColor", "Brightness", "LightBrightness", "AmbientBrightness")
         strings = tuple(dict.fromkeys((*strings, *environment_names)))
-    if local_lights:
+    if local_lights and modern:
         strings += ("PointLight", "PointLightComponent", "SpotLight", "SpotLightComponent", "Radius", "CastShadows",
                     "FalloffExponent", "InnerConeAngle", "OuterConeAngle")
+    if local_lights and not modern:
+        strings += ("Light", "LightRadius", "LightCone", "LightHue", "LightSaturation", "LightType", "LightEffect",
+                    "bCorona", "bCastsVolumetricShadows", "LegacyPoint", "LegacySpot", "LegacyCorona",
+                    "LegacyAnimated", "LegacyDisabled", "LegacyDefaultRadius", "LegacySunEffect")
     if spawn_base:
         strings += ("UTGame", "UTTeamPlayerStart", "AttachParent")
     if modern and painted:
@@ -867,9 +871,10 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
         else:
             light_package = -1
 
-        def light(kind, fields, owner=outer, *, component=False, prefix=b""):
+        def light(kind, fields, owner=outer, *, component=False, prefix=b"", actor_name=None):
             imports.append(("Core", "Class", light_package, kind))
-            exports.append((-len(imports), owner, kind, 0, prefix + object_bytes(*fields, component=component), 3))
+            exports.append((-len(imports), owner, actor_name or kind, 0,
+                            prefix + object_bytes(*fields, component=component), 3))
             return len(exports)
 
         rotation = vector("Rotation", -8192, 16384, 0, structure="Rotator")
@@ -907,6 +912,24 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                       prop("DistanceFogEnd", "FloatProperty", pack("f", 9000)),
                       prop("DistanceFogColor", "StructProperty", bytes((64, 128, 255, 0)), "Color")]
             actors.append(light("ZoneInfo", fields))
+            if local_lights:
+                def byte(key, value):
+                    return prop(key, "ByteProperty", bytes([value]))
+
+                common = [vector("Location", -250, 0, 175), rotation,
+                          prop("LightBrightness", "FloatProperty", pack("f", 127.5))]
+                radius = prop("LightRadius", "FloatProperty", pack("f", 39))
+                for label, extra in (
+                    ("LegacyPoint", [radius, byte("LightHue", 85), byte("LightSaturation", 0)]),
+                    ("LegacySpot", [radius, byte("LightEffect", 2), byte("LightCone", 64),
+                                    prop("bCastsVolumetricShadows", "BoolProperty", b"\x01")]),
+                    ("LegacyCorona", [radius, prop("bCorona", "BoolProperty", b"\x01")]),
+                    ("LegacyAnimated", [radius, byte("LightType", 2)]),
+                    ("LegacyDisabled", [radius, byte("LightType", 0)]),
+                    ("LegacyDefaultRadius", []),
+                    ("LegacySunEffect", [radius, byte("LightEffect", 1)]),
+                ):
+                    actors.append(light("Light", common + extra, actor_name=label))
         expanded = (*roster, *actors)
         level = object_bytes()
         if modern:
@@ -2237,6 +2260,47 @@ class UnrealBinarySceneTests(unittest.TestCase):
             _, _, public_rows = load_intake(unpack_intake(shared, root / "Public"))
             self.assertFalse(any("local_light" in row for row in public_rows))
             on_disk["format"] = 53
+            manifest.write_text(json.dumps(on_disk), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "compatible native intake"):
+                load_intake(manifest)
+
+    def test_vengeance_local_lights_keep_supported_parameters_and_review_other_effects(self):
+        from object_catalog import load_catalog
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "vengeance", static_mesh="companion",
+                                          environment=True, local_lights=True)
+            manifest = convert_unreal(source, root / "Intakes")
+            on_disk = json.loads(manifest.read_bytes())
+            self.assertEqual((on_disk["format"], on_disk["scene_format"]), (58, 27))
+            header, _, rows = load_intake(manifest)
+            by_name = {row["name"]: row for row in rows}
+            point, spot = by_name["LegacyPoint"], by_name["LegacySpot"]
+            for row in (point, spot):
+                self.assertEqual(row["transform"]["position_cm"], [-500, 0, 350])
+                self.assertEqual(row["local_light"]["radius_cm"], 2000)
+                self.assertEqual(row["local_light"]["brightness"], .5)
+            self.assertEqual(point["local_light"], dict(kind="point", radius_cm=2000, brightness=.5,
+                                                        color=[0, 1, 0], cast_shadows=False))
+            self.assertEqual(spot["local_light"]["kind"], "spot")
+            self.assertTrue(spot["local_light"]["cast_shadows"])
+            self.assertEqual(spot["local_light"]["inner_angle"], 0)
+            self.assertAlmostEqual(spot["local_light"]["outer_angle"], 41.409622, places=5)
+            self.assertEqual(spot["properties"]["LightCone"], "64")
+            catalog = load_catalog(source_profile=header["profile"])
+            self.assertEqual(catalog.definition(spot)["feature"], "lighting")
+            for name, message in (("LegacyCorona", "Corona"), ("LegacyAnimated", "Modulated"),
+                                  ("LegacyDisabled", "disabled"), ("LegacyDefaultRadius", "source defaults"),
+                                  ("LegacySunEffect", "Directional")):
+                self.assertNotIn("local_light", by_name[name])
+                self.assertIn(message, by_name[name]["reason"])
+            self.assertEqual(by_name["LegacyAnimated"]["properties"]["LightType"], "2")
+
+            shared = export_public_layout(manifest, root / "Public.zip")
+            _, _, public_rows = load_intake(unpack_intake(shared, root / "Public"))
+            self.assertFalse(any("local_light" in row for row in public_rows))
+            on_disk["format"] = 55
             manifest.write_text(json.dumps(on_disk), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "compatible native intake"):
                 load_intake(manifest)

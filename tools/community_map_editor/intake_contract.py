@@ -47,9 +47,10 @@ NATIVE_LOCAL_LIGHTS_VERSION = 54
 VENGEANCE_VERTEX_ATTRIBUTES_VERSION = 55
 ASCEND_VERTEX_ATTRIBUTES_VERSION = 56
 ASCEND_BASE_MATERIAL_VERSION = 57
+VENGEANCE_LOCAL_LIGHTS_VERSION = 58
 VERTEX_ATTRIBUTES_VERSIONS = {VENGEANCE_VERTEX_ATTRIBUTES_VERSION, ASCEND_VERTEX_ATTRIBUTES_VERSION}
 NATIVE_SCENE_ENVELOPES = {NATIVE_ENVIRONMENT_VERSION, NATIVE_LOCAL_LIGHTS_VERSION, ASCEND_BASE_MATERIAL_VERSION,
-                          *VERTEX_ATTRIBUTES_VERSIONS}
+                          VENGEANCE_LOCAL_LIGHTS_VERSION, *VERTEX_ATTRIBUTES_VERSIONS}
 LATEST_INTAKE_VERSION = max(*NATIVE_SCENE_ENVELOPES, UNREAL_INTAKE_VERSION, *T2_DIF_VERSIONS,
                             *T2_GENERATOR_SCOPE_VERSIONS)
 T1_SHAPE_INTAKE_VERSION = {4: 18, 5: 19, 6: 20, 7: 21}
@@ -402,6 +403,9 @@ def intake_scene_format(header):
                 or version == NATIVE_ENVIRONMENT_VERSION and "environment" not in header
                 or version == NATIVE_LOCAL_LIGHTS_VERSION and
                 (header.get("profile") != ASCEND or header.get("reader") != UNREAL_READER)
+                or version == VENGEANCE_LOCAL_LIGHTS_VERSION and
+                (header.get("profile") != VENGEANCE or header.get("reader") != UNREAL_READER
+                 or scene not in (22, *VENGEANCE_TERRAIN_VERSIONS, *VENGEANCE_MODEL_VERSIONS))
                 or version == VENGEANCE_VERTEX_ATTRIBUTES_VERSION and
                 (header.get("profile") != VENGEANCE or header.get("reader") != UNREAL_READER
                  or scene not in (*VENGEANCE_MESH_VERSIONS, *VENGEANCE_EXTENDED_SHADER_VERSIONS,
@@ -431,7 +435,7 @@ def intake_header(manifest):
     return header
 
 
-def validate_unreal_row(row, *, allow_local_lights=False):
+def validate_unreal_row(row, *, allow_local_lights=False, vengeance_lights=False):
     conversion_class = row.get("conversion_class")
     if "conversion_class" in row and (not isinstance(conversion_class, str) or conversion_class not in UNREAL_CLASSES):
         raise ValueError("Invalid Unreal conversion class.")
@@ -465,7 +469,7 @@ def validate_unreal_row(row, *, allow_local_lights=False):
 
         if not allow_local_lights or conversion_class != "unreallight":
             raise ValueError("Local light records require a compatible native intake.")
-        validate_local_light(row)
+        validate_local_light(row, vengeance=vengeance_lights)
 
 
 def validate_brush_records(scene, rows, references, *, version):
@@ -701,9 +705,10 @@ def load_intake(manifest):
     header = intake_header(manifest)
     native_envelope = header["format"] in NATIVE_SCENE_ENVELOPES
     native_lights = header["format"] == NATIVE_LOCAL_LIGHTS_VERSION
+    vengeance_lights = header["format"] == VENGEANCE_LOCAL_LIGHTS_VERSION
     vertex_attributes = header["format"] in VERTEX_ATTRIBUTES_VERSIONS
     ascend_material = header["format"] == ASCEND_BASE_MATERIAL_VERSION
-    allow_local_lights = native_lights or ascend_material or header["format"] == ASCEND_VERTEX_ATTRIBUTES_VERSION
+    allow_local_lights = native_lights or vengeance_lights or ascend_material or header["format"] == ASCEND_VERTEX_ATTRIBUTES_VERSION
     if native_envelope:
         # Geometry consumers use the existing scene and inventory contract.
         header["format"] = header.pop("scene_format")
@@ -921,7 +926,7 @@ def load_intake(manifest):
                 if not compatible or not receipt_matches or model_files[name] != "unrealmesh:" + path.casefold():
                     raise ValueError("Static mesh does not match its Unreal package source.")
                 if geometry.keys() & NATIVE_VERTEX_FIELDS:
-                    if not (vertex_attributes or ascend_material):
+                    if not (vertex_attributes or ascend_material or vengeance_lights):
                         game, version = (('Ascend', ASCEND_VERTEX_ATTRIBUTES_VERSION) if model_format == ASCEND_STATIC_MESH
                                          else ('Vengeance', VENGEANCE_VERTEX_ATTRIBUTES_VERSION))
                         raise ValueError(f"{game} vertex attributes require intake version {version}.")
@@ -1128,7 +1133,7 @@ def load_intake(manifest):
             raise ValueError("Invalid object record or parent relationship.")
         ids.add(row["id"])
         if unreal:
-            validate_unreal_row(row, allow_local_lights=allow_local_lights)
+            validate_unreal_row(row, allow_local_lights=allow_local_lights, vengeance_lights=vengeance_lights)
         elif row.keys() & {"conversion_class", "transform", "model_reference", "local_light"}:
             raise ValueError("Unreal scene placement requires intake version 22.")
         if row["status"] == "marker":
@@ -1140,7 +1145,7 @@ def load_intake(manifest):
                 or not finite(row["yaw"], 360)
             ):
                 raise ValueError("Invalid objective marker.")
-    if native_lights and not any("local_light" in row for row in rows):
+    if (native_lights or vengeance_lights) and not any("local_light" in row for row in rows):
         raise ValueError("The native local light intake needs at least one light.")
     if ascend_placement_art:
         placements = {}

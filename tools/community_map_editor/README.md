@@ -288,8 +288,15 @@ point lights and spotlights with saved positions, color, radius, and
 spotlight cones. Explicit falloff, brightness, and shadow inputs are
 carried into the draft when provided. The Unreal light uses the saved
 brightness as a multiplier of the destination light's default intensity.
-Vengeance local lights and baked lighting stay in Object Review. Public
-layout exports omit individual light placements.
+
+[Intake version 58](intake-v58.schema.json) adds editable Vengeance lights
+to native imports. Independently placed steady point lights and spotlights
+with saved inputs become Unreal light actors. The draft radius, cone, and
+tint use legacy Unreal approximations. The intensity multiplier is the
+saved brightness divided by 255. The original values remain in Object
+Review. Modulation, coronas, filtered lights, baked lighting, and inputs
+that depend on missing source defaults still require review. Public
+layouts omit individual light placements.
 
 For Vengeance version 130/27, the importer reads the compiled level BSP
 into an editable static mesh alongside the terrain. The mesh retains
