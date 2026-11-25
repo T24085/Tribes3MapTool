@@ -1189,8 +1189,13 @@ Environment/Precipitation**. The draft uses the authored count, intensity,
 radius and colors. Fall and drift treat the legacy speeds as metres per
 second and apply the map's unit scale. Sky wind affects the particles when
 the mission enables it. The effect follows the viewing player and uses
-no collision. Interior shelter and exact Tribes 2 behavior require
-further work.
+no particle collision. Imported static interiors contribute a baked
+roof height mask shared by rain and snow. Particles disappear below the
+roof while open gaps and the air above it retain their weather. The mask
+uses a 125 cm target cell size, up to 512 cells per axis, so large drafts
+have coarser roof edges. Rebuild the draft after changing source roof
+geometry. Moving roofs and wind deflection around individual roofs remain
+outside the baked mask.
 
 Build the [Community Map Materials plugin](Plugins/CommunityMapMaterials)
 for the same Windows Unreal Editor build as the authoring project. Use

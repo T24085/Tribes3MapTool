@@ -90,7 +90,7 @@ def install_editor_scripts(project, env, *, include_seed=True):
                  'terrain_layers.py', 'native_terrain_paint.py', 'native_terrain_material_unreal.py',
                  'texture_batches.py', 'texture_batches_unreal.py',
                  'draft_materials.py',
-                 'sky_contract.py', 'sky_intake.py', 'draft_sky.py', 'draft_clouds.py', 'draft_precipitation.py',
+                 'sky_contract.py', 'sky_intake.py', 'draft_sky.py', 'draft_clouds.py', 'draft_precipitation.py', 'precipitation_shelter.py',
                  'draft_interiors.py', 'draft_movers.py', 'vengeance_mover_plan.py', 'unreal_legacy_reader.py',
                  'draft_elevators.py', 'vengeance_elevators.py',
                  'interior_geometry.py', 'dif_acoustics.py', 't1_dts_motion.py', 'interior_lighting.py', 'dif_light_animation.py',

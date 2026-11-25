@@ -282,6 +282,7 @@ def place_static_objects(actors, planned, meshes, material_overrides=None, light
                          mover_tracks=None, draft=None, triggers=None, acoustic_rooms=(), light_commands=None):
     material_overrides = material_overrides or {}
     mover_tracks = mover_tracks or {}
+    placed = []
     for row, path, location, rotation, scale in planned:
         motion = mover_tracks.get(row["id"])
         if motion:
@@ -335,6 +336,8 @@ def place_static_objects(actors, planned, meshes, material_overrides=None, light
             actor.tags = list(actor.tags) + [unreal.Name(f"{BINDING_TAG}{ident}") for ident in light_commands[row["id"]]]
         actor.set_actor_label(row["name"] or f"{row['source_class']} {row['id']}")
         actor.set_folder_path("TRIBES Import/Moving brushes" if motion else "TRIBES Import/Mapped meshes")
+        if row["source_class"].casefold() in ("interiorinstance", "interiorshape"):
+            placed.append(actor)
         if motion:
             from draft_movers import place_mover
 
@@ -344,6 +347,7 @@ def place_static_objects(actors, planned, meshes, material_overrides=None, light
                 from draft_elevators import add_trigger_receivers
 
                 add_trigger_receivers(triggers, senders, sequence)
+    return placed
 
 
 def plan_native_brushes(folder, header, rows, manual):
@@ -537,6 +541,8 @@ class DraftImport:
         self.showcase_ready = False
         self.material_overrides = {}
         self.placed_audio = set()
+        self.weather_shelters = None
+        self.pending_precipitation = ()
 
     def verify(self, _):
         self.header, self.terrain, self.rows = load_intake(self.manifest)
@@ -832,8 +838,9 @@ class DraftImport:
         if not any(row["settings"]["outside_only"] for row, _, _ in planned_audio):
             acoustic_rooms = set()
         triggers = {}
-        place_static_objects(editor.ACTORS, planned, meshes, material_overrides, lighting, native_modes,
-                             self.mover_tracks, self.ident, triggers, acoustic_rooms, getattr(self, "light_commands", None))
+        self.weather_shelters = place_static_objects(
+            editor.ACTORS, planned, meshes, material_overrides, lighting, native_modes,
+            self.mover_tracks, self.ident, triggers, acoustic_rooms, getattr(self, "light_commands", None))
         if self.lifts:
             from draft_elevators import place_elevators
 
@@ -870,6 +877,17 @@ class DraftImport:
 
             self.placed_audio = place_audio(editor.ACTORS, self.ident, self.folder, planned_audio)
         self.equipment = equipment
+        self.place_pending_precipitation()
+
+    def place_pending_precipitation(self):
+        if self.weather_shelters is None or not self.pending_precipitation:
+            return
+        from draft_precipitation import place_precipitation
+
+        editor = self.editor
+        place_precipitation(self.ident, editor.ACTORS, self.pending_precipitation,
+                            world=editor.world(), shelters=self.weather_shelters)
+        self.pending_precipitation = ()
 
     def lighting(self, _):
         place_environment(self.editor.ACTORS, self.environment, self.values)
@@ -891,9 +909,8 @@ class DraftImport:
             place_clouds(ident, editor.ACTORS, layers)
         if emitters := precipitation_emitters(weather, terrain["cm_per_m"]):
             if hasattr(unreal, "CommunityMapMaterialLibrary"):
-                from draft_precipitation import place_precipitation
-
-                place_precipitation(ident, editor.ACTORS, emitters)
+                self.pending_precipitation = emitters
+                self.place_pending_precipitation()
             else:
                 message = "Precipitation requires the Community Map Materials editor plugin."
                 unreal.log_warning(message)

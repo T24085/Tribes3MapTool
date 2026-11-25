@@ -117,13 +117,20 @@ def terrain_png(terrain, bounds):
 
 
 def grayscale_png(pixels, depth, width=256, height=256):
+    return png_pixels(pixels, width, height, depth, 0, width * depth // 8)
+
+
+def rgb_png(pixels, width, height):
+    return png_pixels(pixels, width, height, 8, 2, width * 3)
+
+
+def png_pixels(pixels, width, height, depth, color_type, stride):
     def chunk(name, data):
         return struct.pack(">I", len(data)) + name + data + struct.pack(">I", zlib.crc32(name + data))
 
-    stride = width * depth // 8
     rows = b"".join(b"\0" + pixels[i * stride:(i + 1) * stride] for i in range(height))
     return (b"\x89PNG\r\n\x1a\n"
-            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, depth, 0, 0, 0, 0))
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, depth, color_type, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 

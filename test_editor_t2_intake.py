@@ -532,6 +532,37 @@ class IntakeTests(unittest.TestCase):
         self.assertEqual(cloud_layers({"objects": [sky]}, artwork, -1)[0]["slot"], 7)
         self.assertEqual(cloud_layers({"objects": [sky, {**sky, "source_id": 8}]}, artwork, -1), [])
 
+    def test_roof_height_mask_samples_shelter_without_filling_gaps(self):
+        from PIL import Image
+        from precipitation_shelter import roof_mask
+
+        roofs = [((0, 0, 100), (500, 500, 400)),
+                 ((2000, 0, 500), (2500, 500, 700))]
+        queries = []
+
+        def sample(x, y, bottom, top):
+            queries.append((x, y, bottom, top))
+            if x < 100 and y < 100:  # An opening inside the first roof's bounds.
+                return None
+            return 400 if x < 1000 else 700
+
+        baked, origin, extent, low, span = roof_mask(roofs, sample)
+        self.assertEqual((low, span), (80, 640))
+        self.assertTrue(all((0 <= x <= 500 or 2000 <= x <= 2500) and 0 <= y <= 500
+                            for x, y, _, _ in queries))
+        with Image.open(io.BytesIO(baked)) as image:
+            def roof_at(x, y):
+                u = int((x - origin[0]) / extent[0] * image.width)
+                v = int((y - origin[1]) / extent[1] * image.height)
+                high, low_byte, present = image.getpixel((u, v))
+                return low + (high * 256 + low_byte) * span / 65535 if present else None
+
+            self.assertAlmostEqual(roof_at(250, 250), 400, places=2)
+            self.assertAlmostEqual(roof_at(2250, 250), 700, places=2)
+            self.assertIsNone(roof_at(1200, 250))
+            self.assertIsNone(roof_at(60, 60))
+        self.assertIsNone(roof_mask(roofs, lambda *_: None))
+
     def test_weather_intake_preserves_authored_settings_and_rejects_detached_projections(self):
         mission = self.mission.read_text()
         self.mission.write_text(mission[:mission.rindex("};")] + """

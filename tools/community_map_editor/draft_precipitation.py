@@ -1,11 +1,15 @@
 """Build local-view rain and snow from the authored mission settings."""
 
 import random
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import unreal
 
 from draft_sky import draft_backdrop
 from mission_weather import PRECIPITATION_ACTOR_TAG
+from precipitation_shelter import roof_mask
+from texture_batches_unreal import import_texture
 
 
 TIME_OFFSET = 'Precipitation time offset'
@@ -43,7 +47,57 @@ def particle_mesh(folder, name, emitter, half_extent):
     return asset
 
 
-def particle_material(folder, name, emitter):
+def bake_shelter(world, folder, level_actors, shelters):
+    bounds, roofs = [], []
+    checked = set()
+    for actor in shelters:
+        component = actor.static_mesh_component
+        mesh = component.static_mesh
+        if (not mesh or component.get_collision_enabled() == unreal.CollisionEnabled.NO_COLLISION
+                or component.mobility != unreal.ComponentMobility.STATIC):
+            continue
+        if mesh.get_path_name() not in checked:
+            mesh.get_num_triangles(0)
+            checked.add(mesh.get_path_name())
+        center, half = actor.get_actor_bounds(True)
+        if min(half.x, half.y) > 0:
+            bounds.append(((center - half).to_tuple(), (center + half).to_tuple()))
+            roofs.append(actor)
+    if not roofs:
+        return None
+    roof_paths = {actor.get_path_name() for actor in roofs}
+    excluded = [actor for actor in level_actors if actor.get_path_name() not in roof_paths
+                and actor.get_components_by_class(unreal.PrimitiveComponent)]
+
+    def sample(x, y, low, high):
+        result = unreal.SystemLibrary.line_trace_single(
+            world, unreal.Vector(x, y, high), unreal.Vector(x, y, low),
+            unreal.TraceTypeQuery.TRACE_TYPE_QUERY1, True, excluded, unreal.DrawDebugTrace.NONE, True)
+        if result:
+            hit = result.to_tuple()
+            if hit[0]:
+                return hit[5].z
+        return None
+
+    recipe = roof_mask(bounds, sample)
+    if recipe is None:
+        return None
+    png, origin, size, lowest, span = recipe
+    with TemporaryDirectory() as temporary:
+        path = Path(temporary) / 'T_PrecipitationShelter.png'
+        path.write_bytes(png)
+        texture = import_texture(path, folder, unreal.Texture2D)
+    texture.set_editor_property('srgb', False)
+    texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_VECTOR_DISPLACEMENTMAP)
+    texture.set_editor_property('mip_gen_settings', unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS)
+    texture.set_editor_property('filter', unreal.TextureFilter.TF_NEAREST)
+    texture.set_editor_property('never_stream', True)
+    if not unreal.EditorAssetLibrary.save_loaded_asset(texture, only_if_is_dirty=False):
+        raise ValueError('Unreal could not save the precipitation shelter mask.')
+    return texture, origin, size, lowest, span
+
+
+def particle_material(folder, name, emitter, shelter=None):
     material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
         name, folder, unreal.Material, unreal.MaterialFactoryNew())
     if not isinstance(material, unreal.Material):
@@ -114,15 +168,30 @@ def particle_material(folder, name, emitter):
     color = node(unreal.MaterialExpressionVertexColor, -680, 760)
     shape = ('saturate(1.0 - abs(p.x)) * sqrt(saturate(1.0 - abs(p.y)))'
              if rain else '1.0 - smoothstep(0.2, 1.0, dot(p, p))')
+    shelter_code = ''
+    alpha_inputs = [('Eye', eye, ''), ('Position', position, ''), ('ParticleUV', uv, ''), ('TintAlpha', color, 'A')]
+    if shelter:
+        texture, origin, size, lowest, span = shelter
+        object_node = node(unreal.MaterialExpressionTextureObject, -680, 900)
+        object_node.set_editor_property('texture', texture)
+        object_node.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
+        alpha_inputs.append(('Shelter', object_node, ''))
+        shelter_code = f"""
+            float2 RoofUV = (Position.xy - float2({origin[0]}, {origin[1]})) / float2({size[0]}, {size[1]});
+            if (all(RoofUV >= 0.0) && all(RoofUV < 1.0)) {{
+                float3 PackedHeight = Texture2DSampleLevel(Shelter, ShelterSampler, RoofUV, 0).rgb;
+                float HeightFraction = dot(round(PackedHeight.rg * 255.0), float2(256.0, 1.0)) / 65535.0;
+                if (PackedHeight.b > 0.5 && Position.z <= {lowest} + HeightFraction * {span}) return 0.0;
+            }}
+        """
     alpha = shader('Particle mask and volume fade', f"""
+        {shelter_code}
         float2 p = ParticleUV * 2 - 1;
         float d = length(Position - Eye);
         return ({shape}) * TintAlpha
              * smoothstep(15.0, 60.0, d)
              * (1 - smoothstep({radius * 0.78}, {float(radius)}, d));
-    """, unreal.CustomMaterialOutputType.CMOT_FLOAT1, (
-        ('Eye', eye, ''), ('Position', position, ''), ('ParticleUV', uv, ''), ('TintAlpha', color, 'A'),
-    ), 580)
+    """, unreal.CustomMaterialOutputType.CMOT_FLOAT1, alpha_inputs, 580)
     # UE 5.3 hides the world-position offset pin from the Python enum.
     if not unreal.CommunityMapMaterialLibrary.connect_world_position_offset(move):
         raise ValueError('Unreal could not link the precipitation vertex offset.')
@@ -138,16 +207,18 @@ def particle_material(folder, name, emitter):
     return material
 
 
-def place_precipitation(draft, actors, emitters):
+def place_precipitation(draft, actors, emitters, *, world=None, shelters=()):
     if not emitters:
         return []
-    _, _, center, play_radius = draft_backdrop(draft, actors.get_all_level_actors())
+    level_actors = actors.get_all_level_actors()
+    _, _, center, play_radius = draft_backdrop(draft, level_actors)
     folder = f'/Game/Community/{draft}/Weather'
+    shelter = bake_shelter(world, folder, level_actors, shelters) if shelters else None
     result = []
     for emitter in emitters:
         label = emitter['kind'].title()
         suffix = f"{label}_{emitter['source_id']}"
-        material = particle_material(folder, 'M_' + suffix, emitter)
+        material = particle_material(folder, 'M_' + suffix, emitter, shelter)
         mesh = particle_mesh(folder, 'SM_' + suffix, emitter, play_radius + emitter['radius_cm'])
         actor = actors.spawn_actor_from_class(unreal.StaticMeshActor, center)
         if not actor or not actor.static_mesh_component.set_static_mesh(mesh):
