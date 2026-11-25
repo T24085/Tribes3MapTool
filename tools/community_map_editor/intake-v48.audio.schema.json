@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES 2 inherited mission audio, intake version 48",
+  "description": "Verified literal audio datablocks used by the emitters, with the source receipt for each declaration.",
+  "type": "object",
+  "required": ["format", "emitters", "clips", "definitions"],
+  "additionalProperties": false,
+  "properties": {
+    "format": {"const": 2},
+    "emitters": {"$ref": "intake-v47.audio.schema.json#/properties/emitters"},
+    "clips": {"$ref": "intake-v47.audio.schema.json#/properties/clips"},
+    "definitions": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 512,
+      "propertyNames": {"pattern": "^[a-z_][a-z0-9_]{0,95}$"},
+      "additionalProperties": {
+        "type": "object",
+        "required": ["kind", "parent", "fields", "source"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {"enum": ["profile", "description"]},
+          "parent": {"type": "string", "pattern": "^([a-z_][a-z0-9_]{0,95})?$"},
+          "fields": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 180}},
+          "source": {
+            "type": "object",
+            "required": ["name", "origin", "sha256"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {"type": "string", "minLength": 4, "maxLength": 260, "pattern": "[.]cs$"},
+              "origin": {"type": "string", "minLength": 4, "maxLength": 260, "pattern": "^[^/\\\\:]+$"},
+              "sha256": {"$ref": "intake-v2.schema.json#/$defs/digest"}
+            }
+          }
+        },
+        "if": {"properties": {"kind": {"const": "profile"}}},
+        "then": {"properties": {"fields": {"propertyNames": {"enum": ["filename", "description"]}}}},
+        "else": {
+          "properties": {
+            "fields": {
+              "propertyNames": {
+                "enum": ["volume", "islooping", "is3d", "mindistance", "maxdistance", "minloopgap", "maxloopgap",
+                         "loopcount", "coneinsideangle", "coneoutsideangle", "coneoutsidevolume", "conevector"]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

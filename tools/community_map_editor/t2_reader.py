@@ -23,7 +23,7 @@ from mission_weather import WEATHER_FILE, mission_weather
 from model_textures import MAX_TEXTURE_BYTES, TEXTURE_FILE, TEXTURE_INDEX
 from native_terrain_paint import MAX_PAINT_PNG_BYTES, PAINT_FILE
 from sky_intake import MAX_SKY_BYTES, SKY_PNG
-from source_profiles import (T2_AUDIO_VERSION, T2_DIF_ANIMATION_VERSION, T2_DIF_LOD_LIGHT_VERSION, T2_DIF_LOD_VERSION,
+from source_profiles import (T2_AUDIO_PROFILES_VERSION, T2_AUDIO_VERSION, T2_DIF_ANIMATION_VERSION, T2_DIF_LOD_LIGHT_VERSION, T2_DIF_LOD_VERSION,
                              T2_GENERATOR_SCOPE_VERSION)
 from interior_lighting import LIGHTING_INDEX, LIGHTMAP_FILE, MAX_LIGHTMAP_BYTES
 from terrain_art import ART_FILE, MAX_ART_BYTES
@@ -535,12 +535,14 @@ def convert(source, output, mission=None, terrain=None, *, dif_decoder=None, dif
     if generator_scopes:
         header.update(format=T2_GENERATOR_SCOPE_VERSION, reader="t2-mission-v46.0")
     audio_root = audio_assets or dif_assets or dts_assets
-    audio, receipts = collect_audio(rows, terrain_data, source.resolve(), Path(audio_root).resolve() if audio_root else None)
+    audio, receipts, inherited = collect_audio(
+        rows, terrain_data, source.resolve(), Path(audio_root).resolve() if audio_root else None)
     if audio:
         files.update(audio)
         header['files'].update({name: sha(data) for name, data in audio.items()})
         header['sources'].extend(receipts)
-        header.update(format=T2_AUDIO_VERSION, reader='t2-mission-v47.0')
+        version = T2_AUDIO_PROFILES_VERSION if inherited else T2_AUDIO_VERSION
+        header.update(format=version, reader=f't2-mission-v{version}.0')
     return publish_intake(header, files, output)
 
 
@@ -653,7 +655,7 @@ if __name__ == "__main__":
     parser.add_argument("--dts-decoder", type=Path, help="Installed io_scene_dts or dtslib folder")
     parser.add_argument("--dts-assets", type=Path, help="Tribes 2 content directory or asset VL2")
     parser.add_argument("--sky-assets", type=Path, help="Tribes 2 content directory or asset VL2")
-    parser.add_argument("--audio-assets", type=Path, help="Tribes 2 content directory or WAV asset VL2")
+    parser.add_argument("--audio-assets", type=Path, help="Tribes 2 content directory or VL2 with WAVs and sound profiles")
     args = parser.parse_args()
     print(convert(args.source, args.output, args.mission, args.terrain,
                   dif_decoder=args.dif_decoder, dif_assets=args.dif_assets,

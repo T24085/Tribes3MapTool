@@ -14,7 +14,7 @@ MAX_EMITTERS = 256
 MAX_CLIPS = 64
 MAX_WAVE_BYTES = 8 * 1024 * 1024
 MAX_AUDIO_BYTES = 24 * 1024 * 1024
-MAX_AUDIO_INDEX = 256 * 1024
+MAX_AUDIO_INDEX = 512 * 1024
 UNRESOLVED = {'missing', 'ambiguous', 'unreadable', 'capacity'}
 
 
@@ -61,8 +61,9 @@ def switch(raw):
     return value
 
 
-def emitters(rows, terrain):
+def emitters(rows, terrain, definitions=None, used_definitions=None):
     from mesh_mappings import source_transform
+    from mission_audio_profiles import project_emitter
 
     result = []
     scale = terrain['cm_per_m']
@@ -74,6 +75,16 @@ def emitters(rows, terrain):
             raise ValueError('Too many mission audio emitters for one intake.')
         fields = {key.casefold(): value for key, value in row['properties'].items() if isinstance(value, str)}
         settings, review = {}, []
+        profile = bool({'profile', 'description'} & fields.keys()) or fields.get('useprofiledescription') in ('true', '1')
+        resolved = False
+        if definitions and profile:
+            try:
+                fields, used = project_emitter(fields, definitions)
+            except ValueError:
+                pass
+            else:
+                resolved = bool(used)
+                used_definitions.update(used)
         for source, key, parse in (
             ('filename', 'clip', clip_reference),
             ('volume', 'volume', lambda value: number(value, 0, 1)),
@@ -114,17 +125,25 @@ def emitters(rows, terrain):
             review.append('position')
         if 'clip' not in settings and 'filename' not in review:
             review.append('filename')
-        if settings.get('use_profile') or 'profile' in fields:
-            # Profile inheritance needs literal datablock resolution before playback.
+        if (settings.get('use_profile') or 'profile' in fields or definitions and profile) and not resolved:
             review.append('profile')
         result.append(dict(source_id=row['id'], position_cm=transform, settings=settings, review=review))
     return result
 
 
-def validate_audio_index(index, rows, terrain, wave_files, inventory, receipts):
-    expected = emitters(rows, terrain)
-    if (not isinstance(index, dict) or index.keys() != {'format', 'emitters', 'clips'}
-            or type(index['format']) is not int or index['format'] != 1 or not expected
+def validate_audio_index(index, rows, terrain, wave_files, inventory, receipts, *, inherited=False):
+    from mission_audio_profiles import validate_definitions
+
+    fields = {'format', 'emitters', 'clips'} | ({'definitions'} if inherited else set())
+    if (not isinstance(index, dict) or index.keys() != fields or type(index['format']) is not int
+            or index['format'] != (2 if inherited else 1)):
+        raise ValueError('Invalid mission audio index.')
+    definitions = index.get('definitions')
+    if inherited:
+        validate_definitions(definitions, receipts)
+    used = set()
+    expected = emitters(rows, terrain, definitions, used)
+    if (not expected or used != set(definitions or {})
             or json.dumps(index['emitters'], sort_keys=True) != json.dumps(expected, sort_keys=True)):
         raise ValueError('Intake audio emitters do not match the mission.')
     clips = index['clips']
@@ -294,10 +313,19 @@ def collect_audio(rows, terrain, source, asset_root):
     from zipfile import BadZipFile
 
     from mission_interiors import indexed_assets, pick_exact, read_asset
+    from mission_audio_profiles import source_scripts
 
-    placements = emitters(rows, terrain)
+    references_profiles = any(row['source_class'].casefold() == 'audioemitter' and row['status'] != 'excluded'
+                              and any(key.casefold() in ('profile', 'description') for key in row['properties'])
+                              for row in rows)
+    definitions = source_scripts(source, asset_root) if references_profiles else {}
+    used = set()
+    placements = emitters(rows, terrain, definitions, used)
+    if definitions.keys() != used:
+        definitions = {name: definitions[name] for name in sorted(used)}
+        placements = emitters(rows, terrain, definitions, used)
     if not placements:
-        return {}, []
+        return {}, [], False
     requested = sorted({row['settings']['clip'] for row in placements if 'clip' in row['settings']})
     files, clips, receipts, total = {}, {}, [], 0
     if requested:
@@ -332,5 +360,10 @@ def collect_audio(rows, terrain, source, asset_root):
                     origin = (owner if isinstance(owner, Path) else Path(owner.filename)).name
                 clips[reference] = dict(file=member, source_sha256=digest, origin=origin, pcm=metadata)
                 receipts.append(dict(name=reference, origin=origin, sha256=digest))
-    files[AUDIO_INDEX] = json.dumps(dict(format=1, emitters=placements, clips=clips), ensure_ascii=False).encode()
-    return files, receipts
+    index = dict(format=2 if definitions else 1, emitters=placements, clips=clips)
+    if definitions:
+        unique = {tuple(sorted(record['source'].items())) for record in definitions.values()}
+        receipts.extend(dict(pairs) for pairs in sorted(unique))
+        index['definitions'] = definitions
+    files[AUDIO_INDEX] = json.dumps(index, ensure_ascii=False, sort_keys=bool(definitions)).encode()
+    return files, receipts, bool(definitions)

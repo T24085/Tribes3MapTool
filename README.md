@@ -14,6 +14,10 @@ can still play their Sound Cues. Object Review identifies emitters
 that need additional mapping. Shared layouts omit the audio.
 See [intake packages](tools/community_map_editor/README.md#intake-packages).
 
+Version 48 can also resolve inherited sound settings from literal Tribes 2
+audio profiles in loose scripts and VL2 files. The private intake records
+which profiles supplied the clip and playback settings. [Version 48 audio schema](tools/community_map_editor/intake-v48.audio.schema.json)
+
 For the Windows ZIP, extract the archive and double-click **Start TRIBES 3 Map Editor.bat**. The launcher creates or reopens the workspace under `%LOCALAPPDATA%\Tribes3MapTool`.
 
 Install Python 3.13 and Unreal Engine 5.3, then run these commands from this checkout with your own workspace parent.

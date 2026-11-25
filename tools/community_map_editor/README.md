@@ -1117,9 +1117,17 @@ Sound Cues.
 Spatial emitters use mono sound and spherical linear attenuation between
 the authored full-volume and cutoff distances. A WAV used for both
 one-shot and continuous playback gets two SoundWave assets. Identical
-audio schedules can share a sound asset. Object Review keeps directional,
-outside-only, and profile-based emitters available for review.
-Shared layouts omit the sound index, WAVs, and source audio references.
+audio schedules can share a sound asset.
+
+Version 48 also resolves literal `AudioProfile` and `AudioDescription`
+declarations in loose sound scripts and supplied VL2 archives. Parent
+datablocks provide inherited values when the emitter requests them.
+The private intake includes the used declarations and the digest of
+each source script. Computed expressions, conflicting references and
+unresolved parents stay in Object Review. [Manifest schema](intake-v48.schema.json) · [Audio index schema](intake-v48.audio.schema.json)
+
+Outside-only emitters still need an indoor volume mapping. Shared layouts
+omit the sound index, WAVs, and source audio references.
 
 When one authored sky resolves, the converter places up to three editable
 cloud layers from the DML cloud slots. It also accepts packs that omit the

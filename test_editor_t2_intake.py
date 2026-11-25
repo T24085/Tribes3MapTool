@@ -59,6 +59,71 @@ class IntakeTests(unittest.TestCase):
         )
         self.library = self.folder / "library"
 
+    def test_audio_profiles_resolve_literal_parents_and_remain_private(self):
+        self.mission.write_text('''new SimGroup(MissionGroup) {
+          new TerrainBlock(){terrainFile="Test.ter";position="-8 -16 1";squareSize="8";};
+          new AudioEmitter(Inherited){position="2 3 4";profile="FixtureLeaf";useProfileDescription="1";
+            outsideAmbient="0";volume=".1";isLooping="0";};
+          new AudioEmitter(Explicit){position="2 3 4";profile="FixtureLeaf";useProfileDescription="0";
+            outsideAmbient="0";volume=".2";isLooping="0";is3D="0";};
+          new AudioEmitter(Conflict){position="2 3 4";profile="FixtureLeaf";fileName="fx/other.wav";
+            outsideAmbient="0";useProfileDescription="1";};
+          new AudioEmitter(Dynamic){position="2 3 4";profile="UnsafeGain";useProfileDescription="1";};
+          new AudioEmitter(Cyclic){position="2 3 4";profile="LoopBack";useProfileDescription="1";};
+        };''', encoding="utf-8")
+        scripts = self.folder / "scripts"
+        scripts.mkdir()
+        base = b'''// datablock AudioDescription(FixtureBase) { volume = 0; };
+        datablock AudioDescription(FixtureBase) {
+          volume = .45; isLooping = true; is3D = true; referenceDistance = 20; maxDistance = 100;
+          coneInsideAngle = 360; coneOutsideAngle = 360; loopCount = -1; minLoopGap = 0; maxLoopGap = 0;
+        };'''
+        (scripts / "ambient.cs").write_bytes(base)
+        clip = io.BytesIO()
+        with wave.open(clip, "wb") as output:
+            output.setparams((1, 2, 8000, 0, "NONE", ""))
+            output.writeframes(b"\x00\x01" * 40)
+        source = self.folder / "Audio.vl2"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("fx/speaker.wav", clip.getvalue())
+            archive.writestr("scripts/profiles.cs", '''
+                datablock AudioDescription(FixtureMix : FixtureBase) { volume = .65; };
+                datablock AudioProfile(FixtureSound) { filename = "fx/speaker.wav"; description = FixtureMix; };
+                datablock AudioProfile(FixtureLeaf:FixtureSound) { preload = true; };
+                datablock AudioDescription(DynamicValue:FixtureBase) { volume = $InputGain; };
+                datablock AudioProfile(UnsafeGain:FixtureSound) { description = DynamicValue; };
+                datablock AudioProfile(LoopBack:LoopBack) { filename = "fx/speaker.wav"; };
+            ''')
+        manifest = convert(self.mission, self.library, audio_assets=source)
+        header, _, rows = load_intake(manifest)
+        self.assertEqual(header["format"], 48)
+        audio = load_mission_audio(manifest, header["files"])
+        self.assertEqual(set(audio["definitions"]), {"fixturebase", "fixturemix", "fixturesound", "fixtureleaf"})
+        self.assertIn({"name": "scripts/ambient.cs", "origin": "ambient.cs",
+                       "sha256": hashlib.sha256(base).hexdigest()}, header["sources"])
+        by_id = {row["id"]: row["name"] for row in rows}
+        planned = {by_id[emitter["source_id"]]: emitter["settings"]
+                   for emitter, _, _ in audio_playback(audio, set(by_id))}
+        self.assertEqual(set(planned), {"Inherited", "Explicit"})
+        self.assertEqual(planned["Inherited"]["volume"], .65)
+        self.assertTrue(planned["Inherited"]["looping"])
+        self.assertEqual(planned["Inherited"]["min_distance_cm"], 2100.0)
+        self.assertEqual(planned["Explicit"]["volume"], .2)
+        self.assertFalse(planned["Explicit"]["looping"])
+        self.assertEqual(planned["Explicit"]["clip"], "fx/speaker.wav")
+        shared = export_public_layout(manifest, self.folder / "shared.zip")
+        with zipfile.ZipFile(shared) as archive:
+            self.assertNotIn(AUDIO_INDEX, archive.namelist())
+            self.assertNotIn(b"FixtureLeaf", archive.read("objects.json"))
+            self.assertNotIn(b"scripts/ambient.cs", archive.read("manifest.json"))
+        audio["emitters"][0]["settings"]["volume"] = 1
+        changed = json.dumps(audio).encode()
+        (manifest.parent / AUDIO_INDEX).write_bytes(changed)
+        header["files"][AUDIO_INDEX] = hashlib.sha256(changed).hexdigest()
+        manifest.write_text(json.dumps(header), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "emitters do not match"):
+            load_intake(manifest)
+
     def test_mission_audio_round_trips_privately_with_source_settings_and_review(self):
         self.mission.write_text('''new SimGroup(MissionGroup) {
           new TerrainBlock(){terrainFile="Test.ter";position="-8 -16 1";squareSize="8";};

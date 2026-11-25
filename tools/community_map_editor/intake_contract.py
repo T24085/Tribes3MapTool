@@ -16,7 +16,8 @@ from native_terrain_paint import MAX_PAINT_BYTES, MAX_PAINT_LAYERS, MAX_PAINT_PN
 from sky_intake import MAX_SKIES, MAX_SKY_BYTES, MAX_SKY_SLOTS, SKY_INDEX, SKY_PNG, validate_sky_artwork
 from source_profiles import (ASCEND, ASCEND_ART_VERSIONS, ASCEND_COLLISION_VERSIONS, ASCEND_CONVEX_COLLISION_VERSION,
                              ASCEND_PLACEMENT_ART_VERSION, ASCEND_PRIVATE_MESH_VERSIONS,
-                             BRUSH_PREVIEW_REFERENCE, NAMES, T2, T2_AUDIO_VERSION, T2_DIF_ANIMATION_VERSION, T2_DIF_LOD_LIGHT_VERSION,
+                             BRUSH_PREVIEW_REFERENCE, NAMES, T2, T2_AUDIO_PROFILES_VERSION, T2_AUDIO_VERSIONS,
+                             T2_DIF_ANIMATION_VERSION, T2_DIF_LOD_LIGHT_VERSION,
                              T2_DIF_LOD_VERSIONS, T2_DIF_VERSIONS, T2_GENERATOR_SCOPE_VERSION, T2_GENERATOR_SCOPE_VERSIONS,
                              UNREAL_INTAKE_VERSION,
                              UNREAL_INTAKE_VERSIONS, VENGEANCE, VENGEANCE_ART_INTAKE_VERSION,
@@ -38,7 +39,7 @@ MAX_INTAKE_INTERIORS = 128
 MAX_INTAKE_INTERIOR_BYTES = 96 * 1024 * 1024
 PLAYABLE_BOUNDS = "playable_bounds_cm"
 BOUNDARY_RECIPE = "draft_boundary_recipe"
-LATEST_INTAKE_VERSION = max(UNREAL_INTAKE_VERSION, *T2_DIF_VERSIONS, T2_GENERATOR_SCOPE_VERSION, T2_AUDIO_VERSION)
+LATEST_INTAKE_VERSION = max(UNREAL_INTAKE_VERSION, *T2_DIF_VERSIONS, *T2_GENERATOR_SCOPE_VERSIONS)
 T1_SHAPE_INTAKE_VERSION = {4: 18, 5: 19, 6: 20, 7: 21}
 EQUIPMENT_FILE = "equipment.json"
 UNREAL_SCENE = "source-scene.json"
@@ -71,7 +72,7 @@ def intake_filename(name, version):
             or version >= 8 and name == WEATHER_FILE
             or version >= 9 and (name == SKY_INDEX or SKY_PNG.fullmatch(name))
             or version >= 10 and (name == LIGHTING_INDEX or LIGHTMAP_FILE.fullmatch(name))
-            or version == T2_AUDIO_VERSION and (name == AUDIO_INDEX or AUDIO_MEMBER.fullmatch(name)))
+            or version in T2_AUDIO_VERSIONS and (name == AUDIO_INDEX or AUDIO_MEMBER.fullmatch(name)))
 
 
 def max_intake_files(version):
@@ -94,7 +95,7 @@ def max_intake_files(version):
     if version >= 6:
         sky_files = 1 + MAX_SKIES * MAX_SKY_SLOTS if version >= 9 else 0
         lighting_files = 1 + MAX_LIGHTMAPS if version >= 10 else 0
-        audio_files = 1 + MAX_CLIPS if version == T2_AUDIO_VERSION else 0
+        audio_files = 1 + MAX_CLIPS if version in T2_AUDIO_VERSIONS else 0
         return (16 + int(version >= 7) + int(version >= 8) + MAX_INTAKE_INTERIORS + MAX_TEXTURES
                 + sky_files + lighting_files + audio_files)
     return 15 + MAX_INTAKE_INTERIORS if version in (4, 5) else 12 + version
@@ -110,7 +111,7 @@ def validate_legacy_height_header(raw):
 
 
 def intake_file_limit(name, version):
-    if version == T2_AUDIO_VERSION:
+    if version in T2_AUDIO_VERSIONS:
         if name == AUDIO_INDEX:
             return MAX_AUDIO_INDEX
         if AUDIO_MEMBER.fullmatch(name):
@@ -651,7 +652,7 @@ def load_intake(manifest):
     ):
         raise ValueError("Incomplete map name or source provenance.")
     inventory = header["files"]
-    has_audio = header['format'] == T2_AUDIO_VERSION
+    has_audio = header['format'] in T2_AUDIO_VERSIONS
     unreal = header["format"] in UNREAL_INTAKE_VERSIONS
     native_models = header["format"] in VENGEANCE_MODEL_VERSIONS
     ascend_art = header["format"] in ASCEND_ART_VERSIONS
@@ -674,7 +675,7 @@ def load_intake(manifest):
         raise ValueError("Incomplete intake inventory.")
     if ("minimap" in header) != ("minimap.png" in inventory):
         raise ValueError("Intake minimap settings and artwork must appear together.")
-    if has_audio and (AUDIO_INDEX not in inventory or header['reader'] != 't2-mission-v47.0'):
+    if has_audio and (AUDIO_INDEX not in inventory or header['reader'] != f't2-mission-v{header["format"]}.0'):
         raise ValueError('Mission audio requires its versioned index and reader.')
     if unreal and (header["reader"] not in (UNREAL_READER, PUBLIC_LAYOUT_READER)
                    or (UNREAL_SCENE in inventory) != (header["reader"] == UNREAL_READER)):
@@ -722,7 +723,7 @@ def load_intake(manifest):
     dif_animation = header["format"] == T2_DIF_ANIMATION_VERSION
     generator_scopes = header["format"] in T2_GENERATOR_SCOPE_VERSIONS
     flexible_dif = dif_animation or generator_scopes
-    interior_versions = (*range(4, 11), *range(15, 22), *T2_DIF_VERSIONS, T2_GENERATOR_SCOPE_VERSION, T2_AUDIO_VERSION)
+    interior_versions = (*range(4, 11), *range(15, 22), *T2_DIF_VERSIONS, *T2_GENERATOR_SCOPE_VERSIONS)
     if vengeance_bsp:
         interior_versions += UNREAL_INTAKE_VERSIONS
     if ascend_mesh:
@@ -733,7 +734,7 @@ def load_intake(manifest):
     model_files.update(validate_model_index(header, inventory, field="shapes", review_field="shape_review",
                                            pattern=SHAPE_FILE, prefix=("tsstatic:", "staticshape:"),
                                            supported=(*range(5, 11), *range(18, 22), *T2_DIF_VERSIONS,
-                                                      T2_GENERATOR_SCOPE_VERSION, T2_AUDIO_VERSION),
+                                                      *T2_GENERATOR_SCOPE_VERSIONS),
                                            required=(5, *range(18, 22))))
     texture_files = {name for name in inventory if TEXTURE_FILE.fullmatch(name)}
     has_textures = TEXTURE_INDEX in inventory
@@ -1092,5 +1093,6 @@ def load_intake(manifest):
             raise ValueError("Intake equipment does not match the source objects and power groups.")
     if has_audio:
         audio_receipts = {(item['name'], item['origin'], item['sha256']) for item in header['sources']}
-        validate_audio_index(docs[AUDIO_INDEX], rows, terrain, wave_files, inventory, audio_receipts)
+        validate_audio_index(docs[AUDIO_INDEX], rows, terrain, wave_files, inventory, audio_receipts,
+                             inherited=header['format'] == T2_AUDIO_PROFILES_VERSION)
     return header, terrain, rows
