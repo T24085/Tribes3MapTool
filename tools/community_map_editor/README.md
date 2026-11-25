@@ -9,6 +9,10 @@ Open the **TRIBES 3 Map Editor** launcher to enter the local Unreal authoring pr
 
 Drafts live in the Community maps folder inside the authoring project. Put newly imported assets under Content/Community so the draft cooker can package them. Each build stores its diagnostics under the local Runs folder.
 
+Windows map cooks embed shader code in their material assets so those
+materials can render when loaded by Starter. Rebuild older exports from
+their saved drafts if the game shows default materials or missing weather.
+
 ## Local setup
 
 In the Windows ZIP, extract the entire archive and open **Start TRIBES 3

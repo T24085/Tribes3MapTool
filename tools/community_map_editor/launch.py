@@ -126,9 +126,11 @@ def install_editor_scripts(project, env, *, include_seed=True):
 
 def cook(project, engine, package, out, env, *, plugins=None, cancellation_path=None, station_package=None):
     content = out/'cook/Windows'/project.stem/'Content'
+    # The game loads loose map assets without opening the author's shader library.
     args = [str(engine/'UnrealEditor-Cmd.exe'), str(project), '-run=Cook', '-TargetPlatform=Windows',
             '-CookSinglePackage', '-NoDefaultMaps', '-SkipEditorContent', '-Map='+package,
             '-OutputDir='+str(out/'cook/[Platform]'), '-unattended', '-nop4', '-nullrhi', '-nosound', '-NoCrashDialog',
+            '-ini:Game:[/Script/UnrealEd.ProjectPackagingSettings]:bShareMaterialShaderCode=False',
             '-ini:Engine:[ConsoleVariables]:Editor.AsyncStaticMeshCompilationMaxConcurrency=1',
             '-ini:Engine:[ConsoleVariables]:Editor.AsyncTextureCompilationMaxConcurrency=1',
             '-abslog='+str(out/'cook.log'), *(PLUGINS if plugins is None else plugins)]
@@ -139,6 +141,8 @@ def cook(project, engine, package, out, env, *, plugins=None, cancellation_path=
     active = job.get('job_active_processes_after_cleanup', job.get('job_active_processes_at_parent_exit'))
     if job['status'] != 'terminal' or job.get('exit_code') != 0 or active != 0 or not content.is_dir():
         raise RuntimeError('The Windows cook failed. See ' + str(out/'cook.log'))
+    if any(content.glob(f'ShaderArchive-{project.stem}-*.ushaderbytecode')):
+        raise RuntimeError('The Windows cook placed map shaders in an external archive. See ' + str(out/'cook.log'))
     if re.fullmatch(r'/Game/Maps/Community/' + IMPORT_DRAFT + r'/Arena_[A-Za-z0-9_]+_P', package):
         ident = package.split('/')[-2]
         if not all((content/'Community'/ident/('Terrain'+ext)).is_file() for ext in ('.uasset', '.uexp')):

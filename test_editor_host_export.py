@@ -249,6 +249,22 @@ class EditorHostExportTests(unittest.TestCase):
             self.assertTrue(launch.editor_plugin_args(project, engine, smoke=False)[1].endswith(',CommunityMapMaterials'))
             self.assertNotIn('CommunityMapMaterials', launch.PLUGINS[1])
 
+    def test_cook_requires_inline_map_shaders(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            project = root/'Preview.uproject'
+            content = root/'cook/Windows/Preview/Content'
+            content.mkdir(parents=True)
+            (root/'cook.log').touch()
+            completed = dict(status='terminal', exit_code=0, job_active_processes_at_parent_exit=0)
+            with patch.object(launch, 'run_owned_job', return_value=completed) as run, patch('builtins.print'):
+                self.assertEqual(launch.cook(project, root, '/Game/Test', root, {}), content)
+                self.assertIn('-ini:Game:[/Script/UnrealEd.ProjectPackagingSettings]:bShareMaterialShaderCode=False',
+                              run.call_args.args[0])
+                (content/'ShaderArchive-Preview-PCD3D_SM5-PCD3D_SM5.ushaderbytecode').touch()
+                with self.assertRaisesRegex(RuntimeError, 'external archive'):
+                    launch.cook(project, root, '/Game/Test', root, {})
+
     def test_docked_review_plugin_uses_the_matching_editor_and_stays_out_of_cook(self):
         with TemporaryDirectory() as folder:
             root = Path(folder)
