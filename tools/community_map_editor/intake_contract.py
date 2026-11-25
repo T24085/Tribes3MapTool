@@ -46,8 +46,10 @@ NATIVE_ENVIRONMENT_VERSION = 53
 NATIVE_LOCAL_LIGHTS_VERSION = 54
 VENGEANCE_VERTEX_ATTRIBUTES_VERSION = 55
 ASCEND_VERTEX_ATTRIBUTES_VERSION = 56
+ASCEND_BASE_MATERIAL_VERSION = 57
 VERTEX_ATTRIBUTES_VERSIONS = {VENGEANCE_VERTEX_ATTRIBUTES_VERSION, ASCEND_VERTEX_ATTRIBUTES_VERSION}
-NATIVE_SCENE_ENVELOPES = {NATIVE_ENVIRONMENT_VERSION, NATIVE_LOCAL_LIGHTS_VERSION, *VERTEX_ATTRIBUTES_VERSIONS}
+NATIVE_SCENE_ENVELOPES = {NATIVE_ENVIRONMENT_VERSION, NATIVE_LOCAL_LIGHTS_VERSION, ASCEND_BASE_MATERIAL_VERSION,
+                          *VERTEX_ATTRIBUTES_VERSIONS}
 LATEST_INTAKE_VERSION = max(*NATIVE_SCENE_ENVELOPES, UNREAL_INTAKE_VERSION, *T2_DIF_VERSIONS,
                             *T2_GENERATOR_SCOPE_VERSIONS)
 T1_SHAPE_INTAKE_VERSION = {4: 18, 5: 19, 6: 20, 7: 21}
@@ -406,7 +408,10 @@ def intake_scene_format(header):
                                   *VENGEANCE_BRUSH_VERSIONS))
                 or version == ASCEND_VERTEX_ATTRIBUTES_VERSION and
                 (header.get("profile") != ASCEND or header.get("reader") != UNREAL_READER
-                 or scene not in ASCEND_PRIVATE_MESH_VERSIONS)):
+                 or scene not in ASCEND_PRIVATE_MESH_VERSIONS)
+                or version == ASCEND_BASE_MATERIAL_VERSION and
+                (header.get("profile") != ASCEND or header.get("reader") != UNREAL_READER
+                 or scene not in (*ASCEND_ART_VERSIONS, *ASCEND_COLLISION_VERSIONS, *ASCEND_LEVEL_VERSIONS))):
             raise ValueError("Invalid versioned native scene intake.")
         return scene
     if "scene_format" in header:
@@ -697,7 +702,8 @@ def load_intake(manifest):
     native_envelope = header["format"] in NATIVE_SCENE_ENVELOPES
     native_lights = header["format"] == NATIVE_LOCAL_LIGHTS_VERSION
     vertex_attributes = header["format"] in VERTEX_ATTRIBUTES_VERSIONS
-    allow_local_lights = native_lights or header["format"] == ASCEND_VERTEX_ATTRIBUTES_VERSION
+    ascend_material = header["format"] == ASCEND_BASE_MATERIAL_VERSION
+    allow_local_lights = native_lights or ascend_material or header["format"] == ASCEND_VERTEX_ATTRIBUTES_VERSION
     if native_envelope:
         # Geometry consumers use the existing scene and inventory contract.
         header["format"] = header.pop("scene_format")
@@ -855,6 +861,7 @@ def load_intake(manifest):
     has_acoustics = False
     has_acoustic_collision = False
     has_vertex_attributes = False
+    ascend_uvs = {} if ascend_material else None
     for name, digest in inventory.items():
         if not intake_filename(name, header["format"]):
             raise ValueError("Unexpected intake filename.")
@@ -863,6 +870,8 @@ def load_intake(manifest):
                                            VENGEANCE_STATIC_MESH, material_slots)
 
             geometry, size = load_intake_geometry(manifest.parent, name, digest)
+            if ascend_material:
+                ascend_uvs[name] = 1 + len(geometry.get('extra_uvs', ()))
             has_dif_lods |= 'lods' in geometry
             if 'acoustics' in geometry:
                 if not acoustic_intake or geometry['format'] != 1 or not INTERIOR_FILE.fullmatch(name):
@@ -912,7 +921,7 @@ def load_intake(manifest):
                 if not compatible or not receipt_matches or model_files[name] != "unrealmesh:" + path.casefold():
                     raise ValueError("Static mesh does not match its Unreal package source.")
                 if geometry.keys() & NATIVE_VERTEX_FIELDS:
-                    if not vertex_attributes:
+                    if not (vertex_attributes or ascend_material):
                         game, version = (('Ascend', ASCEND_VERTEX_ATTRIBUTES_VERSION) if model_format == ASCEND_STATIC_MESH
                                          else ('Vengeance', VENGEANCE_VERTEX_ATTRIBUTES_VERSION))
                         raise ValueError(f"{game} vertex attributes require intake version {version}.")
@@ -1027,13 +1036,16 @@ def load_intake(manifest):
         raise ValueError("Ascend BSP intake requires compiled level geometry.")
     if (ascend_simple_collision or ascend_level) and has_textures and isinstance(docs[TEXTURE_INDEX], dict):
         ascend_placement_art = any(key.startswith("placement-") for key in docs[TEXTURE_INDEX])
+    if ascend_material and not has_textures:
+        raise ValueError('Ascend material intake requires model textures.')
     if has_textures and not ascend_placement_art:
         legacy_art = legacy_textures or native_models or ascend_art or ascend_simple_collision or ascend_level
         validate_bindings(docs[TEXTURE_INDEX], slots, inventory,
                           legacy_sizes=texture_sizes if legacy_art else None,
                           receipts=receipts, native_bsp=native_models or ascend_art or ascend_simple_collision or ascend_level,
                           shader_inputs=shader_inputs or brush_intake,
-                          surface_detail=surface_detail or brush_intake, require_extended=not brush_intake)
+                          surface_detail=surface_detail or brush_intake, require_extended=not brush_intake,
+                          ascend_uvs=ascend_uvs)
         if vengeance_mesh_art and not any("file" in binding for filename in vengeance_mesh_files
                                           for binding in docs[TEXTURE_INDEX][filename].values()):
             raise ValueError("Vengeance mesh artwork intake requires at least one authored mesh texture.")
@@ -1136,9 +1148,12 @@ def load_intake(manifest):
             if row["status"] == "review" and row.get("conversion_class") == "unrealmeshactor":
                 filename = header["interiors"].get(row["model_reference"])
                 if filename in slots:
-                    placements[placement_key(row["id"])] = slots[filename]
+                    key = placement_key(row["id"])
+                    placements[key] = slots[filename]
+                    if ascend_material:
+                        ascend_uvs[key] = ascend_uvs[filename]
         validate_bindings(docs[TEXTURE_INDEX], slots, inventory, legacy_sizes=texture_sizes,
-                          receipts=receipts, native_bsp=True, placements=placements)
+                          receipts=receipts, native_bsp=True, placements=placements, ascend_uvs=ascend_uvs)
     if dict(Counter(r["status"] for r in rows)) != header.get("coverage"):
         raise ValueError("Object counts do not match the manifest.")
     if header["coverage"].get("boundary", 0) != int("minimap" in header):

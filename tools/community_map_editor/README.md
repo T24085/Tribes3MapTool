@@ -426,6 +426,13 @@ The draft supplies an opaque base-color material for supported slots.
 Object Review reports unresolved assets, smaller fallback mips, and
 shader inputs requiring author review.
 
+[Intake version 57](intake-v57.schema.json) also reconstructs explicit
+`TextureCoordinate` channels and U/V tiling in a base-color sample. It
+supports that sample multiplied by `VertexColor` RGB in either order.
+The editor uses the imported mesh's UV data and vertex colors. Missing
+UV channels, unmirror settings and other graph operations stay in Object
+Review. The material is still opaque, and the public layout omits it.
+
 [Intake version 40](intake-v40.schema.json) also reads saved material
 overrides on an unambiguously associated static mesh component. Copies of
 the same mesh share one geometry asset and keep their own materials in the

@@ -52,6 +52,9 @@ def shader_signature(record, inventory):
     signature = (record['mode'], record['two_sided'], record.get('opacity', {}).get('pan'),
                  glow['brightness'] if glow else None, [inventory[row['file']] for row in texture_records(record, detail=False)])
     detail = [(key, inventory[record[key]['file']]) for key in SURFACE_DETAIL if key in record]
+    if 'ascend_base' in record:
+        shader = record['ascend_base']
+        return (*signature, 'ascend', shader.get('uv'), shader.get('vertex_rgb', False))
     return (*signature, detail) if detail else signature
 
 
@@ -90,7 +93,7 @@ def validate_shader_inputs(record):
 
 
 def validate_bindings(bindings, models, inventory, *, legacy_sizes=None, receipts=(), native_bsp=False,
-                      shader_inputs=False, surface_detail=False, require_extended=True, placements=None):
+                      shader_inputs=False, surface_detail=False, require_extended=True, placements=None, ascend_uvs=None):
     placement_slots = placements or {}
     textures = {name for name in inventory if TEXTURE_FILE.fullmatch(name)}
     legacy = legacy_sizes is not None
@@ -101,7 +104,7 @@ def validate_bindings(bindings, models, inventory, *, legacy_sizes=None, receipt
         raise ValueError('Model texture index refers to an unknown model or placement.')
     used = set()
     total = 0
-    has_native_shader = has_detail = False
+    has_native_shader = has_detail = has_ascend_shader = False
     for filename, slots in bindings.items():
         allowed = placement_slots[filename] if filename in placement_slots else models[filename]
         if (not isinstance(slots, dict) or not slots
@@ -140,6 +143,20 @@ def validate_bindings(bindings, models, inventory, *, legacy_sizes=None, receipt
                     if not isinstance(record[key], dict) or record[key].keys() != SOURCE_FIELDS:
                         raise ValueError('Invalid Vengeance normal or specular mask binding.')
                 has_detail |= bool(detail)
+            if 'ascend_base' in record and ascend_uvs is not None:
+                shader = record['ascend_base']
+                if (not isinstance(shader, dict) or not shader or shader.keys() - {'uv', 'vertex_rgb'}
+                        or 'vertex_rgb' in shader and shader['vertex_rgb'] is not True):
+                    raise ValueError('Invalid Ascend base color material settings.')
+                if 'uv' in shader:
+                    uv = shader['uv']
+                    if (not isinstance(uv, list) or len(uv) != 3 or type(uv[0]) is not int
+                            or not 0 <= uv[0] < ascend_uvs.get(filename, 0)
+                            or any(type(value) not in (int, float) or abs(value) > 1024 or not isfinite(value)
+                                   for value in uv[1:])):
+                        raise ValueError('Invalid Ascend base color UV coordinates.')
+                required.add('ascend_base')
+                has_ascend_shader = True
             if record.keys() != required:
                 raise ValueError('Incomplete model texture provenance.')
             modes = ('opaque', 'masked', 'translucent') if shader_inputs else ('opaque', 'masked')
@@ -162,6 +179,8 @@ def validate_bindings(bindings, models, inventory, *, legacy_sizes=None, receipt
         raise ValueError('Vengeance shader intake requires an extended material binding.')
     if require_extended and surface_detail and not has_detail:
         raise ValueError('Vengeance surface detail intake requires a normal or specular mask binding.')
+    if ascend_uvs is not None and not has_ascend_shader:
+        raise ValueError('Ascend material intake requires reconstructed base color settings.')
 
 
 def load_texture_index(folder, inventory):
@@ -231,6 +250,9 @@ class PackageMaterials:
                             self.packages[name] = receipt
                         cache[key] = record
                 record = cache[key]
+                uv = record.get('ascend_base', {}).get('uv')
+                if uv is not None and uv[0] >= 1 + len(geometry.get('extra_uvs', ())):
+                    record = {'reason': f'Ascend base color references missing source UV channel {uv[0]}.'}
                 by_slot[str(slot)] = record
                 concern = record.get("reason", record.get("warning"))
                 if concern:

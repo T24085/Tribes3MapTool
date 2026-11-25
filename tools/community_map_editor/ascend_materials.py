@@ -2,6 +2,7 @@
 
 from contextlib import ExitStack, contextmanager
 from hashlib import sha256
+from math import isfinite
 import zlib
 
 from interior_geometry import material_slots
@@ -180,19 +181,70 @@ def material_input(tag, report, stream):
     raise ValueError("Ascend material uses an unsupported input structure.")
 
 
-def direct_sample(tags, report, stream, objects):
-    tag = typed_tag(tags, "diffusecolor", "StructProperty", "colormaterialinput")
-    if tag is None:
-        return None
+def rgb_expression(tag, report, stream, objects):
     fields = material_input(tag, report, stream)
     expression = objects.get(fields.get("expression", 0))
     mask = tuple(fields.get(name, 0) for name in ("maskr", "maskg", "maskb", "maska"))
     if (not expression or fields.get("useconstant") or fields.get("mask", 0) not in (0, 1)
             or mask not in ((0, 0, 0, 0), (1, 1, 1, 0))
-            or (fields.get("mask") == 1 and mask != (1, 1, 1, 0))
-            or expression["class_name"].casefold() not in (TEXTURE_SAMPLE, TEXTURE_PARAMETER)):
+            or (fields.get("mask") == 1 and mask != (1, 1, 1, 0))):
         raise ValueError("Ascend diffuse input is not a direct RGB texture sample.")
     return expression
+
+
+def direct_sample(tags, report, stream, objects, open_art):
+    tag = typed_tag(tags, "diffusecolor", "StructProperty", "colormaterialinput")
+    if tag is None:
+        return None
+    expression = rgb_expression(tag, report, stream, objects)
+    klass = expression["class_name"].casefold()
+    if klass in (TEXTURE_SAMPLE, TEXTURE_PARAMETER):
+        return (expression, report, stream, objects), False
+    if klass == "materialexpressionmultiply":
+        node, report, stream, objects = open_art(expression, report, stream, objects)
+        tags, _ = properties(node, report, stream, objects)
+        inputs = [typed_tag(tags, key, "StructProperty", "expressioninput") for key in ("a", "b")]
+        if all(inputs):
+            children = [rgb_expression(member, report, stream, objects) for member in inputs]
+            if children[0]["class_name"].casefold() == "materialexpressionvertexcolor":
+                children.reverse()
+            sample, tint = children
+            if (sample["class_name"].casefold() in (TEXTURE_SAMPLE, TEXTURE_PARAMETER)
+                    and tint["class_name"].casefold() == "materialexpressionvertexcolor"):
+                return (sample, report, stream, objects), True
+    raise ValueError("Ascend diffuse input is not a direct RGB texture sample or texture multiplied by vertex RGB.")
+
+
+def sample_coordinates(tags, owner, stream, objects, open_art):
+    uv = typed_tag(tags, "coordinates", "StructProperty", "expressioninput")
+    if uv is None:
+        return None
+    fields = material_input(uv, owner, stream)
+    if not fields.get("expression"):
+        if not fields.get("useconstant"):
+            return None
+        raise ValueError("Ascend diffuse sample uses custom coordinates.")
+    coordinate = objects.get(fields["expression"])
+    if (not coordinate or coordinate["class_name"].casefold() != "materialexpressiontexturecoordinate"
+            or any(fields.get(key) for key in MASK_FIELDS - {"gcc64_padding"}) or fields.get("useconstant")):
+        raise ValueError("Ascend diffuse sample uses custom coordinates.")
+    coordinate, owner, stream, objects = open_art(coordinate, owner, stream, objects)
+    tags, _ = properties(coordinate, owner, stream, objects)
+    for axis in ("u", "v"):
+        mirror = typed_tag(tags, "unmirror" + axis, "BoolProperty")
+        if mirror and mirror["boolean"]:
+            raise ValueError("Ascend unmirrored texture coordinates require review.")
+    uv = []
+    for name, kind, form, default in (("coordinateindex", "IntProperty", "i", 0),
+                                       ("utiling", "FloatProperty", "f", 1.0),
+                                       ("vtiling", "FloatProperty", "f", 1.0)):
+        tag = typed_tag(tags, name, kind)
+        if tag and tag["size"] != 4:
+            raise ValueError("Invalid Ascend texture coordinate value.")
+        uv.append(tag_data(stream, tag).fields(form)[0] if tag else default)
+    if not 0 <= uv[0] <= 7 or any(not isfinite(value) or abs(value) > 1024 for value in uv[1:]):
+        raise ValueError("Invalid Ascend texture tiling or channel.")
+    return uv
 
 
 def texture_scope(index, owner, stream, objects):
@@ -205,17 +257,15 @@ def texture_scope(index, owner, stream, objects):
 def sample_texture(expression, owner, stream, objects, open_art, overrides):
     sample, owner, stream, objects = open_art(expression, owner, stream, objects)
     tags, _ = properties(sample, owner, stream, objects)
-    uv = typed_tag(tags, "coordinates", "StructProperty", "expressioninput")
-    if uv and material_input(uv, owner, stream).get("expression", 0):
-        raise ValueError("Ascend diffuse sample uses custom coordinates.")
+    uv = sample_coordinates(tags, owner, stream, objects, open_art)
     if sample["class_name"].casefold() == TEXTURE_PARAMETER:
         parameter = typed_tag(tags, "parametername", "NameProperty")
         if not parameter or parameter["size"] != 8:
             raise ValueError("Ascend diffuse sample has an invalid parameter name.")
         name = table_name(tag_data(stream, parameter), owner["names"], True).casefold()
         if name in overrides:
-            return texture_scope(*overrides[name])
-    return texture_scope(object_reference(tags, stream, "texture"), owner, stream, objects)
+            return texture_scope(*overrides[name]), uv
+    return texture_scope(object_reference(tags, stream, "texture"), owner, stream, objects), uv
 
 
 def material_texture(asset, owner, stream, objects, open_art):
@@ -235,9 +285,14 @@ def material_texture(asset, owner, stream, objects, open_art):
         klass = material["class_name"].casefold()
         tags, _ = properties(material, owner, stream, objects)
         if klass == "material":
-            sample = direct_sample(tags, owner, stream, objects)
-            if sample:
-                return sample_texture(sample, owner, stream, objects, open_art, overrides)
+            diffuse = direct_sample(tags, owner, stream, objects, open_art)
+            if diffuse:
+                sample, vertex_rgb = diffuse
+                texture, uv = sample_texture(*sample, open_art, overrides)
+                settings = {"uv": uv} if uv is not None else {}
+                if vertex_rgb:
+                    settings["vertex_rgb"] = True
+                return texture, settings
             break
         if klass != "materialinstanceconstant":
             raise ValueError("Ascend shader graph requires a destination material.")
@@ -255,7 +310,7 @@ def material_texture(asset, owner, stream, objects, open_art):
     fallback = [scope for name, scope in overrides.items()
                 if name.replace("_", "").replace(" ", "") in COLOR_PARAMETERS]
     if len(fallback) == 1:
-        return texture_scope(*fallback[0])
+        return texture_scope(*fallback[0]), {}
     if unavailable:
         raise unavailable
     raise ValueError("Ascend material has no unambiguous base-color Texture2D override.")
@@ -334,7 +389,7 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc)
                     raise ValueError("Ascend artwork package changed during import.")
             return local
 
-        texture = material_texture(asset, report, stream, objects, open_art)
+        texture, settings = material_texture(asset, report, stream, objects, open_art)
         image, source, pixels, exports = open_art(*texture)
         data, size, fallback, cache_receipts = texture_mip(image, source, pixels, exports, rtc)
     warning = "Base color imported as opaque. Other Ascend shader inputs require review."
@@ -346,4 +401,6 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc)
     name = "texture_" + sha256(data).hexdigest()[:32] + ".png"
     binding = dict(file=name, source=image_source["name"], source_sha256=image_source["sha256"],
                    size=size, mode="opaque", two_sided=False, warning=warning)
+    if settings:
+        binding["ascend_base"] = settings
     return binding, {name: data}, receipts.values()

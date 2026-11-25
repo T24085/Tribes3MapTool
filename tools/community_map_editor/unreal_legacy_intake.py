@@ -12,7 +12,8 @@ import re
 from ascend_materials import placed_materials as ascend_placed_materials, resolve_material as resolve_ascend_material
 from ascend_static_mesh import read_placed_meshes as read_ascend_meshes
 from ascend_texture_cache import AscendTextureCache
-from intake_contract import (ASCEND_VERTEX_ATTRIBUTES_VERSION, MAX_INTAKE_INTERIORS, MAX_INTAKE_INTERIOR_BYTES,
+from intake_contract import (ASCEND_BASE_MATERIAL_VERSION, ASCEND_VERTEX_ATTRIBUTES_VERSION, MAX_INTAKE_INTERIORS,
+                             MAX_INTAKE_INTERIOR_BYTES,
                              NATIVE_ENVIRONMENT_VERSION,
                              NATIVE_LOCAL_LIGHTS_VERSION, PLAYABLE_BOUNDS,
                              UNREAL_READER, UNREAL_SCENE, VENGEANCE_VERTEX_ATTRIBUTES_VERSION,
@@ -485,7 +486,7 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
     for issue in scene.get("bsp_review", ()):
         rows.append(dict(id=len(rows) + 1, parent=None, source_class="Model", name=f"{issue['level']} BSP",
                          status="review", reason=issue["reason"], properties={}))
-    mesh_artwork = extended_materials = surface_detail = False
+    mesh_artwork = extended_materials = surface_detail = ascend_material = False
     if artwork:
         mesh_artwork = any("file" in binding for reference in (*mesh_docs, *placement_models)
                            for binding in artwork.bindings[reference].values())
@@ -498,6 +499,7 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
         texture_index = {interiors[reference]: artwork.bindings[reference] for reference in texture_models
                          if reference in artwork.bindings}
         texture_index.update((key, artwork.bindings[key]) for key in placement_models)
+        ascend_material = any("ascend_base" in binding for slots in texture_index.values() for binding in slots.values())
         texture_files = {texture["file"] for slots in texture_index.values() for binding in slots.values()
                          for texture in texture_records(binding)}
         if texture_files:
@@ -598,7 +600,9 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
         header["sources"][1]["origin"] = "Editor import settings"
     if environment:
         header["environment"] = environment
-    if any(mesh.keys() & NATIVE_VERTEX_FIELDS for mesh in mesh_docs.values()):
+    if ascend_material:
+        header.update(format=ASCEND_BASE_MATERIAL_VERSION, scene_format=version)
+    elif any(mesh.keys() & NATIVE_VERTEX_FIELDS for mesh in mesh_docs.values()):
         vertex_version = ASCEND_VERTEX_ATTRIBUTES_VERSION if game == "ascend" else VENGEANCE_VERTEX_ATTRIBUTES_VERSION
         header.update(format=vertex_version, scene_format=version)
     elif any("local_light" in row for row in rows):

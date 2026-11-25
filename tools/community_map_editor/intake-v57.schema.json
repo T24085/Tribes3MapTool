@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRIBES map intake manifest, version 57",
+  "description": "Private Ascend intake whose model-textures.json preserves explicit base-color texture coordinates or texture multiplied by vertex RGB.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "scene_format", "profile", "source_game", "name", "reader", "profile_sha256",
+               "sources", "files", "coverage", "minimap", "interiors", "interior_review"],
+  "properties": {
+    "format": {"const": 57},
+    "scene_format": {"enum": [39, 40, 41, 42, 51, 52]},
+    "profile": {"$ref": "intake-v56.schema.json#/properties/profile"},
+    "source_game": {"$ref": "intake-v56.schema.json#/properties/source_game"},
+    "reader": {"$ref": "intake-v56.schema.json#/properties/reader"},
+    "name": {"$ref": "intake-v56.schema.json#/properties/name"},
+    "profile_sha256": {"$ref": "intake-v56.schema.json#/properties/profile_sha256"},
+    "sources": {"$ref": "intake-v56.schema.json#/properties/sources"},
+    "files": {"allOf": [{"$ref": "intake-v56.schema.json#/properties/files"}, {"required": ["model-textures.json"]}]},
+    "coverage": {"$ref": "intake-v56.schema.json#/properties/coverage"},
+    "minimap": {"$ref": "intake-v56.schema.json#/properties/minimap"},
+    "environment": {"$ref": "intake-v56.schema.json#/properties/environment"},
+    "interiors": {"$ref": "intake-v56.schema.json#/properties/interiors"},
+    "interior_review": {"$ref": "intake-v56.schema.json#/properties/interior_review"},
+    "terrain_paint": {"$ref": "intake-v56.schema.json#/properties/terrain_paint"},
+    "terrain_art": {"$ref": "intake-v56.schema.json#/properties/terrain_art"},
+    "terrain_uv": {"$ref": "intake-v56.schema.json#/properties/terrain_uv"}
+  },
+  "dependentRequired": {"terrain_art": ["terrain_uv"], "terrain_uv": ["terrain_art"]}
+}

@@ -135,6 +135,25 @@ def bind_shader_inputs(material, lib, sample, folder, inventory, record, destina
             raise ValueError('Unreal did not bind the source specular mask.')
 
 
+def bind_ascend_base(material, lib, sample, settings):
+    if 'uv' in settings:
+        channel, u_scale, v_scale = settings['uv']
+        uv = lib.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -650, 0)
+        uv.set_editor_property('coordinate_index', channel)
+        uv.set_editor_property('u_tiling', u_scale)
+        uv.set_editor_property('v_tiling', v_scale)
+        if not lib.connect_material_expressions(uv, '', sample, 'UVs'):
+            raise ValueError('Unreal did not bind the Ascend source UV channel.')
+    if 'vertex_rgb' not in settings:
+        return sample, 'RGB'
+    color = lib.create_material_expression(material, unreal.MaterialExpressionVertexColor, -360, 280)
+    tint = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -100, 0)
+    if (not lib.connect_material_expressions(sample, 'RGB', tint, 'A')
+            or not lib.connect_material_expressions(color, '', tint, 'B')):
+        raise ValueError('Unreal did not bind the Ascend source vertex colors.')
+    return tint, ''
+
+
 def source_material(folder, inventory, record, *, destination, mode='opaque', two_sided=False):
     filename = record['file']
     digest = inventory[filename]
@@ -143,7 +162,7 @@ def source_material(folder, inventory, record, *, destination, mode='opaque', tw
     prefix = 'M_Masked_' if masked else 'M_'
     if two_sided:
         prefix += 'TwoSided_'
-    extended = has_shader_inputs(record)
+    extended = has_shader_inputs(record) or 'ascend_base' in record
     if extended:
         digest = sha256(json.dumps(shader_signature(record, inventory), separators=(',', ':')).encode()).hexdigest()
     name = 'M_Shader_' + digest[:32] if extended else prefix + texture.get_name()
@@ -157,7 +176,9 @@ def source_material(folder, inventory, record, *, destination, mode='opaque', tw
         sample.set_editor_property('texture', texture)
         if two_sided:
             material.set_editor_property('two_sided', True)
-        if not lib.connect_material_property(sample, 'RGB', unreal.MaterialProperty.MP_BASE_COLOR):
+        base, output = (bind_ascend_base(material, lib, sample, record['ascend_base'])
+                        if 'ascend_base' in record else (sample, 'RGB'))
+        if not lib.connect_material_property(base, output, unreal.MaterialProperty.MP_BASE_COLOR):
             raise ValueError('Unreal did not bind the source texture to the base color.')
         if extended:
             bind_shader_inputs(material, lib, sample, folder, inventory, record, destination)

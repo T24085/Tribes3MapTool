@@ -177,6 +177,10 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
             strings += ("MaterialExpressionTextureSampleParameter2D", "ShaderParent", "ColorParent", "Parent",
                         "ColorNode", "RoofPaint", "DiffuseColor", "ColorMaterialInput", "Expression",
                         "Mask", "MaskR", "MaskG", "MaskB", "MaskA", "UseConstant")
+        if ascend_shader == "vertex-rgb":
+            strings = tuple(dict.fromkeys((*strings, "Coordinates", "ExpressionInput", "CoordinateIndex", "UTiling",
+                             "VTiling", "MaterialExpressionTextureCoordinate", "MaterialExpressionVertexColor",
+                             "MaterialExpressionMultiply", "UVNode", "VertexNode", "TintNode", "A", "B")))
     if ascend_component_materials:
         assert modern and ascend_shader == "direct"
         strings = tuple(dict.fromkeys((*strings, "Materials")))
@@ -636,7 +640,7 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                 # First slot inherits the named override through an intermediate instance.
                 # The second slot uses the same graph directly, so it uses the sample's default.
                 child = object_bytes(reference("Parent", 3), parameters("Normal"))
-                diffuse = (reference("Expression", 5) + b"".join(
+                diffuse = (reference("Expression", 8 if ascend_shader == "vertex-rgb" else 5) + b"".join(
                     prop(channel, "IntProperty", pack("i", 1)) for channel in ("Mask", "MaskR", "MaskG", "MaskB")))
                 if ascend_shader == "masked-output":
                     diffuse += prop("MaskA", "IntProperty", pack("i", 1))
@@ -644,12 +648,28 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                 # Use a second package export for the sample default, with a different color cache lookup.
                 types.append(("MeshColor", "Texture2D", -4, "FixtureStone"))
                 node = object_bytes(prop("ParameterName", "NameProperty", name("RoofPaint")), reference("Texture", -8))
-                mesh = object_bytes() + ascend_mesh_lod((1, 4))
+                mesh = object_bytes() + ascend_mesh_lod((1, 4), ascend_vertices)
                 art_exports = [(-3, 0, "FixtureStone", 0, child, 3),
                                (-3, 0, "FixtureGlass", 0, object_bytes(), 3),
                                (-3, 0, "ShaderParent", 0, upstream, 3),
                                (-6, 0, "ColorParent", 0, graph, 3),
                                (-7, 4, "ColorNode", 0, node, 3)]
+                if ascend_shader == "vertex-rgb":
+                    types.extend(("Core", "Class", -1, klass) for klass in ("MaterialExpressionTextureCoordinate",
+                                 "MaterialExpressionVertexColor", "MaterialExpressionMultiply"))
+
+                    def expression_input(key, index):
+                        return prop(key, "StructProperty", reference("Expression", index) + name("None"), "ExpressionInput")
+
+                    node = object_bytes(prop("ParameterName", "NameProperty", name("RoofPaint")), reference("Texture", -8),
+                                        expression_input("Coordinates", 6))
+                    art_exports[4] = (-7, 4, "ColorNode", 0, node, 3)
+                    uv = object_bytes(prop("CoordinateIndex", "IntProperty", pack("i", 1)),
+                                      prop("UTiling", "FloatProperty", pack("f", 2.0)),
+                                      prop("VTiling", "FloatProperty", pack("f", .5)))
+                    tint = object_bytes(expression_input("A", 7), expression_input("B", 5))
+                    art_exports += [(-9, 4, "UVNode", 0, uv, 3), (-10, 4, "VertexNode", 0, object_bytes(), 3),
+                                    (-11, 4, "TintNode", 0, tint, 3)]
             else:
                 mesh = object_bytes() + ascend_mesh_lod((1, 2))
                 art_exports = [(-3, 0, "FixtureStone", 0, object_bytes(parameters("Base_Color")), 3),
@@ -1853,6 +1873,35 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 manifest = convert_unreal(source, root / "Intakes")
                 _, _, rows = load_intake(manifest)
                 self.assertTrue(any(reason in row["reason"] for row in rows))
+
+    def test_ascend_material_reconstructs_uv_channel_and_vertex_rgb(self):
+        for stream in ("half", None):
+            with self.subTest(stream=stream), TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = binary_draft_fixture(root, "ascend", static_mesh="companion", mesh_artwork=True,
+                                              ascend_shader="vertex-rgb", ascend_vertices=stream)
+                manifest = convert_unreal(source, root / "Intakes")
+                raw = json.loads(manifest.read_bytes())
+                header, _, rows = load_intake(manifest)
+                if stream is None:
+                    self.assertEqual(raw["format"], 23)
+                    self.assertTrue(any("missing source UV channel 1" in row["reason"] for row in rows))
+                    continue
+                self.assertEqual((raw["format"], raw["scene_format"]), (57, 39))
+                model, = header["interiors"].values()
+                bindings = load_texture_index(manifest.parent, header["files"])
+                self.assertEqual(len(bindings[model]), 2)
+                for binding in bindings[model].values():
+                    self.assertEqual(binding["ascend_base"], {"uv": [1, 2.0, .5], "vertex_rgb": True})
+                with ZipFile(export_public_layout(manifest, root / "Share.zip")) as archive:
+                    self.assertNotIn(TEXTURE_INDEX, archive.namelist())
+                bindings[model]["0"]["ascend_base"]["uv"][0] = 7
+                payload = json.dumps(bindings).encode()
+                manifest.with_name(TEXTURE_INDEX).write_bytes(payload)
+                raw["files"][TEXTURE_INDEX] = sha256(payload).hexdigest()
+                manifest.write_text(json.dumps(raw), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Invalid Ascend base color UV coordinates"):
+                    load_intake(manifest)
 
     def test_world_bsp_exports_distinct_visual_and_collision_sections(self):
         with TemporaryDirectory() as directory:
