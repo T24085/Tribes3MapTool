@@ -12,6 +12,7 @@ import re
 from ascend_materials import placed_materials as ascend_placed_materials, resolve_material as resolve_ascend_material
 from ascend_static_mesh import read_placed_meshes as read_ascend_meshes
 from ascend_texture_cache import AscendTextureCache
+from remastered_textures import RemasteredTextures, validate_folder as validate_remaster_folder
 from intake_contract import (ASCEND_BASE_MATERIAL_VERSION, ASCEND_VERTEX_ATTRIBUTES_VERSION, MAX_INTAKE_INTERIORS,
                              MAX_INTAKE_INTERIOR_BYTES,
                              NATIVE_ENVIRONMENT_VERSION,
@@ -270,7 +271,11 @@ def validate_unreal_settings(settings):
             or type(settings["format"]) is not int or settings["format"] != 1
             or not isinstance(settings["game"], str) or settings["game"] not in UNREAL_PROFILES):
         raise ValueError("Invalid Unreal scene import settings.")
-    optional = settings.keys() - REQUIRED - {"bounds_m", "asset_packages", "levels"}
+    optional = settings.keys() - REQUIRED - {"bounds_m", "asset_packages", "levels", "remastered_textures"}
+    if "remastered_textures" in settings:
+        if settings["game"] != "ascend":
+            raise ValueError("Remastered textures are supported for Tribes: Ascend imports.")
+        validate_remaster_folder(settings["remastered_textures"])
     levels = settings.get("levels", [])
     if levels and (settings["game"] != "ascend" or not isinstance(levels, list) or len(levels) > MAX_MERGED_LEVELS
                    or not all(isinstance(name, str) and re.fullmatch(r"[\w.-]{1,180}\.fmap", name, re.I)
@@ -376,7 +381,10 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
             read_meshes = partial(read_vengeance_meshes, artwork=artwork)
         else:
             rtc = AscendTextureCache(source.resolve(strict=True).parent)
-            artwork = PackageMaterials(companions, partial(resolve_ascend_material, rtc=rtc), "Ascend")
+            folder = settings.get("remastered_textures")
+            remaster = RemasteredTextures(folder) if folder else None
+            artwork = PackageMaterials(companions, partial(resolve_ascend_material, rtc=rtc, remaster=remaster),
+                                       "Ascend")
             collision_review = {}
             read_meshes = partial(read_ascend_meshes, artwork=artwork, collision_review=collision_review)
         with open_package(source, game) as (report, stream):

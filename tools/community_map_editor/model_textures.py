@@ -9,7 +9,8 @@ import re
 TEXTURE_INDEX = 'model-textures.json'
 TEXTURE_FILE = re.compile(r'texture_[a-f0-9]{32}\.png')
 MAX_TEXTURES = 256
-MAX_TEXTURE_BYTES = 96 * 1024 * 1024
+# Room for a 2x remastered texture set (#9); a map's original textures stay within 96 MiB.
+MAX_TEXTURE_BYTES = 384 * 1024 * 1024
 MAX_SIDE = 4096
 MAX_BINDINGS = 2048
 MAX_TEXTURE_INDEX = 1024 * 1024
