@@ -9,11 +9,19 @@ ASCEND = "ascend-ctf"
 UNREAL_PROFILES = {"vengeance": VENGEANCE, "ascend": ASCEND}
 NAMES = {T1: "Tribes 1", T2: "Tribes 2", VENGEANCE: "Tribes: Vengeance", ASCEND: "Tribes: Ascend"}
 PREFIX = {T1: "DraftT1", T2: "DraftT2", VENGEANCE: "DraftTV", ASCEND: "DraftTA"}
-# Default source units per metre offered for new native imports; the import window keeps it editable.
-# Ascend: 1 TA uu = 1.92 T3 cm, from the T3 player capsule half-height (96) over TA Medium armor (50).
-# See Tribes3-Modded/Tribes3MapTool#4.
-ASCEND_CM_PER_UNIT = 1.92
-UNITS_PER_METRE_DEFAULT = {"ascend": 100 / ASCEND_CM_PER_UNIT, "vengeance": 50}
+# Scale presets offered for new native imports, as T3 centimetres per source unit; the first is the
+# default and the import window keeps the value editable. See Tribes3-Modded/Tribes3MapTool#4.
+# Ascend exact player match: T3 capsule half-height 96 over TA Medium armor 50 = 1.92 cm per uu.
+# T2 conversions use 105 cm per T2 metre against an exact player match of 80 (x1.3125), because exact
+# matches feel too tight in game, so the Ascend default applies the same margin: 1.92 x 1.3125 = 2.52.
+ASCEND_PLAYER_MATCH_CM = 1.92
+T2_FEEL_MARGIN = 105 / 80
+SCALE_PRESETS = {
+    "ascend": (("Tribes 2 feel (player match x1.3125)", round(ASCEND_PLAYER_MATCH_CM * T2_FEEL_MARGIN, 4)),
+               ("Exact player match (Medium armor)", ASCEND_PLAYER_MATCH_CM)),
+    "vengeance": (("Current default", 2.0),),
+}
+UNITS_PER_METRE_DEFAULT = {game: 100 / presets[0][1] for game, presets in SCALE_PRESETS.items()}
 BRUSH_PREVIEW_FOLDER = "/Game/Community/VengeanceBrushPreviews"
 INVENTORY_STATION_TEMPLATE = "/Game/Community/SharedEquipment/BP_CommunityInventoryStation"
 T2_DRAFT = r"DraftT2[0-9]{3}"

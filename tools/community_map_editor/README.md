@@ -257,10 +257,14 @@ py -3.13 tools/community_map_editor/unreal_package_reader.py "D:\Maps\MyMap.fmap
 
 Package inventory supports uncompressed files and UE3 zlib or LZO
 chunks. Tribes: Ascend client packages use LZO, which the tool decodes
-itself with no extra install. The import dialog offers a default scale of
-1 Ascend unit = 1.92 cm (52.0833 units per metre), which matches the
-TRIBES 3 player height to Ascend's Medium armor. Change it only for a
-deliberate rescale. Select **Import as draft…** to read the level's actor roster and
+itself with no extra install. Choose the scale in the import dialog with
+**Scale preset**, or type your own units-per-metre value. For Ascend the
+default is 1 unit = 2.52 cm (39.6825 units per metre). That is the exact
+player match of 1.92 cm (TRIBES 3 player height over Ascend's Medium
+armor) with the same x1.3125 margin Tribes 2 conversions use (105 cm per
+T2 metre against an exact match of 80), because exact matches feel too
+tight in game. The exact match is the second preset. The default is still
+to be confirmed in game. Select **Import as draft…** to read the level's actor roster and
 recover serialized transforms, links, and mesh references. If the package
 has no adjacent `MyMap.import.json`, the editor opens a setup dialog. Select
 the native terrain, review or change each team's flag stand and spawns, and
