@@ -524,7 +524,8 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
         from perimeter import terrain_elevations
 
         boundary["reason"] = describe_bounds(source_play, source_limits)
-        boundary["properties"][BOUNDARY_RECIPE] = boundary_recipe(source_play, terrain_elevations(terrain))
+        boundary["properties"][BOUNDARY_RECIPE] = boundary_recipe(source_play, terrain_elevations(terrain),
+                                                                    source_limits)
     if source_volume:
         from perimeter import terrain_elevations
 

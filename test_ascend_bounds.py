@@ -54,7 +54,11 @@ class PlayBoxTests(unittest.TestCase):
         self.assertIsNone(recipe["options"]["wall_limits"]["floor_m"])
         text = describe(play, {"killz_m": -206.4, "stallz_m": 327.6})
         self.assertIn("5 blocking volumes", text)
-        self.assertIn("KillZ -206 m", text)
+        self.assertIn("kill floor at KillZ (-206 m)", text)
+        self.assertIn("Not applied: flight ceiling", text)
+        with_kill = boundary_recipe(play, [-5000.0, 19000.0], {"killz_m": -206.4})
+        self.assertEqual(with_kill["options"]["kill_floor_m"], 156.4)  # KillZ is 156.4 m below the lowest terrain
+        self.assertNotIn("kill_floor_m", boundary_recipe(play, [-5000.0, 19000.0], {"killz_m": 10})["options"])
         self.assertLessEqual(len(text), 240)
 
     def test_review_marks_used_volumes_and_edge_meshes(self):
