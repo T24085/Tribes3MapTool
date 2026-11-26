@@ -13,7 +13,7 @@ import unreal
 from conversion_rules import create_snapshot, draft_rules_path, profile_config, project, write
 from profile_exchange import active_profile
 from intake_contract import (UNREAL_SCENE, bounded, intake_file_limit, intake_header, load_intake, load_intake_geometry,
-                             load_mission_audio)
+                             load_mission_audio, playable_bounds)
 from interior_geometry import VENGEANCE_BSP, VENGEANCE_STATIC_MESH
 from map_pipeline import Outcome, PipelineRun, pipeline_config
 from mesh_mappings import material_reference, placements, source_reference
@@ -22,8 +22,9 @@ from mission_equipment import mission_equipment, power_context
 from mission_weather import cloud_layers, mission_weather, precipitation_emitters
 from native_terrain_paint import NativeTerrainPaint
 from object_catalog import applicable_mappings, build_rows, classify, load_catalog
-from perimeter import (POLYGON_REQUIRED, PolygonWalls, plan_boundaries, place_flag_bounds, place_walls,
-                       verify_walls, wall_appearance)
+from perimeter import (POLYGON_REQUIRED, PolygonWalls, flight_ceiling_heights, kill_floor_height, plan_boundaries,
+                       place_flag_bounds, place_flight_ceiling, place_kill_floor, place_walls, verify_walls,
+                       wall_appearance)
 from perimeter_collision import validate_channels
 from sky_intake import SKY_INDEX, load_sky_index
 from source_library import record_draft
@@ -68,7 +69,8 @@ def choose():
                 or not required <= selection.keys() <= required | {"wall_limits", "flag_polygon_m", "wall_polygon_m",
                                                                     "wall_block_channels", "wall_visual", "warn_players",
                                                                     "warning_polygon_m", "warning_limits", "warning_audience",
-                                                                    "flag_limits", "flag_return_delay_s"}
+                                                                    "flag_limits", "flag_return_delay_s", "kill_floor_m",
+                                                                    "flight_ceiling"}
                 or not isinstance(selection["manifest"], str) or type(selection["perimeter"]) is not bool):
             raise ValueError("The conversion window returned an invalid import selection.")
         mappings = selection["mesh_mappings"]
@@ -84,7 +86,9 @@ def choose():
                           warn_players=selection.get("warn_players", False),
                           warning_polygon_m=selection.get("warning_polygon_m"), warning_limits=selection.get("warning_limits"),
                           warning_audience=selection.get("warning_audience"), flag_limits=selection.get("flag_limits"),
-                          flag_return_delay_s=selection.get("flag_return_delay_s"))
+                          flag_return_delay_s=selection.get("flag_return_delay_s"),
+                          kill_floor_m=selection.get("kill_floor_m"),
+                          flight_ceiling=selection.get("flight_ceiling"))
 
 
 def terrain_mesh(ident, t, weights, *, tile_cm=None, name="Terrain", uv_origin=(0, 0), paint=None, materials=None,
@@ -698,6 +702,8 @@ class DraftImport:
             warning_audience=self.options.get("warning_audience"),
             flag_limits=self.options.get("flag_limits"),
             flag_return_delay_s=self.options.get("flag_return_delay_s"),
+            kill_floor_m=self.options.get("kill_floor_m"),
+            flight_ceiling=self.options.get("flight_ceiling"),
         )
         if self.batch_target is None and not editor.SAVING.save_dirty_packages_with_dialog(True, True):
             return Outcome("cancelled", "User cancelled the editor save prompt.")
@@ -903,6 +909,12 @@ class DraftImport:
             verify_walls(editor.world(), editor.ACTORS.get_all_level_actors(), placed_markers)
         if flag_limit is not None:
             place_flag_bounds(editor.ACTORS, flag_limit)
+        if self.options.get("kill_floor_m") is not None:
+            place_kill_floor(editor.ACTORS, playable_bounds(self.header, rows),
+                             kill_floor_height(self.header, terrain, rows, self.options["kill_floor_m"]))
+        if self.options.get("flight_ceiling") is not None:
+            place_flight_ceiling(editor.ACTORS, playable_bounds(self.header, rows),
+                                 flight_ceiling_heights(self.header, terrain, rows, self.options["flight_ceiling"]))
         if planned_audio:
             from draft_audio import place_audio
 
@@ -1042,7 +1054,7 @@ class DraftImport:
 def import_map(manifest, *, perimeter=False, flag_inset_m=None, wall_limits=None, mesh_mappings=None, terrain_layers=None,
                flag_polygon_m=None, wall_polygon_m=None, wall_block_channels=None, wall_visual=None, warn_players=False,
                warning_polygon_m=None, warning_limits=None, warning_audience=None, flag_limits=None, flag_return_delay_s=None,
-               recorded_rules=None, batch_target=None, on_finished=None):
+               kill_floor_m=None, flight_ceiling=None, recorded_rules=None, batch_target=None, on_finished=None):
     import t3_map_editor as editor
 
     options = {"perimeter": perimeter, "flag_inset_m": flag_inset_m,
@@ -1070,6 +1082,10 @@ def import_map(manifest, *, perimeter=False, flag_inset_m=None, wall_limits=None
         options["warning_limits"] = warning_limits
     if warning_audience is not None:
         options["warning_audience"] = warning_audience
+    if kill_floor_m is not None:
+        options["kill_floor_m"] = kill_floor_m
+    if flight_ceiling is not None:
+        options["flight_ceiling"] = flight_ceiling
     draft = DraftImport(editor, manifest, options, recorded_rules, batch_target)
     operators = {
         "verify": draft.verify, "plan": draft.plan, "textures": draft.textures, "terrain": draft.terrain_step,
