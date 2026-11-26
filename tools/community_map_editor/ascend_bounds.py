@@ -127,14 +127,18 @@ def derive_play_box(boxes, markers_m):
     return dict(lower_m=lower_xy, upper_m=upper_xy, wall_z_m=wall_z, ceiling_m=ceiling, volumes=names)
 
 
-def boundary_recipe(play, terrain_elevation_cm):
-    """Boundaries settings that rebuild the source walls: solid perimeter plus the source ceiling."""
+def boundary_recipe(play, terrain_elevation_cm, limits=None):
+    """Boundaries settings that rebuild the source walls: solid perimeter, the source ceiling and,
+    when KillZ is below the terrain, a kill floor at KillZ (#20)."""
     low_cm, high_cm = terrain_elevation_cm
     top_m = play["ceiling_m"] if play["ceiling_m"] is not None else play["wall_z_m"][1]
     ceiling_m = max(0.0, round(top_m - high_cm / 100, 2))
-    return {"format": 1, "elevation_cm": [low_cm, high_cm],
-            "options": {"perimeter": True, "flag_inset_m": None,
-                        "wall_limits": {"ceiling_m": min(ceiling_m, 10_000.0), "floor_m": None}}}
+    options = {"perimeter": True, "flag_inset_m": None,
+               "wall_limits": {"ceiling_m": min(ceiling_m, 10_000.0), "floor_m": None}}
+    killz = (limits or {}).get("killz_m")
+    if killz is not None and killz * 100 < low_cm:
+        options["kill_floor_m"] = min(round(low_cm / 100 - killz, 2), 10_000.0)
+    return {"format": 1, "elevation_cm": [low_cm, high_cm], "options": options}
 
 
 def describe(play, limits):
@@ -146,7 +150,7 @@ def describe(play, limits):
         text += f" with a ceiling at {play['ceiling_m']:,.0f} m"
     notes = []
     if "killz_m" in limits:
-        notes.append(f"KillZ {limits['killz_m']:,.0f} m")
+        text += f", and a kill floor at KillZ ({limits['killz_m']:,.0f} m)"
     if "stallz_m" in limits:
         notes.append(f"flight ceiling (StallZ) {limits['stallz_m']:,.0f} m")
     if notes:
