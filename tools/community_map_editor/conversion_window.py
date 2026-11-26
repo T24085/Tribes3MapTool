@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 import zipfile
 
 from conversion_rules import checksum, sha256_file, write
-from game_workflows import game_choices, open_filetypes, steps_text
+from game_workflows import game_choices, open_filetypes, select_game, steps_text, window_title
 from boundary_polygon_window import show_polygon
 from busy import run_busy
 from intake_contract import load_intake, load_mission_audio, playable_bounds
@@ -520,7 +520,7 @@ def show_package_inventory(parent, path, import_draft):
     report = run_busy(parent, f"Reading package inventory of {path.name}…", lambda: inspect_package(path))
     summary = report["summary"]
     window = tk.Toplevel(parent)
-    window.title("Native map package inventory")
+    window.title(window_title("inventory", "Native map package inventory"))
     window.geometry("840x520")
     top = ttk.Frame(window, padding=12)
     top.pack(fill="x")
@@ -592,7 +592,7 @@ def run(library, meshes=(), drafts=()):
     catalog = load_catalog(library)
     root = tk.Tk()
     mesh_paths = set(meshes)
-    root.title("TRIBES Map Editor · Import mission")
+    root.title("TRIBES Map Editor · Convert a map")
     root.geometry("1110x720")
     root.minsize(900, 520)
     # Game-first workflow (#8): choose the source game, then follow its numbered steps.
@@ -604,7 +604,20 @@ def run(library, meshes=(), drafts=()):
     source_game.pack(side="left", padx=(8, 0))
     steps = tk.StringVar(value=steps_text(source_game.get()))
     ttk.Label(root, textvariable=steps, justify="left", wraplength=1060).pack(anchor="w", padx=10, pady=(4, 0))
-    source_game.bind("<<ComboboxSelected>>", lambda _event: steps.set(steps_text(source_game.get())))
+    stage = {"current": "open"}
+
+    def show_stage(name=None):
+        """Number the window title after the chosen game's step for what is on screen (#8)."""
+        if name:
+            stage["current"] = name
+        root.title(window_title(stage["current"], "TRIBES Map Editor · Convert a map"))
+
+    def choose_game(_event=None):
+        select_game(source_game.get())
+        steps.set(steps_text(source_game.get()))
+        show_stage()
+
+    source_game.bind("<<ComboboxSelected>>", choose_game)
     bar = ttk.Frame(root, padding=10)
     bar.pack(fill="x")
     notice = tk.StringVar(
@@ -792,6 +805,7 @@ def run(library, meshes=(), drafts=()):
 
     def inspect(path):
         nonlocal catalog, object_review, table
+        show_stage("review")
         header, terrain, rows = load_intake(path)
         if not state.get("manifest"):
             boundary_options.clear()
@@ -941,6 +955,7 @@ def run(library, meshes=(), drafts=()):
             messagebox.showerror("Map conversion", str(exc), parent=root)
 
     def clear():
+        show_stage("open")
         state.clear()
         boundary_options.clear()
         boundary_options.update(DEFAULT_BOUNDARY_OPTIONS)

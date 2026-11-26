@@ -9,7 +9,8 @@ import unittest
 TOOL = Path(__file__).resolve().parent / "tools/community_map_editor"
 sys.path.insert(0, str(TOOL))
 import game_workflows
-from game_workflows import ACTIONS, GAMES, MENU, game_choices, menu_entries, open_filetypes, steps_text
+import re
+from game_workflows import ACTIONS, GAMES, MENU, game_choices, menu_entries, open_filetypes, steps_text, window_title
 from source_profiles import NAMES
 
 
@@ -55,10 +56,30 @@ class GameWorkflowTests(unittest.TestCase):
         self.assertEqual(ascend[0], ("Tribes: Ascend source", "*.fmap *.udk *.t3d"))
         self.assertEqual(ascend[1], ("Existing intake", "*.json *.zip"))
         text = steps_text("Tribes: Ascend").splitlines()
-        self.assertTrue(text[0].startswith("1. Pick source: "))
-        self.assertTrue(any(line.startswith("4. Sound pack: ") for line in text))
-        self.assertIn("→", text[0])
+        self.assertTrue(text[0].startswith("1. Open the map: "))
+        self.assertTrue(any(line.startswith("6. Sound pack (optional): ") for line in text))
+        self.assertIn("→", text[-1])
         self.assertIn("Choose the game", steps_text("Any game (open anything)"))
+
+    def test_window_titles_carry_the_step_number(self):
+        self.assertEqual(window_title("settings", "Fallback", "Tribes: Ascend"),
+                         "Step 3 of 9 · Choose import settings · Tribes: Ascend")
+        self.assertEqual(window_title("review", "Fallback", "Tribes 2"), "Step 2 of 7 · Review the conversion · Tribes 2")
+        self.assertEqual(window_title("settings", "Fallback", "Tribes 2"), "Fallback")  # no such window for T2
+        self.assertEqual(window_title("open", "Fallback", "Any game (open anything)"), "Fallback")
+
+    def test_step_instructions_quote_only_visible_labels(self):
+        """Every quoted name in a step is a real button, label or menu entry (#8: refer to visible GUI)."""
+        visible = {label for _, _, key, label, *_ in menu_entries() if label}
+        for name in ("conversion_window.py", "native_import_window.py", "object_review_window.py"):
+            visible |= set(re.findall(r'text="([^"]+)"', (TOOL / name).read_text(encoding="utf-8")))
+        # Labels added by PRs this branch does not include yet: #5 (scale preset), #13 (remastered
+        # textures). Remove each once its PR is merged into this branch's base.
+        visible |= {"Scale preset", "Remastered textures…"}
+        for _, profile, _, steps in GAMES:
+            for _, title, instruction in steps:
+                for quoted in re.findall(r'"([^"]+)"', instruction):
+                    self.assertIn(quoted, visible, f"{NAMES[profile]} · {title}")
 
     def test_editor_install_copies_the_layout_module(self):
         import launch

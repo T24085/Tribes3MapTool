@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from busy import run_busy
+from game_workflows import window_title
 from intake_contract import finite
 from unreal_binary_scene import read_binary_scene
 from unreal_legacy_intake import companion_paths, project_markers, usable_marker, validate_unreal_settings
@@ -98,7 +99,7 @@ def show_native_import(parent, source):
     terrains = {actor["object_path"]: actor for actor in terrain_candidates(dict(scene, actors=actors))
                 if not actor["references"].keys() & {"base", "attachparent"}}
     window = tk.Toplevel(parent)
-    window.title("Native map import settings")
+    window.title(window_title("settings", "Native map import settings"))
     window.geometry("870x565")
     window.minsize(710, 500)
     window.transient(parent)
