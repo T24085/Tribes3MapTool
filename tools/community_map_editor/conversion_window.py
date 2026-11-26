@@ -228,8 +228,25 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
     kill_floor.pack(side="left", padx=(8, 0))
     ttk.Label(body, text="Leave blank for no kill floor. Players below it die (the source game's KillZ).",
               wraplength=320).grid(row=15, columnspan=2, sticky="w")
+    flight_row = ttk.Frame(body)
+    flight_row.grid(row=16, columnspan=2, sticky="ew", pady=(8, 0))
+    ttk.Label(flight_row, text="Flight ceiling, m above lowest terrain").pack(side="left")
+    flight_height = ttk.Entry(flight_row, width=8)
+    flight_height.pack(side="left", padx=(8, 0))
+    ttk.Label(flight_row, text="fade over").pack(side="left", padx=(8, 0))
+    flight_fade = ttk.Entry(flight_row, width=6)
+    flight_fade.pack(side="left", padx=(6, 0))
+    ttk.Label(flight_row, text="m").pack(side="left", padx=(4, 0))
+    previous_ceiling = selection.get("flight_ceiling") or {}
+    if previous_ceiling.get("height_m") is not None:
+        flight_height.insert(0, f"{previous_ceiling['height_m']:g}")
+    if previous_ceiling.get("fade_m") is not None:
+        flight_fade.insert(0, f"{previous_ceiling['fade_m']:g}")
+    ttk.Label(body, text="Leave blank for no flight ceiling. Climbing fades through the band and stops at the "
+                         "ceiling (Tribes 2 flightCeiling, Ascend StallZ).", wraplength=320).grid(
+        row=17, columnspan=2, sticky="w")
     message = ttk.Label(body, wraplength=320)
-    message.grid(row=16, columnspan=2, sticky="w", pady=(6, 0))
+    message.grid(row=18, columnspan=2, sticky="w", pady=(6, 0))
 
     def distance(entry, label):
         try:
@@ -252,6 +269,12 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
                 }
             if kill_floor.get().strip():
                 options["kill_floor_m"] = distance(kill_floor, "the kill floor depth")
+            if flight_height.get().strip():
+                options["flight_ceiling"] = {"height_m": distance(flight_height, "the flight ceiling height")}
+                if flight_fade.get().strip():
+                    options["flight_ceiling"]["fade_m"] = distance(flight_fade, "the flight ceiling fade band")
+            elif flight_fade.get().strip():
+                raise ValueError("Enter a flight ceiling height before its fade band.")
             if flag_timer.get().strip():
                 try:
                     options["flag_return_delay_s"] = int(flag_timer.get())
@@ -287,7 +310,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         window.destroy()
 
     buttons = ttk.Frame(body)
-    buttons.grid(row=17, columnspan=2, sticky="ew", pady=(8, 0))
+    buttons.grid(row=19, columnspan=2, sticky="ew", pady=(8, 0))
     ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side="left")
     ttk.Button(buttons, text="Apply", command=save).pack(side="right")
     window.bind("<Escape>", lambda _event: window.destroy())

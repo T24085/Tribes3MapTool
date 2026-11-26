@@ -38,7 +38,8 @@ class KillFloorTests(unittest.TestCase):
         self.assertIn("kill_floor_m", BOUNDARY_OPTIONS)
         self.assertEqual(KILL_FLOOR, "T3MissionKillFloor")  # read by the host's boundary_players.lua
         source = (TOOL / "import_intake.py").read_text(encoding="utf-8")
-        self.assertIn('"kill_floor_m"}', source)  # accepted in the conversion window's selection
+        selection = source[source.index('required = {"manifest"'):source.index("or not isinstance(selection")]
+        self.assertIn('"kill_floor_m"', selection)  # accepted in the conversion window's selection
         self.assertIn("place_kill_floor(editor.ACTORS", source)
         window = (TOOL / "conversion_window.py").read_text(encoding="utf-8")
         self.assertIn("Kill floor, metres below lowest terrain", window)
