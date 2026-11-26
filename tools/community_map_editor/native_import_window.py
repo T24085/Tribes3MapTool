@@ -6,6 +6,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from busy import run_busy
 from intake_contract import finite
 from source_profiles import SCALE_PRESETS, UNITS_PER_METRE_DEFAULT
 from unreal_binary_scene import read_binary_scene
@@ -91,7 +92,9 @@ def native_settings(scene, terrain, units, teams, companions, levels=()):
 def show_native_import(parent, source, levels=()):
     game = GAMES[source.suffix.casefold()]
     units_default = UNITS_PER_METRE_DEFAULT[game]
-    scene = read_binary_scene(source, game, units_default, levels)
+    reading = source.name + (" and " + ", ".join(Path(level).name for level in levels) if levels else "")
+    scene = run_busy(parent, f"Reading {reading}: terrain, flags and spawns…",
+                     lambda: read_binary_scene(source, game, units_default, levels))
     actors = [actor for actor in scene["actors"] if actor["name"]]
     counts = Counter(actor["object_path"].casefold() for actor in actors)
     actors = sorted((actor for actor in actors if counts[actor["object_path"].casefold()] == 1),

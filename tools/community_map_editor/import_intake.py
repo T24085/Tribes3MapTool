@@ -1077,7 +1077,12 @@ def import_map(manifest, *, perimeter=False, flag_inset_m=None, wall_limits=None
         "lighting-stills": draft.lighting_stills, "showcase": draft.showcase, "contact-sheets": draft.contact_sheets,
         "check-source-classes": draft.check_source_classes, "check-ctf": draft.check_ctf,
     }
-    if not draft.run.execute(operators):
+    steps = draft.run.report["steps"]
+    with unreal.ScopedSlowTask(len(steps), f"Building draft {draft.ident}") as progress:
+        progress.make_dialog(False)
+        finished = draft.run.execute(operators, on_step=lambda step: progress.enter_progress_frame(
+            1, f"Building draft {draft.ident}: {step.get('label') or step['operation']}…"))
+    if not finished:
         return
     editor.EDITOR.set_level_viewport_camera_info(
         unreal.Vector(0, -draft.size * 0.65, draft.size * 0.65), unreal.Rotator(pitch=-42, yaw=90)
