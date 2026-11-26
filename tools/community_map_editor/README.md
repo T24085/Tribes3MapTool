@@ -7,6 +7,30 @@ Open the **TRIBES 3 Map Editor** launcher to enter the local Unreal authoring pr
 - **Set up CTF.** Move the existing **Blue Spawn**, **Red Spawn**, **Blue Flag**, and **Red Flag** markers in the World Outliner. The TRIBES menu can add spawn and flag markers. Each side needs at least one spawn and exactly one flag. A **Route Start** and **Route End** pair lets you check a straight player-sized path through an entrance.
 - **Try the draft.** Leave Steam open, close any running TRIBES game, and choose **Build & Playtest**. Unreal saves your changes, closes to free memory, and cooks the map. The launcher opens a private offline TRIBES game, then reopens the same draft when you quit it. Keep the launcher console open throughout the build and test.
 
+### Work in order: game first
+
+The **TRIBES Map Editor** menu follows the workflow:
+
+- **0 · Start a draft.**
+- **1 · Convert from…**, with one submenu per source game (Tribes 1, Tribes 2, Tribes:
+  Vengeance, Tribes: Ascend) listing that game's tools as numbered steps.
+- **Shared draft tools, in order:**
+  - 2 · Review conversion;
+  - 3 · Textures, models and sky;
+  - 4 · Lighting;
+  - 5 · Gameplay (markers, equipment, shields);
+  - 6 · Build and publish.
+
+The conversion window starts the same way. Choose **Converting from** first. The window
+then lists that game's steps, each with what it needs and what it produces, and the open
+dialog offers only that game's source files plus existing intakes. **Any game** keeps the
+previous open-anything behaviour. The layout is data in `game_workflows.py`, so a new game
+or step is a data change.
+
+- **Pick or add steps.** Edit `GAMES` and `MENU` in `game_workflows.py`.
+- **Keep them consistent.** `test_game_workflows.py` checks that every editor action is
+  reachable and valid.
+
 Drafts live in the Community maps folder inside the authoring project. Put newly imported assets under Content/Community so the draft cooker can package them. Each build stores its diagnostics under the local Runs folder.
 
 Windows map cooks embed shader code in their material assets so those

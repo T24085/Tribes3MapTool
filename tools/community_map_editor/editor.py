@@ -672,71 +672,35 @@ def register():
     parent = menus.find_menu('LevelEditor.MainMenu')
     if parent is None:
         raise RuntimeError('Unreal did not register the Level Editor main menu.')
+    root_name = 'LevelEditor.MainMenu.TribesMapEditor'
     menu = parent.add_sub_menu('LevelEditor.MainMenu', '', 'TribesMapEditor', 'TRIBES Map Editor')
-    shields = menu.add_sub_menu('LevelEditor.MainMenu.TribesMapEditor', 'TribesTools', 'ForceShields', 'Force Shields')
-    items = [
-        ('NewBlank', 'New Blank CTF Map', 'blank', None),
-        ('CopyMap', 'Copy Damnation (2026)', 'copy', None),
-        ('ImportT2', 'Import Mission or Intake…', 'import_t2', None),
-        ('RebuildRecorded', 'Create New Draft with Recorded Rules', 'rebuild_t2', 'recorded'),
-        ('RebuildLatest', 'Create New Draft with Latest Rules', 'rebuild_t2', 'latest'),
-        ('BatchRebuild', 'Batch Rebuilds…', 'batch_rebuild', None),
-        ('Pipeline', 'Conversion Pipeline…', 'report', 'pipeline'),
-        ('GameProfiles', 'Game Profiles…', 'report', 'profiles'),
-        ('MapReleases', 'Map Releases…', 'report', 'releases'),
-        ('ObjectReview', 'Docked Object Review', 'docked_review', None),
-        ('ImportInterior', 'Import Tribes 2 Interior…', 'import_interior', None),
-        ('PreviewDTS', 'Preview Selected DTS Animation…', 'dts_preview', 'open'),
-        ('StopDTSPreview', 'Stop DTS Preview', 'dts_preview', 'stop'),
-        ('BakeDTS', 'Bake Selected DTS Animation…', 'dts_bake', False),
-        ('RemoveBakeDTS', 'Remove Baked DTS Animation', 'dts_bake', True),
-        ('ModelShowcase', 'Open Model Showcase', 'model_showcase', 'showcase'),
-        ('ContactSheets', 'Refresh Map Contact Sheets', 'contact_sheets', None),
-        ('ReturnToDraft', 'Return from Showcase to Draft', 'model_showcase', 'draft'),
-        ('RegisterModels', 'Add Selected Models to Shared Library', 'model_library', 'add'),
-        ('BrowseModels', 'Open Shared Model Library', 'model_library', 'open'),
-        ('PlaceModels', 'Place Selected Library Models in Draft', 'model_library', 'place'),
-        ('LeaveModels', 'Return from Shared Library to Draft', 'model_library', 'return'),
-        ('MapAssets', 'Browse Structures and Props', 'browse', 'meshes'),
-        ('MapMaterials', 'Browse Grass, Rock and Forest Materials', 'browse', 'palette'),
-        ('MapSurfaces', 'Browse Existing Materials and Textures', 'browse', 'surfaces'),
-        ('ExportTextures', 'Export Selected Textures for Repair…', 'texture_batch', 'export'),
-        ('ReviewTextures', 'Review and Import Texture Batch…', 'texture_batch', 'review'),
-        ('ApplySky', 'Apply Selected Cubemap as Draft Sky', 'apply_sky', None),
-        ('CaptureLighting', 'Capture Normal and Alarm Lighting…', 'capture_lighting', None),
-        ('SaveLightingCamera', 'Add Lighting Camera from Viewport', 'lighting_camera', 'save'),
-        ('FrameLightingCamera', 'Frame Selected Lighting Camera', 'lighting_camera', 'frame'),
-        ('RenderLightingCameras', 'Render Saved Lighting Cameras…', 'lighting_camera', 'render'),
-        ('LinkLighting', 'Link Interior Lighting to Selected Generator', 'interior_circuit', True),
-        ('UnlinkLighting', 'Clear Selected Interior Lighting Links', 'interior_circuit', False),
-        ('Validate', 'Check CTF Markers', 'validate', None),
-        ('ApproveEquipment', 'Approve Selected Equipment for Direct Host', 'approve_equipment', True),
-        ('RemoveEquipmentApproval', 'Remove Selected Equipment Approval', 'approve_equipment', False),
-        ('InventoryStation', 'Create Inventory Station Blueprint', 'inventory_station', None),
-        ('LinkShields', 'Link Selected Shields to Generator', 'shield_power', 'link'),
-        ('UnlinkShields', 'Set Selected Shields to Independent Power', 'shield_power', 'unlink'),
-        ('SourceShieldCircuit', 'Restore Source Shield Circuit', 'shield_power', 'source'),
-        ('DropShields', 'Shield Power Loss · Drop', 'shield_power', 'drop'),
-        ('WeakenShields', 'Shield Power Loss · Weaken', 'shield_power', 'weaken'),
-        ('KeepShields', 'Shield Power Loss · Stay Up', 'shield_power', 'stay'),
-        ('Build', 'Build & Playtest', 'build', 'playtest'),
-        ('BuildForHost', 'Build for Direct Host…', 'build', 'host'),
-    ]
-    for kind, label in (MARKERS | ROUTE).items():
-        items.append((kind, 'Add ' + label, 'marker', kind))
+    # Game-first layout (#8): start a draft, convert from one source game in numbered steps,
+    # then the shared draft tools in workflow order. The layout is data in game_workflows.py.
+    from game_workflows import menu_entries
     playtest = os.environ.get('T3_EDITOR_PLAYTEST') != '0'
-    for key, label, operation, argument in items:
+    submenus = {}
+
+    def add(target, key, label, operation, argument):
+        entry = unreal.ToolMenuEntry(name=key, type=unreal.MultiBlockType.MENU_ENTRY)
+        entry.set_label(label)
+        entry.set_string_command(unreal.ToolMenuStringCommandType.PYTHON, '',
+                                 f'import t3_map_editor; t3_map_editor.action({operation!r}, {argument!r})')
+        target.add_menu_entry('TribesTools', entry)
+
+    for submenu, title, key, label, operation, argument in menu_entries():
         if (key == 'CopyMap' and not os.environ.get('T3_EDITOR_SEED')
                 or key == 'Build' and not playtest
                 or key == 'InventoryStation' and not hasattr(unreal, 'TopInventoryStation')
                 or key == 'BuildForHost' and os.environ.get('T3_EDITOR_HOST_EXPORT') != '1'):
             continue
-        entry = unreal.ToolMenuEntry(name=key, type=unreal.MultiBlockType.MENU_ENTRY)
-        entry.set_label(label)
-        entry.set_string_command(unreal.ToolMenuStringCommandType.PYTHON, '',
-                                 f'import t3_map_editor; t3_map_editor.action({operation!r}, {argument!r})')
-        target = shields if operation == 'shield_power' else menu
-        target.add_menu_entry('TribesTools', entry)
+        if submenu not in submenus:
+            submenus[submenu] = menu.add_sub_menu(root_name, 'TribesTools', submenu, title)
+        target = submenus[submenu]
+        if key == '@markers':
+            for kind, marker_label in (MARKERS | ROUTE).items():
+                add(target, kind, 'Add ' + marker_label, 'marker', kind)
+            continue
+        add(target, key, label, operation, argument)
     if playtest:
         toolbar = menus.extend_menu('LevelEditor.LevelEditorToolBar.User')
         build = unreal.ToolMenuEntry(name='TribesBuildPlaytest', type=unreal.MultiBlockType.TOOL_BAR_BUTTON)
