@@ -15,12 +15,14 @@ from ascend_texture_cache import AscendTextureCache
 from intake_contract import (ASCEND_BASE_MATERIAL_VERSION, ASCEND_VERTEX_ATTRIBUTES_VERSION, MAX_INTAKE_INTERIORS,
                              MAX_INTAKE_INTERIOR_BYTES,
                              NATIVE_ENVIRONMENT_VERSION,
-                             NATIVE_LOCAL_LIGHTS_VERSION, PLAYABLE_BOUNDS,
+                             NATIVE_LOCAL_LIGHTS_VERSION, PLAYABLE_BOUNDS, BOUNDARY_RECIPE,
                              UNREAL_READER, UNREAL_SCENE, VENGEANCE_LOCAL_LIGHTS_VERSION, VENGEANCE_VERTEX_ATTRIBUTES_VERSION,
                              bounded, finite, validate_minimap)
 from interior_geometry import MAX_GEOMETRY_BYTES, NATIVE_VERTEX_FIELDS
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
+from vengeance_bounds import (boundary_recipe as vengeance_boundary_recipe, describe as describe_vengeance_bounds,
+                              play_area as vengeance_play_area, read_boundary as read_vengeance_boundary)
 from source_profiles import (ASCEND_BSP_INTAKE_VERSION, ASCEND_CONVEX_COLLISION_VERSION, ASCEND_TERRAIN_PAINT_VERSION,
                              ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION,
                              ASCEND_PLACEMENT_ART_VERSION,
@@ -416,6 +418,16 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
         if not all(low <= start < end <= high for low, start, end, high in zip(bounds[0], clip[0], clip[1], bounds[1])):
             raise ValueError("Playable bounds must be within the exported terrain.")
         bounds = clip
+    source_volume = None
+    if game == "vengeance" and binary and "bounds_m" not in settings:
+        # Use the map's BoundaryVolume for the play area and Boundaries walls (#17).
+        markers_m = [[value / 100 for value in marker["position_cm"]]
+                     for marker in project_markers(scene, settings["teams"]).values()]
+        volume, _ = read_vengeance_boundary(source, units)
+        area = vengeance_play_area(volume, bounds, markers_m) if volume else None
+        if area:
+            bounds, polygon, note = area
+            source_volume = (volume, polygon, note)
     minimap = framing(bounds)
     validate_minimap(minimap)
     markers = project_markers(scene, settings["teams"])
@@ -426,7 +438,18 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
         raise ValueError("A terrain actor cannot be assigned as a CTF marker.")
     placement_components = [] if binary and game == "ascend" else None
     rows = project_rows(scene, markers, settings.get("heightmap"), placement_components=placement_components)
-    next(row for row in rows if row["status"] == "boundary")["properties"][PLAYABLE_BOUNDS] = bounds
+    boundary = next(row for row in rows if row["status"] == "boundary")
+    boundary["properties"][PLAYABLE_BOUNDS] = bounds
+    if source_volume:
+        from perimeter import terrain_elevations
+
+        volume, polygon, note = source_volume
+        recipe = vengeance_boundary_recipe(volume, polygon, terrain_elevations(terrain))
+        boundary["properties"][BOUNDARY_RECIPE] = recipe
+        boundary["reason"] = describe_vengeance_bounds(volume, polygon, note, recipe)
+        for row in rows:
+            if row["name"] == volume["name"] and row["source_class"].endswith("BoundaryVolume"):
+                row["reason"] += " · Used for the playable bounds and Boundaries walls."
     interiors, files = {}, dict(paint.files)
     placed = {row["model_reference"] for row in rows if "model_reference" in row}
     mesh_docs = {reference: geometry for reference, geometry in mesh_docs.items() if reference in placed}
