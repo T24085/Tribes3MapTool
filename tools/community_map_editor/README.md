@@ -274,6 +274,18 @@ by distance. **Use settings file…** opens an existing recipe, including a
 recipe that supplies its own heightmap. Settings entered in the dialog are
 recorded in the private intake. The actor review retains object and property
 offsets.
+
+Tribes: Ascend cooks each map as separate levels: a gameplay level such as
+`TrCTF-Tartarus.fmap` (flags, spawns, base equipment), a world level
+`Tartarus_Ter.fmap` (terrain, meshes, lighting, fog) and an optional sound
+level `Tartarus_Sound.fmap`. Open the gameplay level. The tool imports from
+the matching world level and merges the gameplay and sound levels into one
+draft. A variant's own levels are preferred, so `TrTeamRabbit-Tartarus.fmap`
+uses `TrTeamRabbit-Tartarus_Ter.fmap` when it exists. The dialog lists the
+merged levels. Their actors are named after their level, for example
+`TrCTF-Tartarus.UTTeamPlayerStart_3`. A settings file lists them under
+`"levels"`. Meshes, BSP and component materials are still read from the
+world level only.
 Bind an existing project mesh to a recovered reference through the draft's
 mapping controls.
 

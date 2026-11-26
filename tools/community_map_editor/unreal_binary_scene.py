@@ -2,6 +2,7 @@
 
 from collections import Counter, defaultdict
 import math
+from pathlib import Path
 
 from intake_contract import finite
 from unreal_legacy_reader import (ACTOR_REFERENCES, ABSOLUTE_COMPONENT_FIELDS, GAMES, IDENTITY,
@@ -280,6 +281,68 @@ def actor_scene(report, stream, units_per_m):
                 source_index="package-export", package_summary=summary, actors=actors, scene=[root])
 
 
-def read_binary_scene(path, game, units_per_m):
+LEVEL_LINE_STRIDE = 10_000_000  # Each merged level package gets its own disjoint line range.
+MAX_MERGED_LEVELS = 8
+LINE_KEYS = ("line", "end_line", "export_index")
+
+
+def _shift_lines(value, offset):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in LINE_KEYS and type(item) is int:
+                value[key] = item + offset
+            else:
+                _shift_lines(item, offset)
+    elif isinstance(value, list):
+        for item in value:
+            _shift_lines(item, offset)
+
+
+def merge_level_scene(scene, extra, slot, label):
+    """Add another level package's actors to ``scene`` (Ascend split maps: gameplay, _Ter, _Sound).
+
+    Lines are export indices, so each merged package moves to its own range. Its actors keep
+    their own links and are marked ``merged_level`` so readers that use the primary package's
+    byte stream (meshes, component materials, environment, terrain) never read them.
+    """
+    if not 1 <= slot <= MAX_MERGED_LEVELS:
+        raise ValueError(f"Merge at most {MAX_MERGED_LEVELS} additional level packages.")
+    offset = slot * LEVEL_LINE_STRIDE
+    for actor in extra["actors"]:
+        if any(line >= LEVEL_LINE_STRIDE for line in (actor["line"], *actor["level_lines"])):
+            raise ValueError("Level package has too many exports to merge.")
+        _shift_lines(actor, offset)
+        actor["level_lines"] = [line + offset for line in actor["level_lines"]]
+        actor["links"] = {key: line + offset for key, line in actor["links"].items()}
+        actor["level_name"] = label
+        actor["object_path"] = f'{label}.{actor["object_path"]}'
+        actor["merged_level"] = label
+    for root in extra["scene"]:
+        for level in root["entries"]:
+            _shift_lines(level, offset)
+            level["header"] = f"Name={label}"
+            scene["scene"][0]["entries"].append(level)
+    scene["actors"].extend(extra["actors"])
+    scene.setdefault("levels", []).append(dict(extra["source"], label=label))
+    roles = Counter(actor["role"] or "unmapped" for actor in scene["actors"])
+    scene["coverage"] = dict(roles=dict(roles), actors_with_review=sum(bool(actor["review"]) for actor in scene["actors"]))
+    return scene
+
+
+def read_level_scenes(scene, paths, game, units_per_m):
+    """Merge each additional level package into ``scene``; return their source receipts."""
+    receipts = []
+    for slot, path in enumerate(paths, 1):
+        with open_package(path, game) as (report, stream):
+            extra = actor_scene(report, stream, units_per_m)
+        merge_level_scene(scene, extra, slot, Path(path).stem)
+        receipts.append(dict(extra["source"], origin=Path(path).name))
+    return receipts
+
+
+def read_binary_scene(path, game, units_per_m, levels=()):
     with open_package(path, game) as (report, stream):
-        return actor_scene(report, stream, units_per_m)
+        scene = actor_scene(report, stream, units_per_m)
+    if levels:
+        read_level_scenes(scene, levels, game, units_per_m)
+    return scene

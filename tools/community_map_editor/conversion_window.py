@@ -40,7 +40,7 @@ from t2_reader import convert, members, unpack_intake
 from terrain_layers import FALLBACK, PALETTE_SURFACES, layer_choices
 from terrain_art import available_art
 from tk_runtime import configure_tk
-from unreal_legacy_intake import convert_unreal, read_unreal_settings
+from unreal_legacy_intake import convert_unreal, read_unreal_settings, split_level_set
 from unreal_package_reader import GAMES as NATIVE_PACKAGE_TYPES, inspect_package, write_report as write_package_report
 
 
@@ -951,7 +951,11 @@ def run(library, meshes=(), drafts=()):
         metadata = path.with_suffix(".import.json")
         native_settings = None
         if not metadata.is_file() and path.suffix.casefold() in NATIVE_PACKAGE_TYPES:
-            selection = show_native_import(parent, path)
+            # A split Ascend map imports from its world (_Ter) level and merges the gameplay
+            # and sound levels, so opening TrCTF-Tartarus.fmap brings in the whole map.
+            path, levels = split_level_set(path)
+            metadata = path.with_suffix(".import.json")
+            selection = show_native_import(parent, path, levels)
             if selection is None:
                 return False
             if isinstance(selection, Path):
