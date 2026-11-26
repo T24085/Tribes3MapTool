@@ -1078,10 +1078,10 @@ def import_map(manifest, *, perimeter=False, flag_inset_m=None, wall_limits=None
         "check-source-classes": draft.check_source_classes, "check-ctf": draft.check_ctf,
     }
     steps = draft.run.report["steps"]
-    with unreal.ScopedSlowTask(len(steps), f"Building draft {draft.ident}") as progress:
+    with unreal.ScopedSlowTask(len(steps), f"Building draft from {draft.folder.name}") as progress:
         progress.make_dialog(False)
         finished = draft.run.execute(operators, on_step=lambda step: progress.enter_progress_frame(
-            1, f"Building draft {draft.ident}: {step.get('label') or step['operation']}…"))
+            1, f"Building draft from {draft.folder.name}: {step.get('label') or step['operation']}…"))
     if not finished:
         return
     editor.EDITOR.set_level_viewport_camera_info(

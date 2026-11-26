@@ -69,6 +69,9 @@ class PipelineProgressTests(unittest.TestCase):
         source = (TOOL / "import_intake.py").read_text(encoding="utf-8")
         self.assertIn("unreal.ScopedSlowTask(len(steps)", source)
         self.assertIn("on_step=lambda step: progress.enter_progress_frame(", source)
+        # The draft's ident is only known once its steps run, so the progress text must not read it (#8).
+        before_run = source[source.index("steps = draft.run.report"):source.index("if not finished:")]
+        self.assertNotIn("draft.ident", before_run)
 
 
 if __name__ == "__main__":
