@@ -12,43 +12,69 @@ from source_profiles import ASCEND, NAMES, T1, T2, VENGEANCE
 
 INTAKE_TYPES = "*.json *.zip"
 
+# Each step is (stage, title, instruction). Instructions name only things the author can see:
+# button labels in quotes and menu paths, so the window title "Step N of M · <title>" and the
+# numbered list in the conversion window always agree. Stages tie a window to its step:
+#   open       conversion window, before a source is opened
+#   inventory  "Native map package inventory" window (Unreal packages)
+#   settings   "Native map import settings" window (Unreal packages)
+#   review     conversion window, after a source is opened
+#   build, ... steps done in the Unreal editor
+UNREAL = "Unreal editor: TRIBES Map Editor"
+TEXTURES = ("textures", "Touch up textures (optional)",
+            f"{UNREAL} → 3 · Textures, models and sky → \"Export Selected Textures for Repair…\", "
+            "then \"Review and Import Texture Batch…\"")
+BUILD = ("build", "Build the draft", "Unreal builds the draft and opens it; its progress bar names each stage")
+GAMEPLAY = ("gameplay", "Check gameplay",
+            f"{UNREAL} → 5 · Gameplay: markers, equipment, shields → \"Check CTF Markers\"")
+EXPORT = ("export", "Build and publish", f"{UNREAL} → 6 · Build and publish → \"Build for Direct Host…\"")
+REVIEW = ("review", "Review the conversion",
+          "Check the object table (tick \"Needs review only\"); optionally \"Boundaries…\" and "
+          "\"Terrain layers…\"; then click \"Create Unreal draft\"")
+
+
+def package_steps(source):
+    """Steps for Unreal package sources (Vengeance and Ascend), which open two extra windows."""
+    return (("open", "Open the map", f"Click \"Open source or intake…\" and choose {source}"),
+            ("inventory", "Check the package", "In the package inventory window, click \"Import as draft…\""),
+            ("settings", "Choose import settings",
+             "Pick each team's \"Flag or stand\" and spawns and a \"Scale preset\", then click \"Create intake\""))
+
+
 # Source games in menu order: (key, profile, file types for the conversion window, steps).
-# Each step is (title, what it needs, what it produces).
 GAMES = (
     ("tribes1", T1, "*.vol *.mis",
-     (("Pick source", "The mission .vol or .mis from the Tribes 1 install", "A source in the conversion window"),
-      ("Read and review", "Terrain, interiors and shapes from the same install", "Object Review and a coverage report"),
-      ("Textures", "Palette textures from the volume files", "Repaired texture batches"),
-      ("Build draft", "The reviewed intake", "An Unreal draft (DraftT1…)"),
-      ("Gameplay", "The draft", "Checked CTF markers and equipment"),
-      ("Check and export", "The finished draft", "A host map bundle"))),
+     (("open", "Open the mission",
+       "Click \"Open source or intake…\", choose the mission .vol or .mis, and pick the mission in the drop-down "
+       "beside \"Source library…\" if there are several"),
+      ("review", "Review the conversion",
+       "Add \"Source artwork…\" and \"Interiors and props…\" from the same install, check the object table, "
+       "then click \"Create Unreal draft\""),
+      BUILD, TEXTURES, GAMEPLAY, EXPORT)),
     ("tribes2", T2, "*.mis *.vl2",
-     (("Pick source", "The mission .mis or the map .vl2", "A source in the conversion window"),
-      ("Read and review", "DIF interiors, DTS shapes, sky and audio assets", "Object Review and a coverage report"),
-      ("Textures", "Building, terrain and sky textures", "Repaired texture batches"),
-      ("Build draft", "The reviewed intake", "An Unreal draft (DraftT2…)"),
-      ("Interiors and shapes", "The draft and DIF/DTS files", "Imported interiors, baked DTS animation"),
-      ("Gameplay", "The draft", "Checked CTF markers, equipment and force shields"),
-      ("Check and export", "The finished draft", "A host map bundle"))),
+     (("open", "Open the mission",
+       "Click \"Open source or intake…\", choose the .mis or .vl2, and pick the mission in the drop-down beside "
+       "\"Source library…\""),
+      ("review", "Review the conversion",
+       "Add \"DIF assets…\", \"DTS assets…\", \"Sky assets…\" and \"Audio assets…\" if asked, check the "
+       "object table, optionally \"Boundaries…\", then click \"Create Unreal draft\""),
+      BUILD,
+      ("interiors", "Interiors and shapes",
+       f"{UNREAL} → 1 · Convert from Tribes 2 → \"Step 4: Import Tribes 2 interior (.dif)…\" and the DTS entries"),
+      TEXTURES, GAMEPLAY, EXPORT)),
     ("vengeance", VENGEANCE, "*.tvm *.pkg *.t3d",
-     (("Pick source", "The map .tvm (or a .t3d export) and its .pkg companions", "A source in the conversion window"),
-      ("Read and review", "Native terrain, flags and spawns in the import dialog", "Object Review and a coverage report"),
-      ("Textures", "Package textures", "Repaired texture batches"),
-      ("Build draft", "The reviewed intake, at the chosen scale", "An Unreal draft (DraftTV…)"),
-      ("Gameplay", "The draft", "Checked CTF markers and equipment"),
-      ("Check and export", "The finished draft", "A host map bundle"))),
+     (*package_steps("the map .tvm (keep its .pkg companions beside it)"), REVIEW, BUILD, TEXTURES, GAMEPLAY,
+      EXPORT)),
     ("ascend", ASCEND, "*.fmap *.udk *.t3d",
-     (("Pick source", "The gameplay level TrCTF-<Map>.fmap in the client's CookedPC\\Maps folder; "
-                      "its _Ter and _Sound levels are found automatically",
-       "A source in the conversion window"),
-      ("Read and review", "Flags, spawns and native terrain in the import dialog, scale preset",
-       "Object Review and a coverage report"),
-      ("Textures", "Textures.tfc beside or above the map", "Repaired or remastered texture batches"),
-      ("Sound pack", "The client's CookedPC folder (once per game) and the map's levels",
-       "The TA game pack and this map's sound override (sound_packs.py)"),
-      ("Build draft", "The reviewed intake", "An Unreal draft (DraftTA…)"),
-      ("Gameplay", "The draft", "Checked CTF markers and equipment"),
-      ("Check and export", "The finished draft", "A host map bundle"))),
+     (*package_steps("the gameplay level TrCTF-<Map>.fmap in the client's CookedPC\\Maps\\<Map> folder (its _Ter "
+                     "and _Sound levels are added automatically)")[:2],
+      ("settings", "Choose import settings",
+       "Pick each team's \"Flag or stand\" and spawns, a \"Scale preset\" and optionally \"Remastered "
+       "textures…\", then click \"Create intake\""),
+      REVIEW, BUILD,
+      ("sound", "Sound pack (optional)",
+       "No button yet: run sound_packs.py pack once per game and sound_packs.py map for this map (see the guide)"),
+      TEXTURES, GAMEPLAY, EXPORT)),
 )
 
 # Every Unreal editor menu entry: key -> (label, operation, argument). Keys are stable; labels
@@ -107,19 +133,17 @@ ACTIONS = {
 # "@markers" places the CTF marker entries that editor.py builds.
 MENU = (
     ("Start", "0 · Start a draft", ("NewBlank", "CopyMap")),
+    # Each game's first entry opens the conversion window, whose title shows the step on screen.
     ("ConvertT1", "1 · Convert from Tribes 1",
-     (("ImportT2", "1. Import Tribes 1 mission…"), ("RebuildRecorded", "2. Rebuild with recorded rules"),
-      ("RebuildLatest", "3. Rebuild with latest rules"))),
+     (("ImportT2", "Steps 1–2: Open the conversion window…"), "RebuildRecorded", "RebuildLatest")),
     ("ConvertT2", "1 · Convert from Tribes 2",
-     (("ImportT2", "1. Import Tribes 2 mission or .vl2…"), ("ImportInterior", "2. Import Tribes 2 interior (.dif)…"),
-      ("RebuildRecorded", "3. Rebuild with recorded rules"), ("RebuildLatest", "4. Rebuild with latest rules"),
-      "PreviewDTS", "StopDTSPreview", "BakeDTS", "RemoveBakeDTS")),
+     (("ImportT2", "Steps 1–2: Open the conversion window…"),
+      ("ImportInterior", "Step 4: Import Tribes 2 interior (.dif)…"),
+      "RebuildRecorded", "RebuildLatest", "PreviewDTS", "StopDTSPreview", "BakeDTS", "RemoveBakeDTS")),
     ("ConvertTV", "1 · Convert from Tribes: Vengeance",
-     (("ImportT2", "1. Import Vengeance map (.tvm)…"), ("RebuildRecorded", "2. Rebuild with recorded rules"),
-      ("RebuildLatest", "3. Rebuild with latest rules"))),
+     (("ImportT2", "Steps 1–4: Open the conversion window…"), "RebuildRecorded", "RebuildLatest")),
     ("ConvertTA", "1 · Convert from Tribes: Ascend",
-     (("ImportT2", "1. Import Ascend gameplay level (TrCTF-<Map>.fmap)…"),
-      ("RebuildRecorded", "2. Rebuild with recorded rules"), ("RebuildLatest", "3. Rebuild with latest rules"))),
+     (("ImportT2", "Steps 1–4: Open the conversion window…"), "RebuildRecorded", "RebuildLatest")),
     ("Review", "2 · Review conversion",
      ("ObjectReview", "Pipeline", "GameProfiles", "BatchRebuild")),
     ("Art", "3 · Textures, models and sky",
@@ -158,12 +182,32 @@ def open_filetypes(label):
 
 
 def steps_text(label):
-    """Numbered steps for the selected game, each with what it needs and what it produces."""
+    """Numbered steps for the selected game, each naming the button or menu to use."""
     game = game_by_label(label)
     if game is None:
         return "Choose the game you are converting from to see its steps in order."
-    return "\n".join(f"{number}. {title}: {needs} → {produces}"
-                     for number, (title, needs, produces) in enumerate(game["steps"], 1))
+    return "\n".join(f"{number}. {title}: {instruction}"
+                     for number, (_, title, instruction) in enumerate(game["steps"], 1))
+
+
+# The game chosen in the conversion window. Its child windows read it to number their titles.
+current_game = None
+
+
+def select_game(label):
+    global current_game
+    current_game = label
+
+
+def window_title(stage, default, label=None):
+    """"Step N of M · <title>" for a window that is part of the chosen game's steps, else ``default``."""
+    game = game_by_label(label if label is not None else current_game)
+    if game is None:
+        return default
+    for number, (key, title, _) in enumerate(game["steps"], 1):
+        if key == stage:
+            return f"Step {number} of {len(game['steps'])} · {title} · {game['name']}"
+    return default
 
 
 def menu_entries():
