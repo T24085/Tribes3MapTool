@@ -1202,10 +1202,14 @@ scripts (`Gameplay.u`, `Movement.u`) and the Ascend map data.
 | Tribes: Ascend | Four thin `BlockingVolume` walls, usually behind a force field, a cap volume above, `WorldInfo` `KillZ` and `StallZ` | The walls and cap block players. Jetpacks stall above `StallZ`. Falling below `KillZ` kills. | Solid walls on the box with the ceiling at the cap |
 | Tribes: Vengeance | One `Movement.BoundaryVolume` per map (a 3D volume, so its top and bottom are the ceiling and floor). It can be switched on or off, and has `DampingScale` and `FrictionScale` for native physics damping at the edge. | There's no warning or grace time. The server kills any player outside the volume at once, destroys any vehicle outside it, and returns any flag lying outside it to base. A carried flag returns when its carrier dies outside. | None yet: the import doesn't read the volume (Tribes3MapTool#17). Add walls or a flag limit by hand in **Boundaries…**. |
 
-The flight ceiling, `KillZ`, and grace-time damage are listed but not
-applied. They need the runtime boundary layer (T3BackEndServer#111), as do
-flag rules beyond the native drop. Change any preset in **Boundaries…**
-before **Create Unreal draft**.
+The presets also set a flight ceiling from Tribes 2's `flightCeiling` or
+Ascend's `StallZ`, and a kill floor from Ascend's `KillZ` or the bottom of
+Vengeance's volume (see **Kill floor** and **Flight ceiling** below). Hosts
+apply them once they support boundary mutators (T3BackEndServer#112).
+Grace-time damage, Vengeance's instant kill and destroying vehicles are
+lobby boundary mutators rather than map settings, so the review lists them
+without presetting them. Change any preset in **Boundaries…** before
+**Create Unreal draft**.
 
 When the intake has one valid mission area, open **Boundaries…** before creating the Unreal draft. Enable **Add solid side walls** to enclose the playable rectangle. Set the optional ceiling in metres above the highest imported terrain and the optional floor in metres below the lowest. The default puts the ceiling 2,000 metres up and leaves the bottom open. With either cap disabled, the side walls still extend to the corresponding default height or depth.
 
