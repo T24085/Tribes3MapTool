@@ -28,13 +28,14 @@ class SoftBoundaryTests(unittest.TestCase):
     def test_tribes_2_preset_warns_and_drops_the_flag_without_walls(self):
         rows = mission_rows()
         recipe = soft_boundary_recipe(rows, TERRAIN, game="Tribes 2", cm_per_source_m=105)
-        self.assertEqual(recipe["options"], {"perimeter": False, "flag_inset_m": 1, "warn_players": True})
+        self.assertEqual(recipe["options"], {"perimeter": False, "flag_inset_m": 1, "warn_players": True,
+                                             "flight_ceiling": {"height_m": 303.0, "fade_m": 21.0}})
         self.assertEqual(recipe["elevation_cm"], [1200.0, 5200.0])
         self.assertIs(rows[0]["properties"][BOUNDARY_RECIPE], recipe)
         reason = rows[0]["reason"]
         self.assertIn("drop a carried flag at the line", reason)
-        self.assertIn("flight ceiling 315 m (soft over 21 m)", reason)
-        self.assertIn("grace-time damage", reason)
+        self.assertIn("Flight ceiling 315 m, fading over 21 m.", reason)
+        self.assertIn("Not applied: grace-time damage", reason)
 
     def test_flag_on_the_line_keeps_the_warning_only(self):
         rows = mission_rows(flag_x=9_950)  # half a metre from the edge
@@ -42,6 +43,12 @@ class SoftBoundaryTests(unittest.TestCase):
         self.assertIsNone(recipe["options"]["flag_inset_m"])
         self.assertTrue(recipe["options"]["warn_players"])
         self.assertIn("Flag-only limit left off", rows[0]["reason"])
+
+    def test_markers_above_the_flight_ceiling_keep_it(self):
+        rows = mission_rows()
+        rows[1]["position_cm"][2] = 31_600  # above the 315 m ceiling, as a Cluster_Stonehenge spawn is
+        recipe = soft_boundary_recipe(rows, TERRAIN, game="Tribes 2", cm_per_source_m=105)
+        self.assertEqual(recipe["options"]["flight_ceiling"], {"height_m": 303.0, "fade_m": 21.0})
 
     def test_no_boundary_row_means_no_preset(self):
         self.assertIsNone(soft_boundary_recipe(mission_rows()[1:], TERRAIN, game="Tribes 2"))
