@@ -96,18 +96,30 @@ def build_package(game, strings, imported_objects, exported_objects, *, compress
     if modern:
         header += pack("2i", 42, 3)
         if compressed:
+            codec = 2 if compressed == "lzo" else 1
+            encode = lzo_literals if codec == 2 else zlib.compress
             block_size = 256 if len(table_bytes) > 256 * 1024 else 64
             blocks = [table_bytes[i:i + block_size] for i in range(0, len(table_bytes), block_size)]
-            payloads = [zlib.compress(block) for block in blocks]
+            payloads = [encode(block) for block in blocks]
             packed = (pack("I3i", TAG, block_size, sum(map(len, payloads)), len(table_bytes))
                       + b"".join(pack("ii", len(data), len(block)) for block, data in zip(blocks, payloads))
                       + b"".join(payloads))
-            header += pack("2I4i", 1, 1, prefix, len(table_bytes), prefix, len(packed))
+            # As in cooked UE3 packages, logical offsets exclude the stored chunk table, so the
+            # compressed bytes start one table entry (16 bytes) after the logical table start.
+            header += pack("2I4i", codec, 1, prefix, len(table_bytes), prefix + 16, len(packed))
             table_bytes = packed
+            prefix += 16
         else:
             header += pack("2I", 0, 0)
         header += pack("I", 0)
     return header.ljust(prefix, b"\0") + table_bytes
+
+
+def lzo_literals(data):
+    """Encode up to 238 bytes as one LZO1X literal run plus the end marker (enough for fixtures)."""
+    if not 0 < len(data) <= 238:
+        raise ValueError("Literal-only LZO fixtures hold 1 to 238 bytes per block.")
+    return bytes([17 + len(data)]) + bytes(data) + b"\x11\x00\x00"
 
 
 class UnrealPackageReaderTests(unittest.TestCase):
@@ -149,6 +161,22 @@ class UnrealPackageReaderTests(unittest.TestCase):
         raw = native_fixture("ascend")
         vanilla = inspect_package(self.write("ascend", raw))
         self.assertEqual(vanilla["summary"]["compression"], "none")
+
+    def test_ascend_lzo_packages_match_their_uncompressed_tables(self):
+        plain = inspect_package(self.write("ascend", native_fixture("ascend")))
+        result = inspect_package(self.write("ascend", native_fixture("ascend", compressed="lzo")))
+        self.assertEqual(result["summary"]["compression"], "lzo")
+        self.assertEqual(result["names"], plain["names"])
+        self.assertEqual([row["object_path"] for row in result["exports"]],
+                         [row["object_path"] for row in plain["exports"]])
+        self.assertEqual(result["classes"], plain["classes"])
+
+    def test_rejects_unsupported_package_codecs(self):
+        raw = bytearray(native_fixture("ascend", compressed=True))
+        codec = raw.find(struct.pack("<2i", 42, 3)) + 8
+        raw[codec:codec + 4] = struct.pack("<I", 4)  # LZX is console-only.
+        with self.assertRaisesRegex(ValueError, "unsupported compression flags 0x4"):
+            inspect_package(self.write("ascend", bytes(raw)))
 
     def test_rejects_wrong_versions_references_cycles_and_truncated_compression(self):
         with self.assertRaisesRegex(ValueError, "Invalid|invalid"):

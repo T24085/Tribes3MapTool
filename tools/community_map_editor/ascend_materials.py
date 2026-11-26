@@ -8,13 +8,18 @@ import zlib
 from interior_geometry import material_slots
 from model_textures import MAX_SIDE, placement_key
 from unreal_binary_scene import property_tag, read_properties
-from unreal_package_reader import Cursor, open_package, table_name
+from unreal_package_reader import Cursor, decode_chunk, open_package, table_name
 from vengeance_terrain_layers import COLOR_FORMATS, texture_png
 
 
 COLOR_PARAMETERS = {"basecolor", "basetexture", "diffuse", "diffusecolor", "diffusetexture", "albedo"}
 PIXEL_FORMATS = {"PF_A8R8G8B8": 5, "PF_B8G8R8A8": 5, "PF_DXT1": 3, "PF_DXT3": 7, "PF_DXT5": 8}
-EXTERNAL_OR_UNUSED = 0x21
+# UE3 bulk data flags.
+BULK_SEPARATE_FILE = 0x01  # Stored in a texture file cache (.tfc) instead of the package.
+BULK_ZLIB = 0x02
+BULK_LZO = 0x10
+BULK_UNUSED = 0x20
+BULK_PAYLOAD_ONLY = 0x40
 TEXTURE_SAMPLE = "materialexpressiontexturesample"
 TEXTURE_PARAMETER = "materialexpressiontexturesampleparameter2d"
 MASK_FIELDS = {"mask", "maskr", "maskg", "maskb", "maska", "gcc64_padding"}
@@ -317,15 +322,47 @@ def material_texture(asset, owner, stream, objects, open_art):
 
 
 def bulk_range(cursor):
+    """Return a mip payload as (where, offset, size, codec, count), or None when unusable.
+
+    ``where`` is "inline" for bytes inside the export or "cache" for bytes stored in the
+    texture file cache (.tfc) named by the texture's TextureFileCacheName property.
+    """
     flags, count, size, offset = cursor.fields("I3i")
+    if flags & BULK_UNUSED:
+        return None  # Unused mip slots carry size and offset -1.
     if count < 0 or size < 0 or (size and offset < 0):
         raise ValueError("Invalid Ascend texture bulk data header.")
-    if not size or flags & EXTERNAL_OR_UNUSED:
+    if not size:
         return None
+    codec = 2 if flags & BULK_LZO else 1 if flags & BULK_ZLIB else 0
+    if flags & ~(BULK_SEPARATE_FILE | BULK_ZLIB | BULK_LZO | BULK_PAYLOAD_ONLY) or flags & BULK_ZLIB and flags & BULK_LZO:
+        return None
+    if not codec and size != count:
+        return None
+    if flags & BULK_SEPARATE_FILE:
+        return "cache", offset, size, codec, count
     if offset != cursor.offset or size > cursor.limit - offset:
         raise ValueError("Ascend texture bulk data is outside its export.")
     cursor.offset += size
-    return (offset, size) if flags in (0, 0x40) and size == count else None
+    return "inline", offset, size, codec, count
+
+
+def cache_name(tags, report, stream):
+    tag = next((tag for tag in tags if tag["name"].casefold() == "texturefilecachename"), None)
+    if tag is None or tag["kind"] != "NameProperty" or tag["size"] != 8:
+        return None
+    return table_name(tag_data(stream, tag), report["names"], True)
+
+
+def mip_bytes(payload, stream, rtc, cache):
+    where, offset, size, codec, count = payload
+    if where == "cache":
+        if not cache:
+            raise ValueError("The Ascend texture stores its mips in a texture file cache but names none.")
+        return rtc.read_external(cache, offset, size, codec, count)
+    if not codec:
+        return stream[offset:offset + size]
+    return decode_chunk(stream, offset, size, count, codec)
 
 
 def texture_mip(asset, report, stream, objects, rtc):
@@ -339,6 +376,7 @@ def texture_mip(asset, report, stream, objects, rtc):
     kind = PIXEL_FORMATS.get(name)
     if kind is None:
         raise ValueError(f"Unsupported Ascend texture pixel format {name}.")
+    cache = cache_name(tags, report, stream)
     cursor = Cursor(stream, start, asset["serial_offset"] + asset["serial_bytes"])
     bulk_range(cursor)  # Optional authoring payload, followed by the runtime mip array.
     stride, block_size = COLOR_FORMATS[kind]
@@ -352,12 +390,13 @@ def texture_mip(asset, report, stream, objects, rtc):
         largest = max(largest, width * height)
         if not payload or max(width, height) > MAX_SIDE:
             continue
-        offset, length = payload
+        if payload[0] == "cache" and not cache:
+            continue
         expected = ((width + stride - 1) // stride) * ((height + stride - 1) // stride) * block_size
-        if length != expected:
+        if payload[4] != expected:
             raise ValueError("Ascend texture mip dimensions disagree with its byte count.")
         if best is None or width * height > best[0] * best[1]:
-            best = width, height, offset, length
+            best = width, height, payload
     cache_issue = None
     if rtc.available:
         try:
@@ -369,10 +408,17 @@ def texture_mip(asset, report, stream, objects, rtc):
             cache_issue = f"Ascend RTC cache could not be used. {error}"
     if best is None:
         raise ValueError(cache_issue or "No supported Ascend texture mip. Supply the matching RTC cache if available.")
-    width, height, offset, length = best
-    data = texture_png(kind, width, height, stream[offset:offset + length])
+    width, height, payload = best
+    receipts = ()
+    try:
+        pixels = mip_bytes(payload, stream, rtc, cache)
+    except (OSError, ValueError, zlib.error) as error:
+        raise ValueError(f"Ascend texture mip could not be read. {error}") from error
+    if payload[0] == "cache":
+        receipts = (rtc.cache_receipt(cache),)
+    data = texture_png(kind, width, height, pixels)
     fallback = cache_issue or ("Larger mips were unavailable." if width * height < largest else None)
-    return data, [width, height], fallback, ()
+    return data, [width, height], fallback, receipts
 
 
 def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc):

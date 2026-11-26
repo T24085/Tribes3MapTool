@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from intake_contract import finite
+from source_profiles import SCALE_PRESETS, UNITS_PER_METRE_DEFAULT
 from unreal_binary_scene import read_binary_scene
 from unreal_legacy_intake import companion_paths, project_markers, usable_marker, validate_unreal_settings
 from unreal_native_terrain import terrain_candidates
@@ -64,7 +65,7 @@ def native_settings(scene, terrain, units, teams, companions):
 
 def show_native_import(parent, source):
     game = GAMES[source.suffix.casefold()]
-    units_default = 100 if game == "ascend" else 50
+    units_default = UNITS_PER_METRE_DEFAULT[game]
     scene = read_binary_scene(source, game, units_default)
     actors = [actor for actor in scene["actors"] if actor["name"]]
     counts = Counter(actor["object_path"].casefold() for actor in actors)
@@ -90,8 +91,23 @@ def show_native_import(parent, source):
         terrain.current(0)
     ttk.Label(terrain_row, text="Source units per metre").pack(side="left")
     units = ttk.Entry(terrain_row, width=8)
-    units.insert(0, str(units_default))
+    units.insert(0, f"{units_default:g}")
     units.pack(side="left", padx=(8, 0))
+
+    presets = {f"{label} · 1 unit = {cm:g} cm": cm for label, cm in SCALE_PRESETS[game]}
+    scale_row = ttk.Frame(body)
+    scale_row.pack(fill="x", pady=(0, 8))
+    ttk.Label(scale_row, text="Scale preset").pack(side="left")
+    preset = ttk.Combobox(scale_row, values=tuple(presets), state="readonly", width=56)
+    preset.current(0)
+    preset.pack(side="left", padx=(8, 8))
+    ttk.Label(scale_row, text="or type your own value.").pack(side="left")
+
+    def apply_preset(_event=None):
+        units.delete(0, "end")
+        units.insert(0, f"{100 / presets[preset.get()]:g}")
+
+    preset.bind("<<ComboboxSelected>>", apply_preset)
 
     show_all = tk.BooleanVar(window, False)
     ttk.Checkbutton(body, text="Show other placeable actors", variable=show_all).pack(anchor="w")
