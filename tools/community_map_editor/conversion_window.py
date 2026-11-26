@@ -10,6 +10,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 import zipfile
 
 from conversion_rules import checksum, sha256_file, write
+from game_workflows import game_choices, open_filetypes, steps_text
 from boundary_polygon_window import show_polygon
 from intake_contract import load_intake, load_mission_audio, playable_bounds
 from intake_exchange import export_private_intake
@@ -593,6 +594,16 @@ def run(library, meshes=(), drafts=()):
     root.title("TRIBES Map Editor · Import mission")
     root.geometry("1110x640")
     root.minsize(900, 520)
+    # Game-first workflow (#8): choose the source game, then follow its numbered steps.
+    start = ttk.Frame(root, padding=(10, 10, 10, 0))
+    start.pack(fill="x")
+    ttk.Label(start, text="Converting from").pack(side="left")
+    source_game = ttk.Combobox(start, state="readonly", values=game_choices(), width=34)
+    source_game.current(0)
+    source_game.pack(side="left", padx=(8, 0))
+    steps = tk.StringVar(value=steps_text(source_game.get()))
+    ttk.Label(root, textvariable=steps, justify="left", wraplength=1060).pack(anchor="w", padx=10, pady=(4, 0))
+    source_game.bind("<<ComboboxSelected>>", lambda _event: steps.set(steps_text(source_game.get())))
     bar = ttk.Frame(root, padding=10)
     bar.pack(fill="x")
     notice = tk.StringVar(
@@ -978,7 +989,7 @@ def run(library, meshes=(), drafts=()):
     def open_file():
         name = filedialog.askopenfilename(
             parent=root,
-            filetypes=[("Mission, package or intake", "*.mis *.vl2 *.vol *.t3d *.tvm *.pkg *.fmap *.udk *.json *.zip")],
+            filetypes=open_filetypes(source_game.get()),
         )
         if not name:
             return
