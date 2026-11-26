@@ -22,6 +22,29 @@ def marker_choices(actors, ascend_terrain, show_all):
     return flags, spawns
 
 
+# Team names in flag and stand class names (Ascend TrCTFBase_<Team>, Vengeance Capture<Kind><Faction>).
+TEAM_NAMES = (("bloodeagle", "Blood Eagle"), ("diamondsword", "Diamond Sword"), ("beagle", "Blood Eagle"),
+              ("phoenix", "Phoenix"), ("imperial", "Imperial"))
+
+
+def marker_label(actor):
+    """A readable dropdown label that leads with FLAG and the team, e.g. "FLAG · Blood Eagle · TrCTFBase_BloodEagle_0"."""
+    name = actor["name"] or actor["object_path"].rsplit(".", 1)[-1]
+    kind = (actor["source_class"] or "").rsplit(".", 1)[-1]
+    if actor["role"] not in {"flag", "capture-point"}:
+        return f"{name} ({kind})" if kind else name
+    team = next((label for key, label in TEAM_NAMES if key in kind.casefold()), None)
+    head = "FLAG STAND" if actor["role"] == "capture-point" else "FLAG"
+    return " · ".join(part for part in (head, team, name) if part)
+
+
+def flag_labels(flags):
+    """Map each dropdown label to its object path; repeated labels fall back to the full path."""
+    counts = Counter(marker_label(actor) for actor in flags)
+    return {(label if counts[label] == 1 else f"{label} · {actor['object_path']}"): actor["object_path"]
+            for actor in flags for label in (marker_label(actor),)}
+
+
 def suggested_teams(flags, spawns, actors=()):
     # Vengeance stores the flag pickup above the stand. The stand anchors the new objective.
     stands = [flag for flag in flags if flag["role"] == "capture-point"]
@@ -136,20 +159,25 @@ def show_native_import(parent, source, levels=()):
         controls.append((flag, spawns))
     content.rowconfigure(0, weight=1)
 
+    flag_choices = {}
+
     def selections():
-        return [dict(flag=flag.get(), spawns=[spawns.get(i) for i in spawns.curselection()]) for flag, spawns in controls]
+        return [dict(flag=flag_choices.get(flag.get(), ""), spawns=[spawns.get(i) for i in spawns.curselection()])
+                for flag, spawns in controls]
 
     def refresh(_event=None, *, initial=False):
         chosen = terrains.get(terrain.get())
         ascend_terrain = chosen["line"] if chosen and game == "ascend" else None
         flags, spawns = marker_choices(actors, ascend_terrain, show_all.get())
         preferred = suggested_teams(flags, spawns, actors) if initial else selections()
-        flag_paths = tuple(actor["object_path"] for actor in flags)
+        flag_choices.clear()
+        flag_choices.update(flag_labels(flags))
+        label_for = {path: label for label, path in flag_choices.items()}
         spawn_paths = tuple(actor["object_path"] for actor in spawns)
         for index, (flag, starts) in enumerate(controls):
             wanted = preferred[index] if preferred else dict(flag="", spawns=[])
-            flag.configure(values=flag_paths)
-            flag.set(wanted["flag"] if wanted["flag"] in flag_paths else "")
+            flag.configure(values=tuple(flag_choices))
+            flag.set(label_for.get(wanted["flag"], ""))
             starts.delete(0, "end")
             starts.insert("end", *spawn_paths)
             for row, path in enumerate(spawn_paths):
