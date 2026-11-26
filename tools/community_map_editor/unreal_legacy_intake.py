@@ -37,7 +37,7 @@ from source_profiles import (ASCEND_BSP_INTAKE_VERSION, ASCEND_CONVEX_COLLISION_
 from t1_reader import load_heightmap
 from t2_reader import publish_intake
 from terrain_grid import CELLS
-from unreal_binary_scene import actor_scene
+from unreal_binary_scene import MAX_MERGED_LEVELS, actor_scene, read_level_scenes
 from unreal_legacy_reader import attributes, descendants, read_unreal_export
 from unreal_native_terrain import decode_terrain
 from unreal_native_environment import read_environment
@@ -220,7 +220,7 @@ def project_rows(scene, markers, heightmap, *, placement_components=None):
                 row.update(conversion_class="unrealmeshactor", model_reference="unrealmesh:" + model[0]["source"].casefold(),
                            transform=dict(position_cm=[v * 100 for v in transform["position_m"]],
                                           rotation_xyzw=transform["rotation_xyzw"], scale=transform["scale"]))
-                if placement_components is not None:
+                if placement_components is not None and not actor.get("merged_level"):
                     components = [nodes[part["line"]] for part in actor["components"]
                                   if attributes(part["declaration"]).get("class", "").rsplit(".", 1)[-1].casefold()
                                   == "staticmeshcomponent"]
@@ -270,7 +270,13 @@ def validate_unreal_settings(settings):
             or type(settings["format"]) is not int or settings["format"] != 1
             or not isinstance(settings["game"], str) or settings["game"] not in UNREAL_PROFILES):
         raise ValueError("Invalid Unreal scene import settings.")
-    optional = settings.keys() - REQUIRED - {"bounds_m", "asset_packages"}
+    optional = settings.keys() - REQUIRED - {"bounds_m", "asset_packages", "levels"}
+    levels = settings.get("levels", [])
+    if levels and (settings["game"] != "ascend" or not isinstance(levels, list) or len(levels) > MAX_MERGED_LEVELS
+                   or not all(isinstance(name, str) and re.fullmatch(r"[\w.-]{1,180}\.fmap", name, re.I)
+                              for name in levels)
+                   or len({name.casefold() for name in levels}) != len(levels)):
+        raise ValueError(f"List up to {MAX_MERGED_LEVELS} unique Ascend .fmap levels beside the world map.")
     packages = settings.get("asset_packages", [])
     extension = "upk" if settings["game"] == "ascend" else "pkg"
     if (not isinstance(packages, list) or len(packages) > 32
@@ -287,6 +293,36 @@ def validate_unreal_settings(settings):
           and (not isinstance(settings["terrain_actor"], str) or not 1 <= len(settings["terrain_actor"]) <= 512)):
         raise ValueError("Choose native terrain or supply a complete heightmap frame.")
     return settings
+
+
+SPLIT_GAMEPLAY = re.compile(r"(Tr\w+)-([\w.-]+)", re.I)
+
+
+def split_level_set(path):
+    """Return (world, levels) for an Ascend map cooked as separate gameplay, _Ter and _Sound levels.
+
+    Opening the gameplay level (for example TrCTF-Tartarus.fmap) selects its world level as the
+    import source (a variant's own TrTeamRabbit-Tartarus_Ter.fmap first, else Tartarus_Ter.fmap)
+    and merges the gameplay level and any matching _Sound level. Other files import alone.
+    """
+    path = Path(path)
+    match = SPLIT_GAMEPLAY.fullmatch(path.stem)
+    if not match or path.suffix.casefold() != ".fmap":
+        return path, []
+
+    def sibling(*stems):
+        for stem in stems:
+            candidate = path.with_name(f"{stem}.fmap")
+            if candidate.is_file() and not candidate.is_symlink():
+                return candidate
+        return None
+
+    base = match.group(2)
+    world = sibling(f"{path.stem}_Ter", f"{base}_Ter")
+    if world is None:
+        return path, []
+    sound = sibling(f"{path.stem}_Sound", f"{path.stem}-Sound", f"{base}_Sound")
+    return world, [path, *([sound] if sound else [])]
 
 
 def companion_paths(source, names):
@@ -328,6 +364,11 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
     if names and not binary:
         raise ValueError("Companion packages require a binary map source.")
     companions = companion_paths(source, names) if names else {}
+    level_names = settings.get("levels", [])
+    if level_names and not binary:
+        raise ValueError("Merged levels require a binary Ascend world map.")
+    level_paths = [path for name in level_names
+                   for path in companion_paths(source, [name]).values()]
     artwork = None
     if binary:
         if game == "vengeance":
@@ -349,6 +390,9 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
                 if height_package:
                     paint.packages[height_package["name"]] = height_package
                 companion_receipts.extend(dict(receipt, origin=name) for name, receipt in sorted(paint.packages.items()))
+            if level_paths:
+                # Gameplay and sound levels join after every read that uses this package's bytes.
+                companion_receipts.extend(read_level_scenes(scene, level_paths, game, units))
             assignments = project_markers(scene, settings["teams"])
             references = {row["model_reference"] for row in project_rows(scene, assignments, settings.get("heightmap"))
                           if "model_reference" in row}

@@ -49,7 +49,7 @@ def suggested_teams(flags, spawns, actors=()):
     return teams
 
 
-def native_settings(scene, terrain, units, teams, companions):
+def native_settings(scene, terrain, units, teams, companions, levels=()):
     if terrain is None:
         raise ValueError("Select a native terrain, or use a settings file with a supplied heightmap.")
     if not finite(units, 1e6) or units <= 0:
@@ -58,15 +58,17 @@ def native_settings(scene, terrain, units, teams, companions):
                     teams=teams)
     if companions:
         settings["asset_packages"] = companions
+    if levels:
+        settings["levels"] = [Path(level).name for level in levels]
     ground = {"export_index": terrain["line"]}
     project_markers(dict(scene, native_terrain=ground), teams)
     return validate_unreal_settings(settings)
 
 
-def show_native_import(parent, source):
+def show_native_import(parent, source, levels=()):
     game = GAMES[source.suffix.casefold()]
     units_default = UNITS_PER_METRE_DEFAULT[game]
-    scene = read_binary_scene(source, game, units_default)
+    scene = read_binary_scene(source, game, units_default, levels)
     actors = [actor for actor in scene["actors"] if actor["name"]]
     counts = Counter(actor["object_path"].casefold() for actor in actors)
     actors = sorted((actor for actor in actors if counts[actor["object_path"].casefold()] == 1),
@@ -81,6 +83,8 @@ def show_native_import(parent, source):
     body = ttk.Frame(window, padding=16)
     body.pack(fill="both", expand=True)
     ttk.Label(body, text=source.name, font=("TkDefaultFont", 13, "bold")).pack(anchor="w")
+    if levels:
+        ttk.Label(body, text="World level, merged with: " + ", ".join(Path(level).name for level in levels)).pack(anchor="w")
 
     terrain_row = ttk.Frame(body)
     terrain_row.pack(fill="x", pady=(12, 12))
@@ -206,7 +210,8 @@ def show_native_import(parent, source):
     def submit():
         nonlocal result
         try:
-            result = native_settings(scene, terrains.get(terrain.get()), float(units.get()), selections(), companions)
+            result = native_settings(scene, terrains.get(terrain.get()), float(units.get()), selections(), companions,
+                                     levels)
         except ValueError as error:
             notice.set(str(error))
             return
