@@ -474,6 +474,30 @@ The editor uses the imported mesh's UV data and vertex colors. Missing
 UV channels, unmirror settings and other graph operations stay in Object
 Review. The material is still opaque, and the public layout omits it.
 
+Most Tribes: Ascend shaders tint or blend their base color, for example
+`Multiply(texture, color)` or a `LinearInterpolate` between two layers.
+For these the reader follows the color path from `DiffuseColor` through
+multiply, add, lerp, desaturate, clamp and power nodes. It picks the single
+RGB base-color sample, preferring diffuse-named textures and parameters
+(`_DIF`, `Dif`, `DIF1`) over detail, overlay and mask layers, and a lerp's
+A input over its B input. Masks, reflections and cube samples are skipped.
+If two samples rank equally, Object Review names both. The draft binds
+that texture without the tint, blend or custom tiling, and Object Review
+says so. On Tartarus this binds 463 of 482 mesh material slots.
+
+**Remastered textures.** In the import settings dialog, choose
+**Remastered textures…** and pick a folder of upscaled PNGs. A file is
+used in place of a source base color when its name is the texture's object
+path with each `.` replaced by `__`, for example
+`Arch_Drydock__Tex__T_DryDock_Crane_01_DIF.png`. Files from the texture
+extraction and remaster tools already use this name. A remaster must keep
+the original's aspect ratio, be at least as large, fit 4096 pixels a side
+and 16 MB as an RGBA PNG, and fit the intake's texture budget (384 MB in
+total, with 96 MB kept for originals). Otherwise the original texture is
+used and Object Review says why. The private intake records each
+remastered file's name and checksum. The import settings store the folder
+as `"remastered_textures"`.
+
 [Intake version 40](intake-v40.schema.json) also reads saved material
 overrides on an unambiguously associated static mesh component. Copies of
 the same mesh share one geometry asset and keep their own materials in the

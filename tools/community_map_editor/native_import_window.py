@@ -49,7 +49,7 @@ def suggested_teams(flags, spawns, actors=()):
     return teams
 
 
-def native_settings(scene, terrain, units, teams, companions, levels=()):
+def native_settings(scene, terrain, units, teams, companions, levels=(), remastered=None):
     if terrain is None:
         raise ValueError("Select a native terrain, or use a settings file with a supplied heightmap.")
     if not finite(units, 1e6) or units <= 0:
@@ -60,6 +60,8 @@ def native_settings(scene, terrain, units, teams, companions, levels=()):
         settings["asset_packages"] = companions
     if levels:
         settings["levels"] = [Path(level).name for level in levels]
+    if remastered:
+        settings["remastered_textures"] = str(remastered)
     ground = {"export_index": terrain["line"]}
     project_markers(dict(scene, native_terrain=ground), teams)
     return validate_unreal_settings(settings)
@@ -77,7 +79,7 @@ def show_native_import(parent, source, levels=()):
                 if not actor["references"].keys() & {"base", "attachparent"}}
     window = tk.Toplevel(parent)
     window.title("Native map import settings")
-    window.geometry("870x565")
+    window.geometry("870x600")
     window.minsize(710, 500)
     window.transient(parent)
     body = ttk.Frame(window, padding=16)
@@ -193,6 +195,29 @@ def show_native_import(parent, source, levels=()):
     ttk.Button(package_row, text="Select companions…", command=select_packages).pack(side="left")
     ttk.Button(package_row, text="Clear", command=clear_packages).pack(side="left", padx=4)
     ttk.Label(package_row, textvariable=package_text).pack(side="left", padx=6)
+    # Optional 2x (or other) remastered base colors, used in place of matching source textures (#9).
+    remastered = tk.StringVar(window, "")
+    remaster_text = tk.StringVar(window, "Original textures")
+    if game == "ascend":
+        remaster_row = ttk.Frame(body)
+        remaster_row.pack(fill="x", pady=(6, 0))
+
+        def select_remastered():
+            folder = filedialog.askdirectory(parent=window, title="Select the remastered texture folder")
+            if not folder:
+                return
+            count = sum(1 for _ in Path(folder).glob("*.png"))
+            remastered.set(str(Path(folder)))
+            remaster_text.set(f"Remastered textures: {Path(folder).name} ({count} PNG files). "
+                              "Matching base colors use them; others keep the original.")
+
+        def clear_remastered():
+            remastered.set("")
+            remaster_text.set("Original textures")
+
+        ttk.Button(remaster_row, text="Remastered textures…", command=select_remastered).pack(side="left")
+        ttk.Button(remaster_row, text="Clear", command=clear_remastered).pack(side="left", padx=4)
+        ttk.Label(remaster_row, textvariable=remaster_text, wraplength=560).pack(side="left", padx=6)
     notice = tk.StringVar(window)
     ttk.Label(body, textvariable=notice, wraplength=670).pack(fill="x", pady=(10, 6))
     actions = ttk.Frame(body)
@@ -211,7 +236,7 @@ def show_native_import(parent, source, levels=()):
         nonlocal result
         try:
             result = native_settings(scene, terrains.get(terrain.get()), float(units.get()), selections(), companions,
-                                     levels)
+                                     levels, remastered.get() or None)
         except ValueError as error:
             notice.set(str(error))
             return
