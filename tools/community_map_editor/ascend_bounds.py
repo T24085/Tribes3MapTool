@@ -138,6 +138,10 @@ def boundary_recipe(play, terrain_elevation_cm, limits=None):
     killz = (limits or {}).get("killz_m")
     if killz is not None and killz * 100 < low_cm:
         options["kill_floor_m"] = min(round(low_cm / 100 - killz, 2), 10_000.0)
+    stallz = (limits or {}).get("stallz_m")
+    if stallz is not None and 0 < stallz - low_cm / 100 <= 20_000:
+        # Jetpacks stall above StallZ: a hard flight ceiling with no fade band (#22).
+        options["flight_ceiling"] = {"height_m": round(stallz - low_cm / 100, 2)}
     return {"format": 1, "elevation_cm": [low_cm, high_cm], "options": options}
 
 
@@ -152,7 +156,7 @@ def describe(play, limits):
     if "killz_m" in limits:
         text += f", and a kill floor at KillZ ({limits['killz_m']:,.0f} m)"
     if "stallz_m" in limits:
-        notes.append(f"flight ceiling (StallZ) {limits['stallz_m']:,.0f} m")
+        text += f", and a flight ceiling at StallZ ({limits['stallz_m']:,.0f} m)"
     if notes:
         text += ". Not applied: " + ", ".join(notes)
     return (text + ".")[:240]

@@ -55,7 +55,10 @@ class PlayBoxTests(unittest.TestCase):
         text = describe(play, {"killz_m": -206.4, "stallz_m": 327.6})
         self.assertIn("5 blocking volumes", text)
         self.assertIn("kill floor at KillZ (-206 m)", text)
-        self.assertIn("Not applied: flight ceiling", text)
+        self.assertIn("flight ceiling at StallZ (328 m)", text)
+        self.assertNotIn("Not applied", text)
+        stall = boundary_recipe(play, [-5000.0, 19000.0], {"stallz_m": 327.6})
+        self.assertEqual(stall["options"]["flight_ceiling"], {"height_m": 377.6})  # 327.6 m above -50 m terrain
         with_kill = boundary_recipe(play, [-5000.0, 19000.0], {"killz_m": -206.4})
         self.assertEqual(with_kill["options"]["kill_floor_m"], 156.4)  # KillZ is 156.4 m below the lowest terrain
         self.assertNotIn("kill_floor_m", boundary_recipe(play, [-5000.0, 19000.0], {"killz_m": 10})["options"])
