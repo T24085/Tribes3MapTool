@@ -12,6 +12,7 @@ import zipfile
 from conversion_rules import checksum, sha256_file, write
 from game_workflows import game_choices, open_filetypes, steps_text
 from boundary_polygon_window import show_polygon
+from busy import run_busy
 from intake_contract import load_intake, load_mission_audio, playable_bounds
 from intake_exchange import export_private_intake
 from map_pipeline import PipelineRun, pipeline_config
@@ -516,7 +517,7 @@ def show_source_library(parent, library, drafts, open_intake):
 
 
 def show_package_inventory(parent, path, import_draft):
-    report = inspect_package(path)
+    report = run_busy(parent, f"Reading package inventory of {path.name}…", lambda: inspect_package(path))
     summary = report["summary"]
     window = tk.Toplevel(parent)
     window.title("Native map package inventory")
@@ -889,6 +890,8 @@ def run(library, meshes=(), drafts=()):
             notice.set("Decoding mission and resolving referenced assets…")
             root.update_idletasks()
 
+            member = choices.get() or None  # read Tk state here; decoding runs on a worker thread
+
             def decode_pipeline(terrain_source):
                 path = None
                 pipeline = PipelineRun(pipeline_config(library, source_profile=source_profile),
@@ -897,13 +900,13 @@ def run(library, meshes=(), drafts=()):
                 def decode_source(_):
                     nonlocal path
                     if source_profile == T1:
-                        path = convert_legacy(src, library, terrain_source, mission_member=choices.get() or None,
+                        path = convert_legacy(src, library, terrain_source, mission_member=member,
                                               artwork=state.get("artwork_source"), interiors=state.get("interior_source"))
                     elif source_profile in UNREAL_PROFILES.values():
                         path = convert_unreal(src, library, state["unreal_metadata"],
                                               native_settings=state.get("unreal_native_settings"))
                     else:
-                        path = convert(src, library, choices.get() or None, terrain_source,
+                        path = convert(src, library, member, terrain_source,
                                        dif_decoder=dif_decoder, dif_assets=dif_assets,
                                        dts_decoder=dts_decoder, dts_assets=dts_assets, sky_assets=sky_assets,
                                        audio_assets=audio_assets)
@@ -912,7 +915,8 @@ def run(library, meshes=(), drafts=()):
                 return path
 
             try:
-                path = decode_pipeline(state.get("terrain_source"))
+                path = run_busy(root, f"Converting {src.name}. Large maps can take a few minutes…",
+                                lambda: decode_pipeline(state.get("terrain_source")))
             except FileNotFoundError as exc:
                 if source_profile in UNREAL_PROFILES.values():
                     raise
@@ -924,7 +928,7 @@ def run(library, meshes=(), drafts=()):
                 if not name:
                     return
                 state["terrain_source"] = Path(name)
-                path = decode_pipeline(Path(name))
+                path = run_busy(root, f"Converting {src.name}…", lambda: decode_pipeline(Path(name)))
             inspect(path)
             try:
                 record_source(library, path, src, state.get("terrain_source"))
@@ -1268,7 +1272,8 @@ def run(library, meshes=(), drafts=()):
         notice.set("Exporting and verifying the private intake…")
         root.update_idletasks()
         try:
-            export_private_intake(state["manifest"], path)
+            run_busy(root, "Exporting and verifying the private intake…",
+                     lambda: export_private_intake(state["manifest"], path))
         except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
             notice.set("Private intake export failed.")
             messagebox.showerror("Export private intake", str(exc), parent=root)
@@ -1285,7 +1290,7 @@ def run(library, meshes=(), drafts=()):
         notice.set("Exporting private GLB mesh assets…")
         root.update_idletasks()
         try:
-            export_meshes(state["manifest"], path)
+            run_busy(root, "Exporting GLB mesh assets…", lambda: export_meshes(state["manifest"], path))
         except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
             notice.set("GLB mesh export failed.")
             messagebox.showerror("Export GLB meshes", str(exc), parent=root)
