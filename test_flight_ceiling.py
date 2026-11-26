@@ -21,13 +21,13 @@ class FlightCeilingTests(unittest.TestCase):
         self.assertEqual(flight_ceiling_heights({}, TERRAIN, rows(), {"height_m": 300}), (31200, None))
         self.assertEqual(flight_ceiling_heights({}, TERRAIN, rows(), {"height_m": 300, "fade_m": 21}), (31200, 29100))
 
-    def test_bad_values_and_markers_above_the_ceiling(self):
+    def test_bad_values_and_markers_above_the_ceiling_are_allowed(self):
         for value in ({}, {"fade_m": 5}, {"height_m": 0}, {"height_m": 50, "fade_m": 50},
                       {"height_m": 50, "extra": 1}, {"height_m": float("nan")}, 300):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 flight_ceiling_heights({}, TERRAIN, rows(), value)
-        with self.assertRaisesRegex(ValueError, "below the flight ceiling"):
-            flight_ceiling_heights({}, TERRAIN, rows(flag_z=31150), {"height_m": 300})
+        # The ceiling only stops climbing, so a marker above it is allowed (Cluster_Stonehenge has a spawn there).
+        self.assertEqual(flight_ceiling_heights({}, TERRAIN, rows(flag_z=40000), {"height_m": 300}), (31200, None))
 
     def test_option_is_known_and_reaches_the_draft(self):
         self.assertIn("flight_ceiling", BOUNDARY_OPTIONS)

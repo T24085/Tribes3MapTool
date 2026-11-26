@@ -269,7 +269,8 @@ def flight_ceiling_heights(header, terrain, rows, ceiling):
     """(ceiling, fade or None) in draft centimetres from {"height_m": above lowest terrain, "fade_m": band}.
 
     Climbing fades through the band below the ceiling and stops at it (Tribes 2 flightCeiling over
-    flightCeilingRange, Ascend StallZ). Every CTF marker must be at least a metre below the ceiling.
+    flightCeilingRange, Ascend StallZ). It fences nothing off, so markers may sit above it, as some
+    Tribes 2 spawns do; players there simply cannot climb higher.
     """
     if not isinstance(ceiling, dict) or not {"height_m"} <= ceiling.keys() <= {"height_m", "fade_m"}:
         raise ValueError("Enter the flight ceiling as a height and an optional fade band.")
@@ -282,9 +283,6 @@ def flight_ceiling_heights(header, terrain, rows, ceiling):
     recipe = read_boundary_recipe(rows)
     low = (recipe["elevation_cm"] if recipe else terrain_elevations(terrain))[0]
     top = low + height * 100
-    for row in rows:
-        if row["status"] == "marker" and row["position_cm"][2] > top - CLEARANCE:
-            raise ValueError(f"{row['name'] or row['kind']} must be at least one metre below the flight ceiling.")
     return top, (top - fade * 100 if fade is not None else None)
 
 
