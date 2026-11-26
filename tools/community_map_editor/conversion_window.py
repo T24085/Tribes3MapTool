@@ -219,8 +219,17 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         entry.insert(0, str(initial if saved is None else saved))
         entry.grid(row=index, column=1, sticky="w")
         warning_fields[key] = enabled, toggle, entry
+    kill_row = ttk.Frame(body)
+    kill_row.grid(row=14, columnspan=2, sticky="ew", pady=(8, 0))
+    ttk.Label(kill_row, text="Kill floor, metres below lowest terrain").pack(side="left")
+    kill_floor = ttk.Entry(kill_row, width=8)
+    if selection.get("kill_floor_m") is not None:
+        kill_floor.insert(0, f"{selection['kill_floor_m']:g}")
+    kill_floor.pack(side="left", padx=(8, 0))
+    ttk.Label(body, text="Leave blank for no kill floor. Players below it die (the source game's KillZ).",
+              wraplength=320).grid(row=15, columnspan=2, sticky="w")
     message = ttk.Label(body, wraplength=320)
-    message.grid(row=14, columnspan=2, sticky="w", pady=(6, 0))
+    message.grid(row=16, columnspan=2, sticky="w", pady=(6, 0))
 
     def distance(entry, label):
         try:
@@ -241,6 +250,8 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
                     key: distance(field, "the flag-only height limit") if field.get().strip() else None
                     for key, field in flag_height_fields.items()
                 }
+            if kill_floor.get().strip():
+                options["kill_floor_m"] = distance(kill_floor, "the kill floor depth")
             if flag_timer.get().strip():
                 try:
                     options["flag_return_delay_s"] = int(flag_timer.get())
@@ -276,7 +287,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         window.destroy()
 
     buttons = ttk.Frame(body)
-    buttons.grid(row=15, columnspan=2, sticky="ew", pady=(8, 0))
+    buttons.grid(row=17, columnspan=2, sticky="ew", pady=(8, 0))
     ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side="left")
     ttk.Button(buttons, text="Apply", command=save).pack(side="right")
     window.bind("<Escape>", lambda _event: window.destroy())
