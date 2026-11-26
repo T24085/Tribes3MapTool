@@ -310,6 +310,20 @@ merged levels. Their actors are named after their level, for example
 `TrCTF-Tartarus.UTTeamPlayerStart_3`. A settings file lists them under
 `"levels"`. Meshes, BSP and component materials are still read from the
 world level only.
+
+**Out-of-bounds box.** Ascend maps fence their play area with long, thin
+`BlockingVolume` walls, usually behind a visible force field, and cap it
+with a flat volume high above. When all four sides enclose every flag and
+spawn, the import uses that box for the playable bounds and the minimap.
+It also presets **Boundaries…** to solid walls on the box, with the
+ceiling at the cap volume. Object Review marks the volumes used and any
+mesh standing on the box edge, such as Tartarus's force-field panels; keep
+those as decoration or remove them. `KillZ` and `StallZ` are listed but not
+applied. Applying them, along with flag rules and grace-time damage, needs
+the runtime out-of-bounds layer (T3BackEndServer#111). An explicit
+`"bounds_m"` setting still takes priority. On Tartarus the box is
+2,477 × 2,064 m at the 2.52 scale, with the ceiling at 1,858 m.
+
 Bind an existing project mesh to a recovered reference through the draft's
 mapping controls.
 
