@@ -34,7 +34,7 @@ Grace-time damage and the flight ceiling need the runtime boundary layer
 """
 
 from intake_contract import BOUNDARY_RECIPE, PLAYABLE_BOUNDS
-from perimeter import flag_bounds, terrain_elevations
+from perimeter import flag_bounds, flight_ceiling_heights, terrain_elevations
 
 # The flag-only limit must sit inside the mission area; one metre keeps it on the line.
 FLAG_INSET_M = 1
@@ -65,10 +65,37 @@ def soft_boundary_recipe(rows, terrain, *, game, cm_per_source_m=None):
         elevation = terrain_elevations(terrain)
     except (KeyError, TypeError, ValueError):
         return None
+    ceiling = source_flight_ceiling(boundary["properties"], cm_per_source_m, elevation)
+    if ceiling:
+        try:
+            flight_ceiling_heights({}, terrain, rows, ceiling)
+        except ValueError as error:
+            notes.append(f"Flight ceiling left off: {error}")
+        else:
+            options["flight_ceiling"] = ceiling
     recipe = {"format": 1, "elevation_cm": elevation, "options": options}
     boundary["properties"][BOUNDARY_RECIPE] = recipe
     boundary["reason"] = describe(game, boundary["properties"], cm_per_source_m, options, notes)
     return recipe
+
+
+def source_flight_ceiling(properties, cm_per_source_m, elevation_cm):
+    """Tribes 2 flightCeiling and flightCeilingRange as the flight_ceiling option (#22), or None."""
+    fields = {key.casefold(): value for key, value in properties.items()}
+    if not cm_per_source_m or "flightceiling" not in fields:
+        return None
+    try:
+        top = float(fields["flightceiling"]) * cm_per_source_m / 100
+        band = float(fields.get("flightceilingrange", 0)) * cm_per_source_m / 100
+    except (TypeError, ValueError):
+        return None
+    height = round(top - elevation_cm[0] / 100, 2)
+    if not 0 < height <= 20_000:
+        return None
+    ceiling = {"height_m": height}
+    if 0 < band < height:
+        ceiling["fade_m"] = round(band, 2)
+    return ceiling
 
 
 def describe(game, properties, cm_per_source_m, options, notes):
@@ -84,8 +111,12 @@ def describe(game, properties, cm_per_source_m, options, notes):
         try:
             ceiling = float(fields["flightceiling"]) * cm_per_source_m / 100
             soft = float(fields.get("flightceilingrange", 0)) * cm_per_source_m / 100
-            text += f" Not applied: flight ceiling {ceiling:,.0f} m (soft over {soft:,.0f} m)"
-            text += ", and grace-time damage used by non-CTF modes."
+            if "flight_ceiling" in options:
+                text += f" Flight ceiling {ceiling:,.0f} m, fading over {soft:,.0f} m."
+                text += " Not applied: grace-time damage used by non-CTF modes."
+            else:
+                text += f" Not applied: flight ceiling {ceiling:,.0f} m (soft over {soft:,.0f} m)"
+                text += ", and grace-time damage used by non-CTF modes."
         except ValueError:
             pass
     elif game == "Tribes 1":
