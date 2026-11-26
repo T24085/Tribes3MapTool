@@ -56,6 +56,9 @@ class VengeanceBoundsTests(unittest.TestCase):
         text = describe(BEGGARS, polygon, note, recipe)
         self.assertIn("6-corner outline", text)
         self.assertIn("kills players and destroys vehicles", text)
+        self.assertEqual(options["kill_floor_m"], round(-24_575.25 / 100 + 522, 2))  # volume bottom -522 m
+        self.assertIn("Kill floor at the volume's bottom", text)
+        self.assertNotIn("kill_floor_m", boundary_recipe(dict(BEGGARS, z_m=[0, 430]), None, [-100, 0])["options"])
         low_top = dict(BEGGARS, z_m=[-522, -10])
         self.assertIsNone(boundary_recipe(low_top, None, [0, 5000])["options"]["wall_limits"]["ceiling_m"])
 

@@ -147,13 +147,17 @@ def play_area(volume, terrain_bounds_cm, markers_m):
 
 
 def boundary_recipe(volume, polygon_m, terrain_elevation_cm):
-    """Solid walls on the volume (its outline when usable) with the ceiling at the volume's top."""
+    """Solid walls on the volume (its outline when usable), the ceiling at the volume's top and, when the
+    volume's bottom is below the terrain, a kill floor there: the original kills anyone outside the volume (#20)."""
     low_cm, high_cm = terrain_elevation_cm
     ceiling_m = round(volume["z_m"][1] - high_cm / 100, 2)
     options = {"perimeter": True, "flag_inset_m": None,
                "wall_limits": {"ceiling_m": min(ceiling_m, 10_000.0) if ceiling_m >= 0 else None, "floor_m": None}}
     if polygon_m:
         options["wall_polygon_m"] = polygon_m
+    bottom = volume["z_m"][0]
+    if bottom * 100 < low_cm:
+        options["kill_floor_m"] = min(round(low_cm / 100 - bottom, 2), 10_000.0)
     return {"format": 1, "elevation_cm": [low_cm, high_cm], "options": options}
 
 
@@ -165,6 +169,8 @@ def describe(volume, polygon_m, note, recipe):
     ceiling = recipe["options"]["wall_limits"]["ceiling_m"]
     text += f" with the ceiling at the volume's top ({volume['z_m'][1]:,.0f} m)." if ceiling is not None else \
         "; the volume's top is below the highest terrain, so the default ceiling is used."
+    if "kill_floor_m" in recipe["options"]:
+        text += f" Kill floor at the volume's bottom ({volume['z_m'][0]:,.0f} m)."
     text += (" The original kills players and destroys vehicles outside the volume at once and returns loose flags"
              " home; walls stand in for that until the runtime boundary layer (T3BackEndServer#112).")
     if note:
