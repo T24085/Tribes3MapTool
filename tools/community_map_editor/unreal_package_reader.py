@@ -2,7 +2,7 @@
 
 import argparse
 from bisect import bisect_right
-from collections import Counter
+from collections import Counter, OrderedDict
 from contextlib import contextmanager
 from hashlib import sha256
 import json
@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 import struct
 import zlib
+
+import unreal_lzo
 
 
 PACKAGE_TAG = 0x9E2A83C1
@@ -87,17 +89,71 @@ class Cursor:
         return name
 
 
-class CompressedPackage:
-    """Translate logical UE3 offsets while retaining only one inflated chunk."""
+CODECS = {1: "zlib", 2: "lzo"}  # UE3 ECompressionFlags. LZX (4) is console-only.
+CHUNK_CACHE = 8
 
-    def __init__(self, raw, chunks, header_end, endian):
-        self.raw, self.endian = raw, endian
+
+def decode_block(data, wanted, codec):
+    """Decode one block of a UE3 compressed chunk with the package's codec."""
+    if codec == 2:
+        return unreal_lzo.decompress(data, wanted)
+    stream = zlib.decompressobj()
+    try:
+        block = stream.decompress(data, wanted + 1)
+    except zlib.error as error:
+        raise ValueError("Could not decode an Unreal zlib block.") from error
+    if len(block) != wanted or not stream.eof or stream.unused_data:
+        raise ValueError("Unexpected Unreal zlib output size.")
+    return block
+
+
+def decode_chunk(raw, offset, stored, expected, codec, endian="<"):
+    """Decode a UE3 compressed chunk (tag, block size, sizes, block table, blocks)."""
+    cursor = Cursor(raw, offset, offset + stored, endian)
+    tag, block_size, packed, size = cursor.fields("Iiii")
+    if tag != PACKAGE_TAG or not 0 < block_size <= MAX_CHUNK_BYTES or size != expected or packed <= 0:
+        raise ValueError("Invalid Unreal compressed chunk header.")
+    blocks = (size + block_size - 1) // block_size
+    if blocks > 4096:
+        raise ValueError("Too many blocks in an Unreal compressed chunk.")
+    pairs = [cursor.fields("ii") for _ in range(blocks)]
+    if packed != sum(count for count, _ in pairs):
+        raise ValueError("Invalid Unreal compressed block inventory.")
+    if cursor.offset + packed != cursor.limit:
+        raise ValueError("Unreal chunk bytes do not match the block inventory.")
+    decoded = bytearray()
+    for count, wanted in pairs:
+        if count <= 0 or wanted != min(block_size, size - len(decoded)):
+            raise ValueError("Invalid Unreal compressed block dimensions.")
+        try:
+            decoded.extend(decode_block(cursor.take(count), wanted, codec))
+        except ValueError as error:
+            raise ValueError(f"Could not decode an Unreal {CODECS[codec]} block. {error}") from error
+    if len(decoded) != expected or cursor.offset != cursor.limit:
+        raise ValueError("Unreal compressed chunk did not match its recorded length.")
+    return decoded
+
+
+class CompressedPackage:
+    """Translate logical UE3 offsets while retaining a few decoded chunks."""
+
+    def __init__(self, raw, chunks, table, endian, codec=1):
+        if codec not in CODECS:
+            raise ValueError(f"Package chunks use unsupported compression flags {codec:#x}.")
+        self.raw, self.endian, self.codec = raw, endian, codec
         self.chunks = sorted(chunks)
         self.starts = [row[0] for row in self.chunks]
         self.prefix = self.starts[0]
         self.end = self.chunks[-1][0] + self.chunks[-1][1]
         previous = self.prefix
-        if self.prefix < header_end or self.end > 0x7fffffff:
+        # The uncompressed package has an empty chunk table, so its header is shorter than
+        # the stored one by exactly that table. Rebuild the logical bytes before the first chunk.
+        table_start, table_end = table
+        physical_start = min(row[2] for row in self.chunks)
+        if not table_start <= table_end <= physical_start:
+            raise ValueError("Invalid compressed package header layout.")
+        self.head = bytes(raw[:table_start]) + bytes(raw[table_end:physical_start])
+        if len(self.head) != self.prefix or self.end > 0x7fffffff:
             raise ValueError("Invalid logical compressed package extent.")
         compressed_end = self.prefix
         for offset, size, start, stored in self.chunks:
@@ -105,8 +161,7 @@ class CompressedPackage:
                     or start < compressed_end or start + stored > len(raw)):
                 raise ValueError("Invalid or overlapping compressed package chunks.")
             previous, compressed_end = offset + size, start + stored
-        self.cached_offset = None
-        self.cached = b""
+        self.cache = OrderedDict()  # Logical chunk offset -> decoded bytes, least recent first.
 
     def __len__(self):
         return self.end
@@ -118,46 +173,22 @@ class CompressedPackage:
         parts = []
         if start < self.prefix:
             end = min(stop, self.prefix)
-            parts.append(self.raw[start:end])
+            parts.append(self.head[start:end])
             start = end
         while start < stop:
             offset, size, physical, stored = self.chunks[bisect_right(self.starts, start) - 1]
-            if offset != self.cached_offset:
-                self.cached = self.inflate(physical, stored, size)
-                self.cached_offset = offset
+            chunk = self.cache.get(offset)
+            if chunk is None:
+                chunk = decode_chunk(self.raw, physical, stored, size, self.codec, self.endian)
+                self.cache[offset] = chunk
+                if len(self.cache) > CHUNK_CACHE:
+                    self.cache.popitem(last=False)
+            else:
+                self.cache.move_to_end(offset)
             end = min(stop, offset + size)
-            parts.append(self.cached[start - offset:end - offset])
+            parts.append(chunk[start - offset:end - offset])
             start = end
         return b"".join(parts)
-
-    def inflate(self, offset, stored, expected):
-        cursor = Cursor(self.raw, offset, offset + stored, self.endian)
-        tag, block_size, packed, size = cursor.fields("Iiii")
-        if tag != PACKAGE_TAG or not 0 < block_size <= MAX_CHUNK_BYTES or size != expected or packed <= 0:
-            raise ValueError("Invalid Unreal zlib chunk header.")
-        blocks = (size + block_size - 1) // block_size
-        if blocks > 4096:
-            raise ValueError("Too many blocks in an Unreal zlib chunk.")
-        pairs = [cursor.fields("ii") for _ in range(blocks)]
-        if packed != sum(count for count, _ in pairs):
-            raise ValueError("Invalid Unreal zlib block inventory.")
-        if cursor.offset + packed != cursor.limit:
-            raise ValueError("Unreal chunk bytes do not match the block inventory.")
-        decoded = bytearray()
-        for count, wanted in pairs:
-            if count <= 0 or wanted != min(block_size, size - len(decoded)):
-                raise ValueError("Invalid Unreal zlib block dimensions.")
-            stream = zlib.decompressobj()
-            try:
-                block = stream.decompress(cursor.take(count), wanted + 1)
-            except zlib.error as error:
-                raise ValueError("Could not decode an Unreal zlib block.") from error
-            if len(block) != wanted or not stream.eof or stream.unused_data:
-                raise ValueError("Unexpected Unreal zlib output size.")
-            decoded.extend(block)
-        if len(decoded) != expected or cursor.offset != cursor.limit:
-            raise ValueError("Unreal zlib chunk did not match its recorded length.")
-        return decoded
 
 
 def title_layout(version, licensee):
@@ -198,17 +229,22 @@ def package_summary(raw, game):
     cursor.take(generation_count * (12 if modern else 8))
     codec = 0
     chunks = []
+    table = None
     if modern:
         cursor.take(8)  # Engine and cooker build numbers.
         codec, = cursor.fields("I")
-        chunks = [cursor.fields("4i") for _ in range(cursor.count(8192))]
+        count = cursor.count(8192)
+        table_start = cursor.offset
+        chunks = [cursor.fields("4i") for _ in range(count)]
+        table = table_start, cursor.offset
         cursor.take(4)  # Package source.
-    if chunks and codec != 1:
+    if chunks and codec not in CODECS:
         raise ValueError(f"Package chunks use unsupported compression flags {codec:#x}.")
-    stream = CompressedPackage(raw, chunks, cursor.offset, endian) if chunks else raw
-    if header_size is not None and not cursor.offset <= header_size <= len(stream):
+    stream = CompressedPackage(raw, chunks, table, endian, codec) if chunks else raw
+    # Logical offsets exclude the stored chunk table (see CompressedPackage).
+    first = cursor.offset - (table[1] - table[0] if chunks else 0)
+    if header_size is not None and not first <= header_size <= len(stream):
         raise ValueError("Invalid UE3 header size.")
-    first = cursor.offset
     last = header_size if header_size is not None else len(stream)
     active = [offset for count, offset in tables.values() if count]
     if (len(active) != len(set(active)) or any(not first <= offset < last for offset in active)
@@ -222,7 +258,7 @@ def package_summary(raw, game):
     record = dict(game=game, version=version, licensee_version=licensee, endian=endian,
                   flags=flags, group=group, guid="".join(f"{part:08x}" for part in guid),
                   summary_bytes=first,
-                  logical_bytes=len(stream), compression="zlib" if chunks else "none",
+                  logical_bytes=len(stream), compression=CODECS[codec] if chunks else "none",
                   compressed_chunks=len(chunks),
                   tables={kind: dict(count=count, offset=offset) for kind, (count, offset) in tables.items()})
     return record, sections, stream

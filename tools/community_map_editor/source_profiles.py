@@ -9,6 +9,11 @@ ASCEND = "ascend-ctf"
 UNREAL_PROFILES = {"vengeance": VENGEANCE, "ascend": ASCEND}
 NAMES = {T1: "Tribes 1", T2: "Tribes 2", VENGEANCE: "Tribes: Vengeance", ASCEND: "Tribes: Ascend"}
 PREFIX = {T1: "DraftT1", T2: "DraftT2", VENGEANCE: "DraftTV", ASCEND: "DraftTA"}
+# Default source units per metre offered for new native imports; the import window keeps it editable.
+# Ascend: 1 TA uu = 1.92 T3 cm, from the T3 player capsule half-height (96) over TA Medium armor (50).
+# See Tribes3-Modded/Tribes3MapTool#4.
+ASCEND_CM_PER_UNIT = 1.92
+UNITS_PER_METRE_DEFAULT = {"ascend": 100 / ASCEND_CM_PER_UNIT, "vengeance": 50}
 BRUSH_PREVIEW_FOLDER = "/Game/Community/VengeanceBrushPreviews"
 INVENTORY_STATION_TEMPLATE = "/Game/Community/SharedEquipment/BP_CommunityInventoryStation"
 T2_DRAFT = r"DraftT2[0-9]{3}"

@@ -255,8 +255,12 @@ the source SHA-256. The command-line reader can select a game explicitly.
 py -3.13 tools/community_map_editor/unreal_package_reader.py "D:\Maps\MyMap.fmap" "D:\Maps\PackageInventory.json" --game ascend
 ```
 
-Package inventory supports uncompressed files and standard UE3 zlib
-chunks. Select **Import as draft…** to read the level's actor roster and
+Package inventory supports uncompressed files and UE3 zlib or LZO
+chunks. Tribes: Ascend client packages use LZO, which the tool decodes
+itself with no extra install. The import dialog offers a default scale of
+1 Ascend unit = 1.92 cm (52.0833 units per metre), which matches the
+TRIBES 3 player height to Ascend's Medium armor. Change it only for a
+deliberate rescale. Select **Import as draft…** to read the level's actor roster and
 recover serialized transforms, links, and mesh references. If the package
 has no adjacent `MyMap.import.json`, the editor opens a setup dialog. Select
 the native terrain, review or change each team's flag stand and spawns, and
@@ -468,6 +472,14 @@ as large as the available inline mip. If a cache entry cannot be read,
 Object Review shows the reason and the draft uses available inline
 artwork. The private intake records both cache checksums when it uses a
 cached texture.
+
+Most Ascend client textures keep their mips in a shared texture file
+cache, such as `Textures.tfc`, named by each texture. The importer looks
+for that file beside the map and then in up to three parent folders, so
+leave the map in the client's `CookedPC\Maps\<Map>\` folder or copy the
+`.tfc` beside it. It reads zlib or LZO mips from the cache and records the
+cache file's checksum in the private intake. Mips the client never cooked
+are skipped, and Object Review notes when a smaller mip was used.
 [Intake version 41](intake-v41.schema.json) preserves tagged sphere, box,
 and capsule collision from a placed mesh's BodySetup. Simple shapes keep
 their centers, orientation, and dimensions. When the source uses simple
