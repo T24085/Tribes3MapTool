@@ -564,6 +564,44 @@ paint slots, source materials without direct color textures, and missing
 projections appear in object review. Decoration layers still need
 conversion. Shared layouts omit the original images and material names.
 
+## Build sound packs (Tribes: Ascend)
+
+Sounds resolve in layers, as the backend sound packs define them: first
+the map's override, then the map's selected game pack, then the default
+pack. Tribes: Ascend is split the same way, so you build two things.
+
+1. **Game pack, once per game.** It reads every shared `.u` and `.upk`
+   package in the client's `CookedPC` folder: weapons, armor, jetpack, flag,
+   announcer and shared music.
+
+   ```powershell
+   py -3.13 tools/community_map_editor/sound_packs.py pack "D:\TA\TribesGame\CookedPC" "D:\SoundPacks" --set TA --ffmpeg "C:\Tools\ffmpeg.exe"
+   ```
+
+2. **Map override, once per map.** It reads the map's levels and keeps
+   only sounds the game pack lacks, such as environment groups and map
+   music, plus every placed ambient sound. Each placement is given in
+   TRIBES 3 centimetres. It refers either to an event id or to its own
+   inline wave slots and radii.
+
+   ```powershell
+   py -3.13 tools/community_map_editor/sound_packs.py map "D:\SoundPacks\TA\pack.json" "D:\SoundPacks" TartarusTA2026 "...\Maps\Tartarus\TrCTF-Tartarus.fmap" "...\Maps\Tartarus\Tartarus_Ter.fmap" "...\Maps\Tartarus\Tartarus_Sound.fmap"
+   ```
+
+   Use `--units-per-metre` to match the draft's import scale. It defaults
+   to the Ascend import preset.
+
+Each wave keeps its original `.ogg` and gets a 16-bit PCM `.wav` for
+Unreal import (`SW_<Name>`). Folders follow the source
+`Package\Group\Name`. Event ids are sound cue paths, and each event's
+category comes from its `AUD_<CATEGORY>_` package prefix. `pack.json` or
+`override.json` records the sources, the decoder, every event's node graph
+and anything that could not be read. `SHA256SUMS.txt` covers every file.
+
+Decoding needs `ffmpeg` with Vorbis support. Set it with `--ffmpeg` or
+`T3_MAP_TOOL_FFMPEG`, put it on `PATH`, or install the optional `soundfile`
+package. Keep the client files and the extracted audio out of Git.
+
 ## Inspect a legacy Unreal map export
 
 Use the text reader to inventory an authored Tribes: Vengeance or Tribes:
