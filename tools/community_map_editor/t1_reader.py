@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 import re
 
+from mission_boundaries import soft_boundary_recipe
 from intake_contract import PLAYABLE_BOUNDS, bounded, finite, validate_legacy_height_header, validate_minimap
 from minimap import framing, terrain_png
 from source_profiles import NAMES, T1
@@ -243,6 +244,8 @@ def convert_legacy(mission, output, heightmap=None, *, mission_member=None, artw
             header.update(format=shape_version, shapes=shapes, shape_review=missing_shapes)
         header["sources"].extend(receipts)
         files.update(geometry)
+    if minimap is not None:
+        soft_boundary_recipe(rows, terrain, game=NAMES[T1])  # Boundaries preset from the mission rectangle (#15)
     files["objects.json"] = json.dumps(rows, ensure_ascii=False).encode()
     header["files"] = {name: sha256(data).hexdigest() for name, data in files.items()}
     return publish_intake(header, files, Path(output))

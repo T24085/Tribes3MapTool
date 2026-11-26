@@ -25,6 +25,7 @@ from mission_equipment import mission_equipment
 from mission_lighting import CALL_PREFIX, COMMAND_CLASS
 from mission_weather import WEATHER_FILE, mission_weather
 from model_textures import MAX_TEXTURE_BYTES, TEXTURE_FILE, TEXTURE_INDEX
+from mission_boundaries import soft_boundary_recipe
 from native_terrain_paint import MAX_PAINT_PNG_BYTES, PAINT_FILE
 from sky_intake import MAX_SKY_BYTES, SKY_PNG
 from source_profiles import (T2_ACOUSTIC_COLLISION_VERSION, T2_ACOUSTICS_VERSION,
@@ -490,6 +491,10 @@ def convert(source, output, mission=None, terrain=None, *, dif_decoder=None, dif
     if settings is not None:
         files["minimap.png"] = terrain_png(terrain_data, settings["image_bounds"])
     environment = mission_environment(rows, profile)
+    if settings is not None:
+        # Boundaries preset from the MissionArea: warn and drop the flag, as Tribes 2 CTF does (#15).
+        soft_boundary_recipe(rows, terrain_data, game="Tribes 2",
+                             cm_per_source_m=profile["centimeters_per_source_meter"])
     files["objects.json"] = json.dumps(rows, ensure_ascii=False).encode()
     sha = lambda data: hashlib.sha256(data).hexdigest()
     header = dict(
