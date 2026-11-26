@@ -593,7 +593,7 @@ def run(library, meshes=(), drafts=()):
     root = tk.Tk()
     mesh_paths = set(meshes)
     root.title("TRIBES Map Editor · Import mission")
-    root.geometry("1110x640")
+    root.geometry("1110x720")
     root.minsize(900, 520)
     # Game-first workflow (#8): choose the source game, then follow its numbered steps.
     start = ttk.Frame(root, padding=(10, 10, 10, 0))
@@ -1339,7 +1339,8 @@ def run(library, meshes=(), drafts=()):
 
     bind_review()
     asset_options = ttk.Frame(root)
-    asset_options.pack(fill="x", padx=10, pady=(0, 6))
+    # Bottom bars claim their space before the review table, so a short window shrinks the table, not the buttons.
+    asset_options.pack(side="bottom", fill="x", padx=10, pady=(0, 6), before=review_area)
     mesh_export_button = ttk.Button(asset_options, text="Export GLB meshes…", state="disabled", command=save_mesh_assets)
     mesh_export_button.pack(side="left")
     mesh_button = ttk.Button(asset_options, text="Map selected mesh…", state="disabled", command=map_mesh)
@@ -1359,7 +1360,7 @@ def run(library, meshes=(), drafts=()):
     terrain_button.pack(side="right", padx=(0, 8))
     artwork_button = ttk.Button(asset_options, text="Source artwork…", command=choose_terrain_art)
     actions = ttk.Frame(root)
-    actions.pack(fill="x", padx=10, pady=(0, 10))
+    actions.pack(side="bottom", fill="x", padx=10, pady=(0, 10), before=asset_options)
     preview = ttk.Button(
         actions, text="Preview minimap", state="disabled",
         command=preview_map,
