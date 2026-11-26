@@ -23,6 +23,8 @@ from interior_geometry import MAX_GEOMETRY_BYTES, NATIVE_VERTEX_FIELDS
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
 from ascend_bounds import boundary_recipe, derive_play_box, describe as describe_bounds, read_source_bounds
+from vengeance_bounds import (boundary_recipe as vengeance_boundary_recipe, describe as describe_vengeance_bounds,
+                              play_area as vengeance_play_area, read_boundary as read_vengeance_boundary)
 from source_profiles import (ASCEND_BSP_INTAKE_VERSION, ASCEND_CONVEX_COLLISION_VERSION, ASCEND_TERRAIN_PAINT_VERSION,
                              ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION,
                              ASCEND_PLACEMENT_ART_VERSION,
@@ -496,6 +498,16 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
                 bounds = clip
             else:
                 source_play = None  # The source box reaches past the terrain; keep the terrain framing.
+    source_volume = None
+    if game == "vengeance" and binary and "bounds_m" not in settings:
+        # Use the map's BoundaryVolume for the play area and Boundaries walls (#17).
+        markers_m = [[value / 100 for value in marker["position_cm"]]
+                     for marker in project_markers(scene, settings["teams"]).values()]
+        volume, _ = read_vengeance_boundary(source, units)
+        area = vengeance_play_area(volume, bounds, markers_m) if volume else None
+        if area:
+            bounds, polygon, note = area
+            source_volume = (volume, polygon, note)
     minimap = framing(bounds)
     validate_minimap(minimap)
     markers = project_markers(scene, settings["teams"])
@@ -513,6 +525,16 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
 
         boundary["reason"] = describe_bounds(source_play, source_limits)
         boundary["properties"][BOUNDARY_RECIPE] = boundary_recipe(source_play, terrain_elevations(terrain))
+    if source_volume:
+        from perimeter import terrain_elevations
+
+        volume, polygon, note = source_volume
+        recipe = vengeance_boundary_recipe(volume, polygon, terrain_elevations(terrain))
+        boundary["properties"][BOUNDARY_RECIPE] = recipe
+        boundary["reason"] = describe_vengeance_bounds(volume, polygon, note, recipe)
+        for row in rows:
+            if row["name"] == volume["name"] and row["source_class"].endswith("BoundaryVolume"):
+                row["reason"] += " · Used for the playable bounds and Boundaries walls."
     interiors, files = {}, dict(paint.files)
     placed = {row["model_reference"] for row in rows if "model_reference" in row}
     mesh_docs = {reference: geometry for reference, geometry in mesh_docs.items() if reference in placed}

@@ -324,6 +324,20 @@ the runtime out-of-bounds layer (T3BackEndServer#111). An explicit
 `"bounds_m"` setting still takes priority. On Tartarus the box is
 2,477 × 2,064 m at the 2.52 scale, with the ceiling at 1,858 m.
 
+**Vengeance boundary.** Each Vengeance multiplayer map has one
+`Movement.BoundaryVolume`. In the original, the server kills any player and
+destroys any vehicle outside it at once, and returns a loose flag outside
+it home; there is no warning or grace time. When every flag and spawn is
+inside the active volume, the import uses its footprint for the playable
+bounds and minimap. It also presets **Boundaries…** to solid walls on the
+volume's outline (a polygon of up to 32 corners, or a rectangle), with the
+ceiling at the volume's top. If the outline reaches past the terrain, its
+clipped bounding rectangle is used instead. Rotated or scaled volumes stay
+in review. Walls stand in for the instant kill until the runtime boundary
+layer supports it (T3BackEndServer#112). On Beggar's Run the volume is a
+1,311 × 1,320 m six-corner outline with its top 430 m above the highest
+terrain.
+
 Bind an existing project mesh to a recovered reference through the draft's
 mapping controls.
 
