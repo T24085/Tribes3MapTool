@@ -56,7 +56,8 @@ class SoftBoundaryTests(unittest.TestCase):
             self.assertTrue(recipe["options"]["warn_players"])
             boundary = next(row for row in rows if row["status"] == "boundary")
             self.assertIn("Tribes 1 MissionCenterPos", boundary["reason"])
-            self.assertIn("not confirmed", boundary["reason"])
+            self.assertEqual(recipe["options"]["flag_return_delay_s"], 5)
+            self.assertIn("return a carried flag home after 5 s outside", boundary["reason"])
 
 
 if __name__ == "__main__":

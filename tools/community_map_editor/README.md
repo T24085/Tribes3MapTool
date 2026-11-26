@@ -1319,13 +1319,13 @@ of the same type stay in review.
 **Presets from the source game.** **Boundaries…** opens with settings that
 match how the source game treats its play area. Object Review's playable
 bounds row says which source fields were used and what was left out. The
-behaviour below comes from the stock Tribes 2 scripts (`base/scripts.vl2`)
-and the Ascend map data.
+behaviour below comes from the stock Tribes 2 scripts (`base/scripts.vl2`),
+the Tribes 1.40 scripts (`base/scripts/server/game`) and the Ascend map data.
 
 | Source | Play area | What the original does | Preset here |
 |---|---|---|---|
 | Tribes 2 | `MissionArea` rectangle, plus a soft `flightCeiling` faded over `flightCeilingRange` | Nothing is solid: players, vehicles and shots can cross. Every mode shows "You have left the mission area" with a beep. **CTF:** a carrier who leaves loses the flag at once; it is thrown toward its home stand and the 45 s return timer starts. A player who takes the flag while outside loses it after 3 s. No damage. **Deathmatch, Rabbit (rabbit only), Bounty, Defend and Destroy:** alerts at 1, 2 and 3 s, then 0.05 damage per second from 4 s until the player returns or dies (about 17 s for full-health Light, 25 s Medium, 30 s Heavy). **Hunters:** a player carrying more than one flag loses them every 3 s while outside. | Warn players on crossing, plus a flag-only limit 1 m inside the area that drops a carried flag. No solid walls. |
-| Tribes 1 | `MissionCenterPos` rectangle | Not confirmed; treated like Tribes 2 | The Tribes 2 preset |
+| Tribes 1 | `MissionCenterPos` rectangle; no flight ceiling | Nothing is solid. Leaving shows "You have left the mission area" and plays an alert at 0, 1.5 and 3 s. **CTF and other objective missions:** if the carrier is still outside at 4.5 s, the flag returns straight to its base. A flag can't be picked up from outside. **Deathmatch:** the same alerts, then 0.05 damage per second from 4 s until the player returns or dies. | Warn players on crossing, plus a flag-only limit 1 m inside the area with a 5 s return timer (4.5 s rounded up). No solid walls. |
 | Tribes: Ascend | Four thin `BlockingVolume` walls, usually behind a force field, a cap volume above, `WorldInfo` `KillZ` and `StallZ` | The walls and cap block players. Jetpacks stall above `StallZ`. Falling below `KillZ` kills. | Solid walls on the box with the ceiling at the cap |
 | Tribes: Vengeance | Not confirmed | Not confirmed | None |
 
