@@ -1351,6 +1351,25 @@ before **Create Unreal draft**.
 
 When the intake has one valid mission area, open **Boundaries…** before creating the Unreal draft. Enable **Add solid side walls** to enclose the playable rectangle. Set the optional ceiling in metres above the highest imported terrain and the optional floor in metres below the lowest. The default puts the ceiling 2,000 metres up and leaves the bottom open. With either cap disabled, the side walls still extend to the corresponding default height or depth.
 
+Two more **Boundaries…** settings work without walls. Each places hidden,
+non-colliding TargetPoints that hosts with boundary support read
+(T3BackEndServer#112):
+- **Kill floor, metres below lowest terrain** places `T3MissionKillFloor`.
+  Hosts kill players who fall below it, like the source game's `KillZ`.
+  Every flag and spawn must be at least a metre above it.
+- **Flight ceiling, m above lowest terrain**, with an optional **fade
+  over** band, places `T3MissionFlightCeiling` and, with a band,
+  `T3MissionFlightCeilingFade`. Climbing fades through the band and stops
+  at the ceiling, like Tribes 2's `flightCeiling` and `flightCeilingRange`
+  or Ascend's `StallZ`. It fences nothing off, so flags and spawns may sit
+  above it.
+
+Imports fill these settings in when the source has them:
+- **Tribes 2:** a flight ceiling from the MissionArea.
+- **Tribes: Ascend:** a kill floor from `KillZ` and a flight ceiling from
+  `StallZ`.
+- **Tribes: Vengeance:** a kill floor at the bottom of the BoundaryVolume.
+
 For a custom shape, enable **Use a solid polygon** and select **Draw solid polygon…**. Draw the corners in order. The minimap shows the solid outline in cyan. Any enabled floor and ceiling follow the polygon, including concave corners. If the walls block Pawns, keep the whole flag-only limit inside them.
 
 Use **Walls block** to choose the default `BlockAll` profile, Pawn, Vehicle, or both of those object channels. The selected response applies to the side walls and any caps. When the walls allow Pawns through, flag stands, spawns, and the flag-only limit can sit outside the solid perimeter. These choices use Unreal collision channels. Individual projectile and deployable classes still need their own rules.
