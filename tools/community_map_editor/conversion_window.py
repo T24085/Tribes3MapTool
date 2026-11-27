@@ -620,7 +620,7 @@ def show_package_inventory(parent, path, import_draft):
     search.focus_set()
 
 
-def run(library, meshes=(), drafts=()):
+def run(library, meshes=(), drafts=(), game=None):
     # A desktop launcher can inherit Tcl paths for a different Python installation.
     configure_tk()
     catalog = load_catalog(library)
@@ -652,6 +652,10 @@ def run(library, meshes=(), drafts=()):
         show_stage()
 
     source_game.bind("<<ComboboxSelected>>", choose_game)
+    if game in game_choices():
+        # Opened from a game's own menu: start on that game and its steps.
+        source_game.set(game)
+        choose_game()
     bar = ttk.Frame(root, padding=10)
     bar.pack(fill="x")
     notice = tk.StringVar(

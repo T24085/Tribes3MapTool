@@ -47,6 +47,24 @@ class GameWorkflowTests(unittest.TestCase):
             first = next(key for _, menu_title, key, *_ in menu_entries() if menu_title == title)
             self.assertEqual(first, "ImportT2")
 
+    def test_each_game_menu_opens_the_window_on_that_game(self):
+        # Opening the conversion window from "1 · Convert from <game>" starts it on that game.
+        for key, profile, _, _ in GAMES:
+            title = f"1 · Convert from {NAMES[profile]}"
+            operation, argument = next((operation, argument) for _, menu_title, entry, _, operation, argument
+                                       in menu_entries() if menu_title == title and entry == "ImportT2")
+            self.assertEqual((operation, argument), ("import_t2", key))
+            self.assertEqual(game_workflows.game_label(argument), NAMES[profile])
+            self.assertIn(NAMES[profile], game_choices())
+        self.assertIsNone(game_workflows.game_label("unknown"))
+        window = (TOOL / "conversion_window.py").read_text(encoding="utf-8")
+        self.assertIn("def run(library, meshes=(), drafts=(), game=None):", window)
+        self.assertIn("source_game.set(game)", window)
+        intake = (TOOL / "import_intake.py").read_text(encoding="utf-8")
+        self.assertIn("game=game_label(game) if game else None", intake)
+        editor = (TOOL / "editor.py").read_text(encoding="utf-8")
+        self.assertIn("def import_t2(game=None):", editor)
+
     def test_source_game_choice_filters_files_and_lists_numbered_steps(self):
         choices = game_choices()
         self.assertEqual(choices[0], "Any game (open anything)")
