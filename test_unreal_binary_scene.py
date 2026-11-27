@@ -85,7 +85,7 @@ def ascend_mesh_lod(materials, vertex_stream=None):
     return data + struct.pack("<3i6H2i", len(positions), 2, 6, *range(6), 2, 0)
 
 
-def ascend_bsp_payload(materials, *, corrupt=False):
+def ascend_bsp_payload(materials, *, corrupt=False, zones=0):
     def bulk(size, records):
         return struct.pack('<2i', size, len(records)) + b''.join(records)
 
@@ -107,7 +107,9 @@ def ascend_bsp_payload(materials, *, corrupt=False):
             render.append(struct.pack('<3f8x4f', point[0], point[1], render_z, 0.25 + u, 0.5 + v, 0, 0))
     return (bytes(28) + bulk(12, vectors) + bulk(12, points) + bulk(64, nodes)
             + struct.pack('<2i', 0, len(surfaces)) + b''.join(surfaces) + bulk(24, vertices)
-            + bulk(4, []) + struct.pack('<i', 0) + bulk(4, []) + bulk(4, [])
+            # Shared side count and zone count, 24-byte zone records, then the editor polys reference.
+            + struct.pack('<2i', 332 if zones else 4, zones) + bytes(24 * zones)
+            + struct.pack('<i', 0) + bulk(4, []) + bulk(4, [])
             + struct.pack('<2i', 1, 1) + bulk(4, []) + struct.pack('<i', len(render)) + bulk(36, render))
 
 
@@ -411,7 +413,8 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
         model_class = -len(imports)
         imports.extend([("Fixture", "Material", -1, "FixtureStone"), ("Fixture", "Material", -1, "FixtureGlass")])
         model_index = len(exports) + 1
-        model = ascend_bsp_payload((1 - len(imports), -len(imports)), corrupt=bsp_world == "corrupt")
+        model = ascend_bsp_payload((1 - len(imports), -len(imports)), corrupt=bsp_world == "corrupt",
+                                    zones=2 if bsp_world == "zones" else 0)
         exports.append((model_class, 1, "WorldModel", 0, object_bytes() + model, 3))
         url = pack("i", 7) + b"unreal\0" + pack("3i", 0, 0, 0)
         extra = url + pack("4i", 0, 7777, 1, model_index)
@@ -1626,6 +1629,19 @@ class UnrealBinarySceneTests(unittest.TestCase):
             public, _, _ = load_intake(unpack_intake(share, root / 'Public'))
             self.assertEqual(public['format'], 22)
             self.assertNotIn('interiors', public)
+
+    def test_ascend_level_bsp_reads_past_a_zone_table(self):
+        # Tartarus saves two BSP zones; its generator-room floors and roofs live in this model.
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, 'ascend', bsp_world='zones')
+            header, _, _ = load_intake(convert_unreal(source, root / 'Intakes'))
+            reference, = header['interiors']
+            name = header['interiors'][reference]
+            geometry, _ = load_intake_geometry(root / 'Intakes' / next(
+                path.name for path in (root / 'Intakes').iterdir() if path.is_dir()), name, header['files'][name])
+            self.assertEqual(len(geometry['triangles']), 4)
+            self.assertEqual(len(geometry['collision']['triangles']), 4)
 
     def test_ascend_inconsistent_compiled_bsp_stays_in_object_review(self):
         with TemporaryDirectory() as directory:
