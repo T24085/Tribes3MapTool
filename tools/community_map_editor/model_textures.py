@@ -44,6 +44,8 @@ def texture_records(record, *, detail=True):
         if 'glow' in record:
             yield record['glow']['color']
             yield record['glow']['mask']
+        if 'ascend_glow' in record:
+            yield record['ascend_glow']['color']
         if detail:
             yield from (record[channel] for channel in SURFACE_DETAIL if channel in record)
 
@@ -53,9 +55,15 @@ def shader_signature(record, inventory):
     signature = (record['mode'], record['two_sided'], record.get('opacity', {}).get('pan'),
                  glow['brightness'] if glow else None, [inventory[row['file']] for row in texture_records(record, detail=False)])
     detail = [(key, inventory[record[key]['file']]) for key in SURFACE_DETAIL if key in record]
+    # The glow tint names the material too: blue and orange Ascend pods share every texture (#40).
+    glow_tint = record.get('ascend_glow', {}).get('tint')
+    # 'glow-clip-1' names the hue-keeping glow cap, so materials built before it are not reused.
+    tinted = (glow_tint, 'glow-clip-1') if glow_tint else ()
     if 'ascend_base' in record:
         shader = record['ascend_base']
-        return (*signature, 'ascend', shader.get('uv'), shader.get('vertex_rgb', False))
+        return (*signature, 'ascend', shader.get('uv'), shader.get('vertex_rgb', False), *tinted)
+    if tinted:
+        return (*signature, 'ascend-glow', *tinted)
     return (*signature, detail) if detail else signature
 
 
@@ -158,6 +166,15 @@ def validate_bindings(bindings, models, inventory, *, legacy_sizes=None, receipt
                         raise ValueError('Invalid Ascend base color UV coordinates.')
                 required.add('ascend_base')
                 has_ascend_shader = True
+            if 'ascend_glow' in record and ascend_uvs is not None:
+                glow = record['ascend_glow']
+                if (not isinstance(glow, dict) or glow.keys() != {'color', 'tint'}
+                        or not isinstance(glow['color'], dict) or glow['color'].keys() != SOURCE_FIELDS
+                        or not isinstance(glow['tint'], list) or len(glow['tint']) != 3
+                        or any(type(value) not in (int, float) or not isfinite(value) or not 0 <= value <= 64
+                               for value in glow['tint'])):
+                    raise ValueError('Invalid Ascend glow binding.')
+                required.add('ascend_glow')
             if record.keys() != required:
                 raise ValueError('Incomplete model texture provenance.')
             modes = ('opaque', 'masked', 'translucent') if shader_inputs else ('opaque', 'masked')

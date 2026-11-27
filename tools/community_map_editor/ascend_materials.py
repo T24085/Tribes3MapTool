@@ -537,6 +537,161 @@ def material_blend(asset, owner, stream, objects, open_art):
     return mode, two_sided, (texture, channel)
 
 
+MAX_GLOW_TINT = 64.0
+GLOW_NODES = 48
+VECTOR_PARAMETER = "materialexpressionvectorparameter"
+CONSTANT_COLOR = "materialexpressionconstant3vector"
+LERP = "materialexpressionlinearinterpolate"
+
+
+def vector_overrides(tags, report, stream):
+    """Return {parameter name: [r, g, b]} from a material instance's VectorParameterValues."""
+    tag = typed_tag(tags, "vectorparametervalues", "ArrayProperty")
+    if tag is None:
+        return {}
+    cursor = tag_data(stream, tag)
+    names = report["names"]
+    overrides = {}
+    for _ in range(cursor.count(64)):
+        name, value = None, None
+        for _ in range(64):
+            member = property_tag(cursor, names, True)
+            if member is None:
+                break
+            key = member["name"].casefold()
+            data = tag_data(stream, member)
+            if key == "parametername" and member["kind"] == "NameProperty":
+                name = table_name(data, names, True).casefold()
+            elif key == "parametervalue" and member["kind"] == "StructProperty" and member["size"] == 16:
+                value = list(data.fields("4f")[:3])
+            cursor.offset += member["size"]
+        else:
+            raise ValueError("Oversized Ascend vector parameter entry.")
+        if name and value is not None:
+            overrides.setdefault(name, value)
+    return overrides
+
+
+def input_channel(fields):
+    """The single texture channel (0-3) an input reads, or None when it reads the colour."""
+    if not fields.get("mask"):
+        return None
+    channels = [index for index, key in enumerate(MASK_CHANNELS) if fields.get(key)]
+    return channels[0] if len(channels) == 1 else None
+
+
+def expression_inputs(tags, report, stream):
+    """(expression, channel) pairs feeding a node, primary inputs first (a lerp's A before B; never
+    its alpha). The channel is set when the input reads one channel of its source."""
+    inputs = []
+    for tag in tags:
+        if tag["kind"] == "StructProperty" and (tag["structure"] or "").casefold() == "expressioninput":
+            if tag["name"].casefold() in ("alpha", "coordinates", "height", "exponent"):
+                continue
+            fields = material_input(tag, report, stream)
+            if fields.get("expression", 0):
+                inputs.append((fields["expression"], input_channel(fields)))
+    return inputs
+
+
+def colour_value(expression, tags, report, stream, vectors):
+    """The RGB a vector parameter or constant colour node gives, after instance overrides."""
+    if expression["class_name"].casefold() == VECTOR_PARAMETER:
+        name_tag = typed_tag(tags, "parametername", "NameProperty")
+        name = table_name(tag_data(stream, name_tag), report["names"], True).casefold() if name_tag else ""
+        if name in vectors:
+            return vectors[name]
+        default = typed_tag(tags, "defaultvalue", "StructProperty")
+        # UE3 saves only non-default values; an unsaved DefaultValue is black (0, 0, 0).
+        return list(tag_data(stream, default).fields("4f")[:3]) if default and default["size"] == 16 else [0.0, 0.0, 0.0]
+    values = {}
+    for channel in ("r", "g", "b"):
+        tag = typed_tag(tags, channel, "FloatProperty")
+        values[channel] = tag_data(stream, tag).fields("f")[0] if tag else 0.0
+    return [values["r"], values["g"], values["b"]]
+
+
+def material_emissive(asset, owner, stream, objects, open_art):
+    """Return (texture scope, linear tint, channel or None) for an Ascend material's glow, or None (#40).
+
+    Ascend glows are usually an emissive texture multiplied by a colour parameter (above 1 for
+    brightness), with masks and edge falloff around them. This takes the first texture and the
+    first colour on the emissive path, honouring instance overrides, and leaves the rest out.
+    """
+    textures, vectors = {}, {}
+    for _ in range(16):
+        material, owner, stream, objects = open_art(asset, owner, stream, objects)
+        tags, _ = properties(material, owner, stream, objects)
+        if material["class_name"].casefold() == "material":
+            break
+        for name, index in texture_overrides(tags, owner, stream).items():
+            textures.setdefault(name, (index, owner, stream, objects))
+        for name, value in vector_overrides(tags, owner, stream).items():
+            vectors.setdefault(name, value)
+        parent = object_reference(tags, stream, "parent")
+        if not parent or parent not in objects:
+            return None
+        asset = objects[parent]
+    else:
+        raise ValueError("Ascend material parent chain exceeds the supported depth.")
+    tag = typed_tag(tags, "emissivecolor", "StructProperty", "colormaterialinput")
+    fields = material_input(tag, owner, stream) if tag else {}
+    queue, seen = [(fields.get("expression", 0), input_channel(fields))], set()
+    texture, tint, channel = None, None, None
+    while queue and len(seen) < GLOW_NODES and (texture is None or tint is None):
+        index, reads = queue.pop(0)
+        node = objects.get(index)
+        if not node or index in seen:
+            continue
+        seen.add(index)
+        kind = node["class_name"].casefold()
+        try:
+            node_tags, _ = properties(node, owner, stream, objects)
+        except ValueError:
+            continue  # An unreadable helper node (for example a power or fresnel) is left out.
+        if kind in (TEXTURE_SAMPLE, TEXTURE_PARAMETER):
+            if texture is None:
+                # A glow that reads one channel (often a mask in the diffuse alpha) glows only there.
+                texture, _ = sample_texture(node, owner, stream, objects, open_art, textures)
+                channel = reads
+            continue
+        if kind in (VECTOR_PARAMETER, CONSTANT_COLOR):
+            if tint is None:
+                tint = colour_value(node, node_tags, owner, stream, vectors)
+            continue
+        inputs = expression_inputs(node_tags, owner, stream)
+        if kind == LERP and tint is None and len(inputs) == 2:
+            # A blend between two colours (for example core to edge over a fresnel falloff) spans
+            # the whole range across a rounded surface, so its average is the fair single colour.
+            ends = [objects.get(index) for index, _ in inputs]
+            if all(end and end["class_name"].casefold() in (VECTOR_PARAMETER, CONSTANT_COLOR) for end in ends):
+                colours = [colour_value(end, properties(end, owner, stream, objects)[0], owner, stream, vectors)
+                           for end in ends]
+                if all(colours):
+                    tint = [(a + b) / 2 for a, b in zip(*colours)]
+                    continue
+        queue.extend(inputs)
+    if texture is None:
+        return None
+    tint = [min(MAX_GLOW_TINT, max(0.0, value)) for value in (tint or [1.0, 1.0, 1.0])]
+    if max(tint) < 0.01:
+        return None  # A black glow colour: the surface does not glow in the source.
+    return texture, tint, channel
+
+
+def channel_png(png, channel):
+    """One channel of a PNG as a grey RGB image: the glow mask an Ascend material reads."""
+    from io import BytesIO
+    from PIL import Image
+
+    image = Image.open(BytesIO(png)).convert("RGBA").getchannel(channel)
+    buffer = BytesIO()
+    # Model textures are 8-bit RGBA (model_textures.validate_png), so the mask keeps a full alpha.
+    opaque = Image.new("L", image.size, 255)
+    Image.merge("RGBA", (image, image, image, opaque)).save(buffer, "PNG")
+    return buffer.getvalue()
+
+
 def with_alpha(color_png, mask_png, channel):
     """Put one channel of the mask texture into the colour texture's alpha, at the colour's size."""
     from io import BytesIO
@@ -637,6 +792,21 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
             mask_png, _, _, mask_receipts = texture_mip(mask_image, mask_source, mask_pixels, mask_exports, rtc)
             for receipt in mask_receipts:
                 receipts[receipt["name"]] = receipt
+        glow, glow_issue = None, None
+        try:
+            emissive = material_emissive(asset, report, stream, objects, open_art)
+            if emissive:
+                glow_image, glow_owner, glow_pixels, glow_exports = open_art(*emissive[0])
+                glow_png, glow_size, _, glow_receipts = texture_mip(glow_image, glow_owner, glow_pixels,
+                                                                    glow_exports, rtc)
+                for receipt in glow_receipts:
+                    receipts[receipt["name"]] = receipt
+                glow_source = glow_receipts[-1] if glow_receipts else glow_owner["source"]
+                if emissive[2] is not None:
+                    glow_png = channel_png(glow_png, emissive[2])
+                glow = (glow_png, glow_size, glow_source, emissive[1])
+        except ValueError as error:
+            glow_issue = f"Glow left out: {error}"
     masked = mask_png is not None
     if masked:
         warning = "Base color and source opacity mask imported (masked material)."
@@ -656,6 +826,10 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
         warning = f"{warning} {note}"
     if fallback and not remastered:
         warning = f"{warning} {fallback}"
+    if glow:
+        warning = f"Glow imported as texture x colour. {warning}"
+    elif glow_issue:
+        warning = f"{warning} {glow_issue}"
     warning = warning[:240]
     for receipt in cache_receipts:
         receipts[receipt["name"]] = receipt
@@ -669,4 +843,12 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
                    warning=warning)
     if settings:
         binding["ascend_base"] = settings
-    return binding, {name: data}, receipts.values()
+    files = {name: data}
+    if glow:
+        glow_png, glow_size, glow_source, tint = glow
+        glow_name = "texture_" + sha256(glow_png).hexdigest()[:32] + ".png"
+        files[glow_name] = glow_png
+        binding["ascend_glow"] = dict(color=dict(file=glow_name, source=glow_source["name"],
+                                                 source_sha256=glow_source["sha256"], size=glow_size),
+                                      tint=[round(value, 4) for value in tint])
+    return binding, files, receipts.values()

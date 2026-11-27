@@ -106,6 +106,7 @@ def material_inputs(setup, report, stream, objects, companions, rtc, entry):
             if rtc is None:
                 raise ValueError("Source artwork resolution requires the map intake workflow.")
             binding, images, artwork_sources = resolve_material(shader, owner, payload, entries, companions, 0, rtc=rtc)
+            binding.pop("ascend_glow", None)  # Terrain layers carry base colour only.
             receipts[owner["source"]["name"]] = owner["source"]
             receipts.update((receipt["name"], receipt) for receipt in artwork_sources)
     receipts.pop(report["source"]["name"], None)
