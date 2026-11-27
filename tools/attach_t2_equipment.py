@@ -20,6 +20,35 @@ CLASSES = {
     'force_shield': ('shield', None),
     'inventory_station': ('station', None),
 }
+# Conversion rules per source game, for placing retail TRIBES 3 models where the source models
+# stood. Each source engine gets its own measured rules (Tribes: Ascend is Unreal 3 to Unreal 5):
+# - yaw_offset: degrees added to the source yaw so the retail model faces the way the source model did;
+# - scale: uniform scale (the host allows 4 for generators only);
+# - face_enemy: roles that start aimed at the enemy base (the centre of the enemy team's equipment)
+#   instead of the source yaw. Turrets rotate in play, so this is only their starting pose.
+# Tribes 2 drafts keep the source yaw until their own rules are measured in game.
+SOURCE_MODEL_RULES = {
+    'DraftTA': dict(yaw_offset={'generator': -90.0, 'radar': -90.0}, scale={'generator': 4},
+                    face_enemy={'turret'}),
+}
+NO_RULES = dict(yaw_offset={}, scale={}, face_enemy=set())
+
+
+def enemy_bearings(sources):
+    """Yaw in degrees from a point toward the centre of each team's opponents' equipment."""
+    centres = {}
+    for team in (1, 2):
+        points = [row['transform']['position_cm'][:2] for row in sources.values()
+                  if row.get('team') == 3 - team and isinstance(row.get('transform'), dict)]
+        if points:
+            centres[team] = [sum(axis) / len(points) for axis in zip(*points)]
+
+    def bearing(team, anchor):
+        target = centres.get(team)
+        if target is None or math.dist(target, anchor[:2]) < 1:
+            return None
+        return math.degrees(math.atan2(target[1] - anchor[1], target[0] - anchor[0]))
+    return bearing
 ASSET = re.compile(r'/Game/Community/(?:[A-Za-z0-9_]+/)+([A-Za-z0-9_]+)\.\1')
 ACTOR = re.compile(r'[A-Za-z0-9_]{1,128}')
 BAKED = re.compile(r'/Game/Community/T2ModelTextures/(M_T2Baked_[a-f0-9]{32})\.\1')
@@ -77,7 +106,9 @@ def native_layout(equipment, review):
     if (not isinstance(map_id, str) or not re.fullmatch(r'DraftT[2A][0-9]{3}', map_id)
             or not isinstance(equipment, dict) or equipment.get('format') != 1):
         raise ValueError('Expected a Tribes 2 or Ascend draft and version-1 equipment projection.')
+    rules = SOURCE_MODEL_RULES.get(map_id[:7], NO_RULES)
     sources = indexed(equipment.get('equipment'))
+    toward_enemy = enemy_bearings(sources)
     power = indexed(equipment.get('power_groups'))
     approvals = indexed(review.get('placements'))
     if not approvals or len(approvals) > 60 or approvals.keys() - sources.keys():
@@ -157,8 +188,14 @@ def native_layout(equipment, review):
             continue
         supports[ident] = {key: support[key] for key in ('actor', 'asset')}
         counts[team, role] += 1
-        entries.append(dict(id=ident, team=team, role=role, native_class=native_class,
-                            anchor_position_cm=anchor, candidate_upright_yaw_degrees=yaw, power_group=group_key))
+        facing = toward_enemy(team, anchor) if role in rules['face_enemy'] else None
+        if facing is None:
+            facing = yaw + rules['yaw_offset'].get(role, 0.0)
+        entry = dict(id=ident, team=team, role=role, native_class=native_class, anchor_position_cm=anchor,
+                     candidate_upright_yaw_degrees=math.remainder(facing, 360), power_group=group_key)
+        if scale := rules['scale'].get(role):
+            entry['authored_actor_scale3d'] = [scale] * 3
+        entries.append(entry)
     for role, cap in (('generator', 3), ('radar', 1), ('turret', 10)):
         if counts[1, role] != counts[2, role] or counts[1, role] > cap:
             raise ValueError(f'Native host requires balanced {role} counts up to {cap} per team.')

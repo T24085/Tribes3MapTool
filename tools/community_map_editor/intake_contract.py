@@ -56,7 +56,8 @@ LATEST_INTAKE_VERSION = max(*NATIVE_SCENE_ENVELOPES, UNREAL_INTAKE_VERSION, *T2_
 T1_SHAPE_INTAKE_VERSION = {4: 18, 5: 19, 6: 20, 7: 21}
 EQUIPMENT_FILE = "equipment.json"
 UNREAL_SCENE = "source-scene.json"
-UNREAL_CLASSES = {"unrealterrain", "unrealbounds", "unrealctfmarker", "unrealmeshactor", "unrealtriggerevent", "unreallight"}
+UNREAL_CLASSES = {"unrealterrain", "unrealbounds", "unrealctfmarker", "unrealmeshactor", "unrealtriggerevent", "unreallight",
+                  "unrealequipment"}
 UNREAL_READER = "legacy-unreal-intake-v1"
 PUBLIC_LAYOUT_READER = "t2-public-layout-v1"
 MAX_MANIFEST_BYTES = 192 * 1024
@@ -461,6 +462,8 @@ def validate_unreal_row(row, *, allow_local_lights=False, vengeance_lights=False
             raise ValueError("Invalid Unreal source mesh mapping row.")
     elif "model_reference" in row:
         raise ValueError("Unreal source mesh references require a mapped mesh actor.")
+    if conversion_class == "unrealequipment" and (row["status"] != "review" or placement is None):
+        raise ValueError("An Unreal equipment record must be a placed review actor.")
     if conversion_class == "unrealtriggerevent" and (row["status"] != "review" or placement is not None
             or row["source_class"].casefold() != "engine.trigger"):
         raise ValueError("An Unreal trigger record must be a review-only Engine.Trigger actor.")

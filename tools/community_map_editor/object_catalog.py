@@ -190,9 +190,10 @@ def load_catalog(library=None, *, snapshot=None, recorded=False, document=None, 
                         ("unrealctfmarker", "Explicit CTF objective", "ctf"),
                         ("unrealmeshactor", "Mapped Unreal mesh actor", "props"),
                         ("unreallight", "Placed light", "lighting"),
+                        ("unrealequipment", "Base equipment (retail TRIBES 3 object)", "equipment"),
                     ):
                         classes[key] = dict(label=label, aliases=[key], feature=feature,
-                                            transform=key in {"unrealmeshactor", "unreallight"})
+                                            transform=key in {"unrealmeshactor", "unreallight", "unrealequipment"})
                     if source_profile == VENGEANCE:
                         features = document["features"]
                         features["trigger-links"] = dict(label="Trigger links", draft="retained", host="retained",

@@ -178,7 +178,7 @@ def project_rows(scene, markers, heightmap, *, placement_components=None):
             if (transform and transform["authored"] and not actor["references"].keys() & {"base", "attachparent"}
                     and all(finite(value, 2e4) for value in transform["position_m"])):
                 # Placement, team and power only: the host spawns the retail TRIBES 3 object.
-                row.update(transform=dict(position_cm=[value * 100 for value in transform["position_m"]],
+                row.update(conversion_class="unrealequipment", transform=dict(position_cm=[value * 100 for value in transform["position_m"]],
                                           rotation_xyzw=transform["rotation_xyzw"], scale=[1, 1, 1]),
                            reason=f"Ascend {role.replace('_', ' ')}: approve its marker to place the "
                                   "retail TRIBES 3 equipment.")
