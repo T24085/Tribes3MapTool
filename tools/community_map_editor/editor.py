@@ -484,16 +484,16 @@ def show_report(name):
 
 
 def record_build_rules(draft, destination):
-    from conversion_rules import draft_snapshot, write
+    from conversion_rules import draft_snapshot, rule_tags_match, write
 
     library = os.environ.get('T3_CONVERTER_LIBRARY')
     snapshot = draft_snapshot(Path(library), draft) if library else None
     tags = [tag for actor in ACTORS.get_all_level_actors() for tag in map(str, actor.tags)
             if tag.startswith('T3RuleSet_')]
-    if not tags and snapshot is None:
-        return
-    if snapshot is None or tags != ['T3RuleSet_' + snapshot['sha256']]:
+    if not rule_tags_match(tags, snapshot):
         raise ValueError('The draft and its recorded conversion rules no longer match.')
+    if snapshot is None:
+        return
     write(destination / 'conversion-rules.json', snapshot)
 
 
