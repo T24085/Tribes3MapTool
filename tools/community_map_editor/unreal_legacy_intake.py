@@ -23,7 +23,8 @@ from interior_geometry import MAX_GEOMETRY_BYTES, NATIVE_VERTEX_FIELDS
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
 from mission_equipment import ascend_equipment_class
-from ascend_bounds import boundary_recipe, derive_play_box, describe as describe_bounds, read_source_bounds
+from ascend_bounds import (BOUNDARY_PANEL_REASON, boundary_panel, boundary_recipe, derive_play_box,
+                           describe as describe_bounds, read_source_bounds)
 from vengeance_bounds import (boundary_recipe as vengeance_boundary_recipe, describe as describe_vengeance_bounds,
                               play_area as vengeance_play_area, read_boundary as read_vengeance_boundary)
 from source_profiles import (ASCEND_BSP_INTAKE_VERSION, ASCEND_CONVEX_COLLISION_VERSION, ASCEND_TERRAIN_PAINT_VERSION,
@@ -225,6 +226,9 @@ def project_rows(scene, markers, heightmap, *, placement_components=None):
                 row["reason"] = "Saved trigger chain is cyclic or contains unsupported links."
         elif issue := scene.get("native_brush_review", {}).get(str(line)):
             row["reason"] += " · " + issue
+        elif (scene["profile"] == "ascend" and actor["role"] == "static-mesh"
+              and any(boundary_panel(model.get("source")) for model in actor["assets"])):
+            row.update(status="excluded", reason=BOUNDARY_PANEL_REASON)
         elif actor["role"] == "static-mesh":
             transform = actor["transform"]
             model = actor["assets"]

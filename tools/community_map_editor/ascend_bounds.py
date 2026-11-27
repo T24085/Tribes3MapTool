@@ -17,6 +17,17 @@ from unreal_package_reader import open_package
 MAX_VOLUMES = 512
 WALL_RATIO = 0.05  # A wall is at most this thin across, relative to its length.
 CEILING_COVER = 0.9  # A ceiling volume covers at least this share of the play box.
+# Ascend's visible out-of-bounds force fields: flat panels that never closed the box (Tartarus leaves
+# 413 m gaps at two corners) and only showed the edge; the blocking volumes did the blocking. The
+# import leaves them out and the Boundaries walls draw the edge instead (Tribes3MapTool#30).
+BOUNDARY_PANEL_MESHES = ("common_ground.sm.sm_creativitywall",)
+BOUNDARY_PANEL_REASON = ("Ascend out-of-bounds force-field panel, left out. Set Wall appearance in "
+                         "Boundaries… to show the edge.")
+
+
+def boundary_panel(mesh_source):
+    """True for a source mesh that is one of Ascend's visible out-of-bounds force-field panels."""
+    return (mesh_source or "").casefold().startswith(BOUNDARY_PANEL_MESHES)
 
 
 def volume_boxes(path, units):
