@@ -34,8 +34,9 @@ from terrain_layers import ART_SLOT_OFFSET, FALLBACK, PALETTE_SURFACES, SIZE, la
 from terrain_grid import ARTWORK_UV, TiledTerrain, footprint
 
 
-def choose():
+def choose(game=None):
     import t3_map_editor as editor
+    from game_workflows import game_label
 
     tool = Path(os.environ["T3_CONVERTER_TOOL"])
     registry = unreal.AssetRegistryHelpers.get_asset_registry()
@@ -52,7 +53,7 @@ def choose():
             str(tool / "conversion_window.py"),
             os.environ["T3_CONVERTER_LIBRARY"],
         ],
-        input=json.dumps(dict(meshes=meshes, drafts=drafts)),
+        input=json.dumps(dict(meshes=meshes, drafts=drafts, game=game_label(game) if game else None)),
         capture_output=True,
         encoding="utf-8",
         check=False,

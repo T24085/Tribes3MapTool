@@ -129,21 +129,22 @@ ACTIONS = {
 }
 
 # Editor menu, in workflow order: (submenu key, label, entries). An entry is an ACTIONS key, or
-# (key, label) for a game-specific copy of a shared action (the same operation, a clearer name).
+# (key, label) for a game-specific copy of a shared action (the same operation, a clearer name),
+# or (key, label, game key) when the action should start with that game already chosen.
 # "@markers" places the CTF marker entries that editor.py builds.
 MENU = (
     ("Start", "0 · Start a draft", ("NewBlank", "CopyMap")),
     # Each game's first entry opens the conversion window, whose title shows the step on screen.
     ("ConvertT1", "1 · Convert from Tribes 1",
-     (("ImportT2", "Steps 1–2: Open the conversion window…"), "RebuildRecorded", "RebuildLatest")),
+     (("ImportT2", "Steps 1–2: Open the conversion window…", "tribes1"), "RebuildRecorded", "RebuildLatest")),
     ("ConvertT2", "1 · Convert from Tribes 2",
-     (("ImportT2", "Steps 1–2: Open the conversion window…"),
+     (("ImportT2", "Steps 1–2: Open the conversion window…", "tribes2"),
       ("ImportInterior", "Step 4: Import Tribes 2 interior (.dif)…"),
       "RebuildRecorded", "RebuildLatest", "PreviewDTS", "StopDTSPreview", "BakeDTS", "RemoveBakeDTS")),
     ("ConvertTV", "1 · Convert from Tribes: Vengeance",
-     (("ImportT2", "Steps 1–4: Open the conversion window…"), "RebuildRecorded", "RebuildLatest")),
+     (("ImportT2", "Steps 1–4: Open the conversion window…", "vengeance"), "RebuildRecorded", "RebuildLatest")),
     ("ConvertTA", "1 · Convert from Tribes: Ascend",
-     (("ImportT2", "Steps 1–4: Open the conversion window…"), "RebuildRecorded", "RebuildLatest")),
+     (("ImportT2", "Steps 1–4: Open the conversion window…", "ascend"), "RebuildRecorded", "RebuildLatest")),
     ("Review", "2 · Review conversion",
      ("ObjectReview", "Pipeline", "GameProfiles", "BatchRebuild")),
     ("Art", "3 · Textures, models and sky",
@@ -164,6 +165,14 @@ MENU = (
 def game_choices():
     """Labels for the conversion window's source game selector, any-game first."""
     return ("Any game (open anything)", *(NAMES[profile] for _, profile, _, _ in GAMES))
+
+
+def game_label(key):
+    """The conversion window label for a game key such as "ascend", or None."""
+    for game_key, profile, _, _ in GAMES:
+        if game_key == key:
+            return NAMES[profile]
+    return None
 
 
 def game_by_label(label):
@@ -217,6 +226,6 @@ def menu_entries():
             if entry == "@markers":
                 yield submenu, title, "@markers", None, None, None
                 continue
-            key, label = entry if isinstance(entry, tuple) else (entry, None)
+            key, label, game = (*entry, None)[:3] if isinstance(entry, tuple) else (entry, None, None)
             default, operation, argument = ACTIONS[key]
-            yield submenu, title, key, label or default, operation, argument
+            yield submenu, title, key, label or default, operation, game or argument

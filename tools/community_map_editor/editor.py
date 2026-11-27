@@ -403,9 +403,10 @@ def build_playtest():
     request_build('playtest')
 
 
-def import_t2():
+def import_t2(game=None):
+    """Open the conversion window; a game menu passes its game key so the window starts on it."""
     from import_intake import choose
-    return choose()
+    return choose(game)
 
 
 def list_drafts():
