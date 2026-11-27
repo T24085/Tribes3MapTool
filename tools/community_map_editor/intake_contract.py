@@ -55,8 +55,11 @@ LATEST_INTAKE_VERSION = max(*NATIVE_SCENE_ENVELOPES, UNREAL_INTAKE_VERSION, *T2_
                             *T2_GENERATOR_SCOPE_VERSIONS)
 T1_SHAPE_INTAKE_VERSION = {4: 18, 5: 19, 6: 20, 7: 21}
 EQUIPMENT_FILE = "equipment.json"
+# An Ascend map's colour-grading lookup table: 256 x 16, referenced by environment.grade.lut (#38).
+GRADE_LUT_FILE = "grade-lut.png"
 UNREAL_SCENE = "source-scene.json"
-UNREAL_CLASSES = {"unrealterrain", "unrealbounds", "unrealctfmarker", "unrealmeshactor", "unrealtriggerevent", "unreallight"}
+UNREAL_CLASSES = {"unrealterrain", "unrealbounds", "unrealctfmarker", "unrealmeshactor", "unrealtriggerevent", "unreallight",
+                  "unrealequipment"}
 UNREAL_READER = "legacy-unreal-intake-v1"
 PUBLIC_LAYOUT_READER = "t2-public-layout-v1"
 MAX_MANIFEST_BYTES = 192 * 1024
@@ -64,7 +67,7 @@ MAX_MANIFEST_BYTES = 192 * 1024
 
 def intake_filename(name, version):
     if version in UNREAL_INTAKE_VERSIONS:
-        return (name in {"objects.json", "terrain.json", "height.png", "minimap.png", UNREAL_SCENE}
+        return (name in {"objects.json", "terrain.json", "height.png", "minimap.png", UNREAL_SCENE, GRADE_LUT_FILE}
                 or INTERIOR_FILE.fullmatch(name)
                 or version in (*VENGEANCE_TERRAIN_VERSIONS, *VENGEANCE_MODEL_VERSIONS, ASCEND_TERRAIN_PAINT_VERSION)
                 and PAINT_FILE.fullmatch(name)
@@ -290,8 +293,23 @@ def validate_environment(settings, *, unreal=False):
     def vector(value):
         return isinstance(value, list) and len(value) == 3 and all(finite(item, 1) for item in value)
 
-    if not isinstance(settings, dict) or not settings or settings.keys() - {"sun", "fog"}:
+    parts = {"sun", "fog", "grade"} if unreal else {"sun", "fog"}
+    if not isinstance(settings, dict) or not settings or settings.keys() - parts:
         raise ValueError("Invalid intake environment.")
+    if "grade" in settings:
+        # An Ascend post-process grade in source terms (#38): UE3 tones, bloom and an optional LUT file.
+        grade = settings["grade"]
+        bloom = grade.get("bloom") if isinstance(grade, dict) else None
+        if (not isinstance(grade, dict) or grade.keys() - {"lut"} != {"shadows", "midtones", "highlights", "bloom"}
+                or "lut" in grade and grade["lut"] != GRADE_LUT_FILE
+                or not all(isinstance(grade[key], list) and len(grade[key]) == 3
+                           and all(finite(value, 4) and value >= 0 for value in grade[key])
+                           for key in ("shadows", "midtones", "highlights"))
+                or not isinstance(bloom, dict) or bloom.keys() != {"scale", "threshold", "tint"}
+                or not finite(bloom["scale"], 8) or bloom["scale"] < 0
+                or not finite(bloom["threshold"], 16) or bloom["threshold"] < 0
+                or not vector(bloom["tint"]) or min(bloom["tint"]) < 0):
+            raise ValueError("Invalid intake colour grade.")
     if "sun" in settings:
         sun = settings["sun"]
         scales = {"intensity_scale", "ambient_scale"} if unreal else set()
@@ -461,6 +479,8 @@ def validate_unreal_row(row, *, allow_local_lights=False, vengeance_lights=False
             raise ValueError("Invalid Unreal source mesh mapping row.")
     elif "model_reference" in row:
         raise ValueError("Unreal source mesh references require a mapped mesh actor.")
+    if conversion_class == "unrealequipment" and (row["status"] != "review" or placement is None):
+        raise ValueError("An Unreal equipment record must be a placed review actor.")
     if conversion_class == "unrealtriggerevent" and (row["status"] != "review" or placement is not None
             or row["source_class"].casefold() != "engine.trigger"):
         raise ValueError("An Unreal trigger record must be a review-only Engine.Trigger actor.")
@@ -796,6 +816,15 @@ def load_intake(manifest):
         raise ValueError("Invalid intake environment format.")
     if "environment" in header:
         validate_environment(header["environment"], unreal=native_envelope)
+    grade_lut = header.get("environment", {}).get("grade", {}).get("lut")
+    if (GRADE_LUT_FILE in header["files"]) != (grade_lut is not None) or grade_lut and header["profile"] != ASCEND:
+        raise ValueError("The colour-grading table must belong to an Ascend intake's grade.")
+    if grade_lut:
+        lut = bounded(manifest.parent / GRADE_LUT_FILE, 1024 * 1024)
+        if (hashlib.sha256(lut).hexdigest() != header["files"][GRADE_LUT_FILE]
+                or lut[:8] != bytes.fromhex("89504e470d0a1a0a")
+                or lut[16:24] != (256).to_bytes(4, "big") + (16).to_bytes(4, "big")):
+            raise ValueError("The colour-grading table must be a verified 256 x 16 PNG.")
     legacy_int = 15 <= header["format"] <= 21
     legacy_textures = 16 <= header["format"] <= 21
     vengeance_bsp = unreal and header["profile"] == VENGEANCE and header["reader"] == UNREAL_READER

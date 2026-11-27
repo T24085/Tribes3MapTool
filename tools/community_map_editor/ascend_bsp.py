@@ -10,6 +10,9 @@ from unreal_binary_scene import read_properties
 from unreal_package_reader import Cursor, MAX_RECORDS
 from vengeance_bsp import FAKE_BACKDROP, INVISIBLE, PORTAL, TWO_SIDED, project_arrays
 
+MAX_ZONES = 64  # Unreal Engine 3's BSP zone limit.
+ZONE_BYTES = 24
+
 
 def payload(report, stream, row, objects):
     summary = report['summary']
@@ -79,8 +82,14 @@ def model_arrays(report, stream, model, objects):
     pool_data = bulk(cursor, 24)
     vertex_pool = [struct.unpack_from(endian + 'i', pool_data, offset)[0]
                    for offset in range(0, len(pool_data), 24)]
-    bulk(cursor, 4)  # Legacy vertex indices.
-    cursor.take(4)  # Shared side count.
+    # Shared side count, then the zone table: each zone is 24 bytes (zone actor, last render time,
+    # and the connectivity and visibility masks). Maps with no zones and four shared sides read the
+    # same as the earlier fixed layout; Tartarus has two zones.
+    shared_sides, zones = cursor.fields('2i')
+    if shared_sides < 0 or not 0 <= zones <= MAX_ZONES:
+        raise ValueError('Invalid Ascend BSP zone table.')
+    cursor.take(zones * ZONE_BYTES)
+    cursor.take(4)  # Editor polys reference.
     bulk(cursor, 4)  # Leaf hulls.
     bulk(cursor, 4)  # Leaves.
     cursor.take(8)  # RootOutside and Linked.

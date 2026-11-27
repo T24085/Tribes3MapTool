@@ -16,9 +16,11 @@ PREFIX = {T1: "DraftT1", T2: "DraftT2", VENGEANCE: "DraftTV", ASCEND: "DraftTA"}
 # matches feel too tight in game, so the Ascend default applies the same margin: 1.92 x 1.3125 = 2.52.
 ASCEND_PLAYER_MATCH_CM = 1.92
 T2_FEEL_MARGIN = 105 / 80
+# The first preset is the default. Ascend is Unreal 3 to Unreal 5, so the exact player match plays
+# right without the Tribes 2 margin (Tartarus in game, 2026-11-27).
 SCALE_PRESETS = {
-    "ascend": (("Tribes 2 feel (player match x1.3125)", round(ASCEND_PLAYER_MATCH_CM * T2_FEEL_MARGIN, 4)),
-               ("Exact player match (Medium armor)", ASCEND_PLAYER_MATCH_CM)),
+    "ascend": (("Exact player match (Medium armor)", ASCEND_PLAYER_MATCH_CM),
+               ("Tribes 2 feel (player match x1.3125)", round(ASCEND_PLAYER_MATCH_CM * T2_FEEL_MARGIN, 4))),
     "vengeance": (("Current default", 2.0),),
 }
 UNITS_PER_METRE_DEFAULT = {game: 100 / presets[0][1] for game, presets in SCALE_PRESETS.items()}

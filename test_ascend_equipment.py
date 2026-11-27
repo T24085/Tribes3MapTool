@@ -97,6 +97,45 @@ class AscendEquipmentTests(unittest.TestCase):
         self.assertEqual(layout["power_groups"], {f"T2Group{ASCEND_GROUP_BASE + 1}": dict(team=1, mode="generators"),
                                                   f"T2Group{ASCEND_GROUP_BASE + 2}": dict(team=2, mode="generators")})
         self.assertEqual(result["package"], "/Game/Maps/Community/DraftTA002/Arena_DraftTA002_P")
+        by_role = {}
+        for entry in layout["entries"]:
+            by_role.setdefault(entry["role"], entry)
+        # Ascend model rules: the retail generator and radar turn -90 degrees (measured in game); generators are scaled x4.
+        self.assertEqual(by_role["generator"]["candidate_upright_yaw_degrees"], -90.0)
+        self.assertEqual(by_role["generator"]["authored_actor_scale3d"], [4, 4, 4])
+        self.assertEqual(by_role["radar"]["candidate_upright_yaw_degrees"], -90.0)
+        self.assertNotIn("authored_actor_scale3d", by_role["radar"])
+        # Turrets start aimed at the enemy base: Blood Eagle sits at +X, so its turrets face -X.
+        turrets = {entry["team"]: entry["candidate_upright_yaw_degrees"] for entry in layout["entries"]
+                   if entry["role"] == "turret"}
+        self.assertEqual(abs(turrets[1]), 180.0)
+        self.assertEqual(turrets[2], 0.0)
+
+    def test_the_import_keeps_equipment_rows_for_review(self):
+        # Rows with no catalog class are excluded before projection; equipment must survive.
+        from intake_contract import validate_unreal_row
+        from object_catalog import build_rows, classify, load_catalog
+        from source_profiles import ASCEND
+
+        rows = tartarus()
+        for item in rows:
+            if item["status"] == "review" and "transform" in item:
+                item["conversion_class"] = "unrealequipment"
+                validate_unreal_row(item)
+        catalog = load_catalog(None, source_profile=ASCEND, recorded=True)
+        kept = build_rows(rows, classify(rows, None, catalog))
+        self.assertEqual(len(mission_equipment(kept, None)["equipment"]), 14)
+        unplaced = dict(rows[2], conversion_class="unrealequipment")
+        del unplaced["transform"]
+        with self.assertRaises(ValueError):
+            validate_unreal_row(unplaced)
+
+    def test_ascend_imports_default_to_the_exact_player_scale(self):
+        # Unreal 3 to Unreal 5 needs no Tribes 2 margin: 1 TA unit = 1.92 cm (Tartarus in game).
+        from source_profiles import ASCEND_PLAYER_MATCH_CM, SCALE_PRESETS, UNITS_PER_METRE_DEFAULT
+
+        self.assertEqual(SCALE_PRESETS["ascend"][0][1], ASCEND_PLAYER_MATCH_CM)
+        self.assertAlmostEqual(UNITS_PER_METRE_DEFAULT["ascend"], 100 / 1.92)
 
     def test_station_blueprints_cover_tribes_2_and_ascend_drafts(self):
         self.assertEqual(inventory_station_package("DraftTA002"),

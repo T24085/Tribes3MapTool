@@ -125,6 +125,21 @@ def bind_shader_inputs(material, lib, sample, folder, inventory, record, destina
                 or not lib.connect_material_expressions(masked, '', scaled, 'A')
                 or not lib.connect_material_property(scaled, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)):
             raise ValueError('Unreal did not bind the source glow color and mask.')
+    if 'ascend_glow' in record:
+        # Ascend glow is HDR: texture x linear tint, then x the Ascend exposure gain so it shows at
+        # its UE3 brightness under the MILF environment's fixed exposure (#40, T3BackEndServer#146).
+        from environment_ascend import EMISSIVE_GAIN, glow_colour
+
+        glow = record['ascend_glow']
+        color = texture_input(glow['color'], 'SourceGlowColor', -840, 520)
+        tint = lib.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, -840, 810)
+        tint.set_editor_property('constant', unreal.LinearColor(*(value * EMISSIVE_GAIN
+                                                                  for value in glow_colour(glow['tint'])), 1))
+        glowing = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -550, 545)
+        if (not lib.connect_material_expressions(color, 'RGB', glowing, 'A')
+                or not lib.connect_material_expressions(tint, '', glowing, 'B')
+                or not lib.connect_material_property(glowing, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)):
+            raise ValueError('Unreal did not bind the Ascend glow.')
     if 'normal' in record:
         normal = texture_input(record['normal'], 'SourceNormal', -660, 1110, normal=True)
         if not lib.connect_material_property(normal, 'RGB', unreal.MaterialProperty.MP_NORMAL):
@@ -162,7 +177,7 @@ def source_material(folder, inventory, record, *, destination, mode='opaque', tw
     prefix = 'M_Masked_' if masked else 'M_'
     if two_sided:
         prefix += 'TwoSided_'
-    extended = has_shader_inputs(record) or 'ascend_base' in record
+    extended = has_shader_inputs(record) or bool(record.keys() & {'ascend_base', 'ascend_glow'})
     if extended:
         digest = sha256(json.dumps(shader_signature(record, inventory), separators=(',', ':')).encode()).hexdigest()
     name = 'M_Shader_' + digest[:32] if extended else prefix + texture.get_name()
@@ -419,7 +434,9 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
             record = authored.get(str(source_slot), {})
             name = record.get('file')
             legacy, mode = geometry['format'] >= 3, record.get('mode', 'opaque')
-            two_sided = bool(vengeance_destination and record.get('two_sided', False))
+            # Vengeance and Ascend record the source material's sidedness (Ascend foliage, #35).
+            two_sided = bool((vengeance_destination or geometry['format'] in (ASCEND_STATIC_MESH, ASCEND_BSP))
+                             and record.get('two_sided', False))
             if normal >= 0 or alarm >= 0:
                 atlases = lighting['atlases']
                 normal_map = atlases[normal]['color']['file'] if normal >= 0 else None
@@ -437,7 +454,9 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
                 else:
                     destination = vengeance_destination or (LEGACY_DESTINATION if legacy else DESTINATION)
                 key = (name, destination, mode, two_sided)
-                if has_shader_inputs(record):
+                # Materials that share a base texture can differ in their shader settings, such as
+                # the Ascend glow tint of blue and orange bio pods (#40), so the settings are in the key.
+                if has_shader_inputs(record) or record.keys() & {'ascend_base', 'ascend_glow'}:
                     key += (json.dumps(shader_signature(record, inventory), separators=(',', ':')),)
                 if key not in materials:
                     materials[key] = source_material(folder, inventory, record, destination=destination,

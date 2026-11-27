@@ -481,6 +481,17 @@ def place_local_lights(actors, rows):
             component.set_inner_cone_angle(light["inner_angle"])
 
 
+def ascend_environment():
+    from environment_ascend import convert
+
+    return convert
+
+
+# One MILF environment converter per source engine (T3BackEndServer#146). Sources not listed here
+# still use place_environment until their converter is written.
+MILF_ENVIRONMENT_CONVERTERS = {"ascend-ctf": ascend_environment}
+
+
 def place_environment(actors, settings, values=None):
     if values is None:
         profile = profile_config()
@@ -934,7 +945,16 @@ class DraftImport:
         self.pending_precipitation = ()
 
     def lighting(self, _):
-        place_environment(self.editor.ACTORS, self.environment, self.values)
+        converter = MILF_ENVIRONMENT_CONVERTERS.get(self.header["profile"])
+        if converter:
+            # Sources with a MILF environment converter go through the shared UE5 adapter (#146).
+            from environment_ue5 import apply as apply_environment
+
+            assets = dict(folder=self.folder, inventory=self.header["files"],
+                          destination=f"/Game/Community/{self.ident}/Environment")
+            apply_environment(self.editor.ACTORS, converter()(self.environment, self.values), assets)
+        else:
+            place_environment(self.editor.ACTORS, self.environment, self.values)
         place_local_lights(self.editor.ACTORS, self.rows)
 
     def weather(self, _):

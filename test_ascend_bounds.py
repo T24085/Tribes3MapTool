@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "tools/community_map_editor"))
-from ascend_bounds import boundary_recipe, derive_play_box, describe
+from ascend_bounds import boundary_panel, boundary_recipe, derive_play_box, describe
 from unreal_legacy_intake import mark_boundary_sources
 
 # Tartarus's edge volumes and ceiling, in metres at 39.68 source units per metre.
@@ -77,6 +77,13 @@ class PlayBoxTests(unittest.TestCase):
         self.assertEqual(rows[1]["reason"], "r")
         self.assertIn("boundary line", rows[2]["reason"])
         self.assertEqual(rows[3]["reason"], "r")
+
+    def test_force_field_panels_are_recognised(self):
+        # Tartarus's four visible out-of-bounds panels (#30); real walls are kept.
+        self.assertTrue(boundary_panel("Common_Ground.SM.SM_CreativityWall_2016"))
+        self.assertTrue(boundary_panel("common_ground.sm.sm_creativitywall_2012"))
+        for other in ("Arch_Tartarus.SM.SM_Tartarus_BaseWall_05", "Common_Ground.SM.SM_Rock_01", "", None):
+            self.assertFalse(boundary_panel(other))
 
 
 if __name__ == "__main__":
