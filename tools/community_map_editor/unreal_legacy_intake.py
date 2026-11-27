@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 
 from ascend_materials import placed_materials as ascend_placed_materials, resolve_material as resolve_ascend_material
+from ascend_materials import texture_mip
+from ascend_post_process import GRADE_LUT_FILE, LUT_SIZE, png_size, read_grade
 from ascend_static_mesh import read_placed_meshes as read_ascend_meshes
 from ascend_texture_cache import AscendTextureCache
 from remastered_textures import RemasteredTextures, validate_folder as validate_remaster_folder
@@ -398,6 +400,7 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
     mesh_docs, mesh_issues, companion_receipts = {}, {}, []
     paint = TerrainPaint()
     environment = {}
+    grade_lut = None
     names = settings.get("asset_packages", [])
     if names and not binary:
         raise ValueError("Companion packages require a binary map source.")
@@ -423,6 +426,19 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
         with open_package(source, game) as (report, stream):
             scene = actor_scene(report, stream, units)
             environment = read_environment(scene, stream, report["summary"]["endian"])
+            if game == "ascend":
+                # The map's post-process colour grade, for the MILF environment (#38, T3BackEndServer#146).
+                grade, lut = read_grade(report, stream)
+                if grade:
+                    if lut is not None:
+                        lut_objects = {row["index"]: row for row in report["imports"] + report["exports"]}
+                        try:
+                            lut_png = texture_mip(lut, report, stream, lut_objects, rtc)[0]
+                            if png_size(lut_png) == LUT_SIZE:
+                                grade_lut, grade["lut"] = lut_png, GRADE_LUT_FILE
+                        except ValueError:
+                            pass  # The grade still carries its tones and bloom.
+                    environment["grade"] = grade
             if native:
                 terrain, raw, paint = decode_terrain(
                     scene, report, stream, settings.get("terrain_actor"), companions=companions,
@@ -645,6 +661,8 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
                     scene.setdefault("mesh_material_review", []).append(issue)
     files.update({"objects.json": encoded(rows), "terrain.json": encoded(terrain), "height.png": raw,
                   "minimap.png": terrain_png(terrain, bounds)})
+    if grade_lut is not None:
+        files[GRADE_LUT_FILE] = grade_lut
     scripts = [Path(__file__), Path(__file__).with_name("unreal_legacy_reader.py")]
     if binary:
         scripts.extend(Path(__file__).with_name(name) for name in ("unreal_binary_scene.py", "unreal_package_reader.py",
@@ -657,7 +675,8 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
                 "vengeance_terrain_layers.py", "vengeance_brushes.py", "vengeance_mover_plan.py", "vengeance_triggers.py"))
         else:
             scripts.extend(Path(__file__).with_name(name) for name in ("ascend_static_mesh.py", "ascend_collision.py", "ascend_materials.py",
-                                                                      "ascend_texture_cache.py", "ascend_bsp.py", "vengeance_bsp.py"))
+                                                                      "ascend_texture_cache.py", "ascend_bsp.py", "vengeance_bsp.py",
+                                                                      "ascend_post_process.py"))
     if native:
         scripts.append(Path(__file__).with_name("unreal_native_terrain.py"))
         if game == "ascend":
