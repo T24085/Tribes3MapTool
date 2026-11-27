@@ -134,11 +134,14 @@ class PipelineRun:
         if self.path is not None:
             write(self.path, self.report)
 
-    def execute(self, operators):
+    def execute(self, operators, on_step=None):
+        """Run each step in order. on_step(step), if given, is told before each step starts (progress display)."""
         self.flush()
         for step in self.report["steps"]:
             step["status"] = "running"
             self.flush()
+            if on_step is not None:
+                on_step(step)
             start = monotonic()
             try:
                 result = operators[step["operation"]](step.get("options", {}))

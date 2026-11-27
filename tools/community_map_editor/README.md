@@ -7,6 +7,30 @@ Open the **TRIBES 3 Map Editor** launcher to enter the local Unreal authoring pr
 - **Set up CTF.** Move the existing **Blue Spawn**, **Red Spawn**, **Blue Flag**, and **Red Flag** markers in the World Outliner. The TRIBES menu can add spawn and flag markers. Each side needs at least one spawn and exactly one flag. A **Route Start** and **Route End** pair lets you check a straight player-sized path through an entrance.
 - **Try the draft.** Leave Steam open, close any running TRIBES game, and choose **Build & Playtest**. Unreal saves your changes, closes to free memory, and cooks the map. The launcher opens a private offline TRIBES game, then reopens the same draft when you quit it. Keep the launcher console open throughout the build and test.
 
+### Work in order: game first
+
+The **TRIBES Map Editor** menu follows the workflow:
+
+- **0 · Start a draft.**
+- **1 · Convert from…**, with one submenu per source game (Tribes 1, Tribes 2, Tribes:
+  Vengeance, Tribes: Ascend) listing that game's tools as numbered steps.
+- **Shared draft tools, in order:**
+  - 2 · Review conversion;
+  - 3 · Textures, models and sky;
+  - 4 · Lighting;
+  - 5 · Gameplay (markers, equipment, shields);
+  - 6 · Build and publish.
+
+The conversion window starts the same way. Choose **Converting from** first. The window
+then lists that game's steps, each with what it needs and what it produces, and the open
+dialog offers only that game's source files plus existing intakes. **Any game** keeps the
+previous open-anything behaviour. The layout is data in `game_workflows.py`, so a new game
+or step is a data change.
+
+- **Pick or add steps.** Edit `GAMES` and `MENU` in `game_workflows.py`.
+- **Keep them consistent.** `test_game_workflows.py` checks that every editor action is
+  reachable and valid.
+
 Drafts live in the Community maps folder inside the authoring project. Put newly imported assets under Content/Community so the draft cooker can package them. Each build stores its diagnostics under the local Runs folder.
 
 Windows map cooks embed shader code in their material assets so those
@@ -255,8 +279,16 @@ the source SHA-256. The command-line reader can select a game explicitly.
 py -3.13 tools/community_map_editor/unreal_package_reader.py "D:\Maps\MyMap.fmap" "D:\Maps\PackageInventory.json" --game ascend
 ```
 
-Package inventory supports uncompressed files and standard UE3 zlib
-chunks. Select **Import as draft…** to read the level's actor roster and
+Package inventory supports uncompressed files and UE3 zlib or LZO
+chunks. Tribes: Ascend client packages use LZO, which the tool decodes
+itself with no extra install. Choose the scale in the import dialog with
+**Scale preset**, or type your own units-per-metre value. For Ascend the
+default is 1 unit = 2.52 cm (39.6825 units per metre). That is the exact
+player match of 1.92 cm (TRIBES 3 player height over Ascend's Medium
+armor) with the same x1.3125 margin Tribes 2 conversions use (105 cm per
+T2 metre against an exact match of 80), because exact matches feel too
+tight in game. The exact match is the second preset. The default is still
+to be confirmed in game. Select **Import as draft…** to read the level's actor roster and
 recover serialized transforms, links, and mesh references. If the package
 has no adjacent `MyMap.import.json`, the editor opens a setup dialog. Select
 the native terrain, review or change each team's flag stand and spawns, and
@@ -266,6 +298,46 @@ by distance. **Use settings file…** opens an existing recipe, including a
 recipe that supplies its own heightmap. Settings entered in the dialog are
 recorded in the private intake. The actor review retains object and property
 offsets.
+
+Tribes: Ascend cooks each map as separate levels: a gameplay level such as
+`TrCTF-Tartarus.fmap` (flags, spawns, base equipment), a world level
+`Tartarus_Ter.fmap` (terrain, meshes, lighting, fog) and an optional sound
+level `Tartarus_Sound.fmap`. Open the gameplay level. The tool imports from
+the matching world level and merges the gameplay and sound levels into one
+draft. A variant's own levels are preferred, so `TrTeamRabbit-Tartarus.fmap`
+uses `TrTeamRabbit-Tartarus_Ter.fmap` when it exists. The dialog lists the
+merged levels. Their actors are named after their level, for example
+`TrCTF-Tartarus.UTTeamPlayerStart_3`. A settings file lists them under
+`"levels"`. Meshes, BSP and component materials are still read from the
+world level only.
+
+**Out-of-bounds box.** Ascend maps fence their play area with long, thin
+`BlockingVolume` walls, usually behind a visible force field, and cap it
+with a flat volume high above. When all four sides enclose every flag and
+spawn, the import uses that box for the playable bounds and the minimap.
+It also presets **Boundaries…** to solid walls on the box, with the
+ceiling at the cap volume. Object Review marks the volumes used and any
+mesh standing on the box edge, such as Tartarus's force-field panels; keep
+those as decoration or remove them. `KillZ` and `StallZ` are listed but not
+applied. Applying them, along with flag rules and grace-time damage, needs
+the runtime out-of-bounds layer (T3BackEndServer#111). An explicit
+`"bounds_m"` setting still takes priority. On Tartarus the box is
+2,477 × 2,064 m at the 2.52 scale, with the ceiling at 1,858 m.
+
+**Vengeance boundary.** Each Vengeance multiplayer map has one
+`Movement.BoundaryVolume`. In the original, the server kills any player and
+destroys any vehicle outside it at once, and returns a loose flag outside
+it home; there is no warning or grace time. When every flag and spawn is
+inside the active volume, the import uses its footprint for the playable
+bounds and minimap. It also presets **Boundaries…** to solid walls on the
+volume's outline (a polygon of up to 32 corners, or a rectangle), with the
+ceiling at the volume's top. If the outline reaches past the terrain, its
+clipped bounding rectangle is used instead. Rotated or scaled volumes stay
+in review. Walls stand in for the instant kill until the runtime boundary
+layer supports it (T3BackEndServer#112). On Beggar's Run the volume is a
+1,311 × 1,320 m six-corner outline with its top 430 m above the highest
+terrain.
+
 Bind an existing project mesh to a recovered reference through the draft's
 mapping controls.
 
@@ -454,6 +526,30 @@ The editor uses the imported mesh's UV data and vertex colors. Missing
 UV channels, unmirror settings and other graph operations stay in Object
 Review. The material is still opaque, and the public layout omits it.
 
+Most Tribes: Ascend shaders tint or blend their base color, for example
+`Multiply(texture, color)` or a `LinearInterpolate` between two layers.
+For these the reader follows the color path from `DiffuseColor` through
+multiply, add, lerp, desaturate, clamp and power nodes. It picks the single
+RGB base-color sample, preferring diffuse-named textures and parameters
+(`_DIF`, `Dif`, `DIF1`) over detail, overlay and mask layers, and a lerp's
+A input over its B input. Masks, reflections and cube samples are skipped.
+If two samples rank equally, Object Review names both. The draft binds
+that texture without the tint, blend or custom tiling, and Object Review
+says so. On Tartarus this binds 463 of 482 mesh material slots.
+
+**Remastered textures.** In the import settings dialog, choose
+**Remastered textures…** and pick a folder of upscaled PNGs. A file is
+used in place of a source base color when its name is the texture's object
+path with each `.` replaced by `__`, for example
+`Arch_Drydock__Tex__T_DryDock_Crane_01_DIF.png`. Files from the texture
+extraction and remaster tools already use this name. A remaster must keep
+the original's aspect ratio, be at least as large, fit 4096 pixels a side
+and 16 MB as an RGBA PNG, and fit the intake's texture budget (384 MB in
+total, with 96 MB kept for originals). Otherwise the original texture is
+used and Object Review says why. The private intake records each
+remastered file's name and checksum. The import settings store the folder
+as `"remastered_textures"`.
+
 [Intake version 40](intake-v40.schema.json) also reads saved material
 overrides on an unambiguously associated static mesh component. Copies of
 the same mesh share one geometry asset and keep their own materials in the
@@ -468,6 +564,14 @@ as large as the available inline mip. If a cache entry cannot be read,
 Object Review shows the reason and the draft uses available inline
 artwork. The private intake records both cache checksums when it uses a
 cached texture.
+
+Most Ascend client textures keep their mips in a shared texture file
+cache, such as `Textures.tfc`, named by each texture. The importer looks
+for that file beside the map and then in up to three parent folders, so
+leave the map in the client's `CookedPC\Maps\<Map>\` folder or copy the
+`.tfc` beside it. It reads zlib or LZO mips from the cache and records the
+cache file's checksum in the private intake. Mips the client never cooked
+are skipped, and Object Review notes when a smaller mip was used.
 [Intake version 41](intake-v41.schema.json) preserves tagged sphere, box,
 and capsule collision from a placed mesh's BodySetup. Simple shapes keep
 their centers, orientation, and dimensions. When the source uses simple
@@ -535,6 +639,44 @@ and roughness as well as fallback colors for missing textures. Unsupported
 paint slots, source materials without direct color textures, and missing
 projections appear in object review. Decoration layers still need
 conversion. Shared layouts omit the original images and material names.
+
+## Build sound packs (Tribes: Ascend)
+
+Sounds resolve in layers, as the backend sound packs define them: first
+the map's override, then the map's selected game pack, then the default
+pack. Tribes: Ascend is split the same way, so you build two things.
+
+1. **Game pack, once per game.** It reads every shared `.u` and `.upk`
+   package in the client's `CookedPC` folder: weapons, armor, jetpack, flag,
+   announcer and shared music.
+
+   ```powershell
+   py -3.13 tools/community_map_editor/sound_packs.py pack "D:\TA\TribesGame\CookedPC" "D:\SoundPacks" --set TA --ffmpeg "C:\Tools\ffmpeg.exe"
+   ```
+
+2. **Map override, once per map.** It reads the map's levels and keeps
+   only sounds the game pack lacks, such as environment groups and map
+   music, plus every placed ambient sound. Each placement is given in
+   TRIBES 3 centimetres. It refers either to an event id or to its own
+   inline wave slots and radii.
+
+   ```powershell
+   py -3.13 tools/community_map_editor/sound_packs.py map "D:\SoundPacks\TA\pack.json" "D:\SoundPacks" TartarusTA2026 "...\Maps\Tartarus\TrCTF-Tartarus.fmap" "...\Maps\Tartarus\Tartarus_Ter.fmap" "...\Maps\Tartarus\Tartarus_Sound.fmap"
+   ```
+
+   Use `--units-per-metre` to match the draft's import scale. It defaults
+   to the Ascend import preset.
+
+Each wave keeps its original `.ogg` and gets a 16-bit PCM `.wav` for
+Unreal import (`SW_<Name>`). Folders follow the source
+`Package\Group\Name`. Event ids are sound cue paths, and each event's
+category comes from its `AUD_<CATEGORY>_` package prefix. `pack.json` or
+`override.json` records the sources, the decoder, every event's node graph
+and anything that could not be read. `SHA256SUMS.txt` covers every file.
+
+Decoding needs `ffmpeg` with Vorbis support. Set it with `--ffmpeg` or
+`T3_MAP_TOOL_FFMPEG`, put it on `PATH`, or install the optional `soundfile`
+package. Keep the client files and the extracted audio out of Git.
 
 ## Inspect a legacy Unreal map export
 
@@ -1188,7 +1330,49 @@ of the same type stay in review.
 
 ### Add a collision perimeter
 
+**Presets from the source game.** **Boundaries…** opens with settings that
+match how the source game treats its play area. Object Review's playable
+bounds row says which source fields were used and what was left out. The
+behaviour below comes from the stock Tribes 2 scripts (`base/scripts.vl2`),
+the Tribes 1.40 scripts (`base/scripts/server/game`), the Tribes: Vengeance
+scripts (`Gameplay.u`, `Movement.u`) and the Ascend map data.
+
+| Source | Play area | What the original does | Preset here |
+|---|---|---|---|
+| Tribes 2 | `MissionArea` rectangle, plus a soft `flightCeiling` faded over `flightCeilingRange` | Nothing is solid: players, vehicles and shots can cross. Every mode shows "You have left the mission area" with a beep. **CTF:** a carrier who leaves loses the flag at once; it is thrown toward its home stand and the 45 s return timer starts. A player who takes the flag while outside loses it after 3 s. No damage. **Deathmatch, Rabbit (rabbit only), Bounty, Defend and Destroy:** alerts at 1, 2 and 3 s, then 0.05 damage per second from 4 s until the player returns or dies (about 17 s for full-health Light, 25 s Medium, 30 s Heavy). **Hunters:** a player carrying more than one flag loses them every 3 s while outside. | Warn players on crossing, plus a flag-only limit 1 m inside the area that drops a carried flag. No solid walls. |
+| Tribes 1 | `MissionCenterPos` rectangle; no flight ceiling | Nothing is solid. Leaving shows "You have left the mission area" and plays an alert at 0, 1.5 and 3 s. **CTF and other objective missions:** if the carrier is still outside at 4.5 s, the flag returns straight to its base. A flag can't be picked up from outside. **Deathmatch:** the same alerts, then 0.05 damage per second from 4 s until the player returns or dies. | Warn players on crossing, plus a flag-only limit 1 m inside the area with a 5 s return timer (4.5 s rounded up). No solid walls. |
+| Tribes: Ascend | Four thin `BlockingVolume` walls, usually behind a force field, a cap volume above, `WorldInfo` `KillZ` and `StallZ` | The walls and cap block players. Jetpacks stall above `StallZ`. Falling below `KillZ` kills. | Solid walls on the box with the ceiling at the cap |
+| Tribes: Vengeance | One `Movement.BoundaryVolume` per map (a 3D volume, so its top and bottom are the ceiling and floor). It can be switched on or off, and has `DampingScale` and `FrictionScale` for native physics damping at the edge. | There's no warning or grace time. The server kills any player outside the volume at once, destroys any vehicle outside it, and returns any flag lying outside it to base. A carried flag returns when its carrier dies outside. | None yet: the import doesn't read the volume (Tribes3MapTool#17). Add walls or a flag limit by hand in **Boundaries…**. |
+
+The presets also set a flight ceiling from Tribes 2's `flightCeiling` or
+Ascend's `StallZ`, and a kill floor from Ascend's `KillZ` or the bottom of
+Vengeance's volume (see **Kill floor** and **Flight ceiling** below). Hosts
+apply them once they support boundary mutators (T3BackEndServer#112).
+Grace-time damage, Vengeance's instant kill and destroying vehicles are
+lobby boundary mutators rather than map settings, so the review lists them
+without presetting them. Change any preset in **Boundaries…** before
+**Create Unreal draft**.
+
 When the intake has one valid mission area, open **Boundaries…** before creating the Unreal draft. Enable **Add solid side walls** to enclose the playable rectangle. Set the optional ceiling in metres above the highest imported terrain and the optional floor in metres below the lowest. The default puts the ceiling 2,000 metres up and leaves the bottom open. With either cap disabled, the side walls still extend to the corresponding default height or depth.
+
+Two more **Boundaries…** settings work without walls. Each places hidden,
+non-colliding TargetPoints that hosts with boundary support read
+(T3BackEndServer#112):
+- **Kill floor, metres below lowest terrain** places `T3MissionKillFloor`.
+  Hosts kill players who fall below it, like the source game's `KillZ`.
+  Every flag and spawn must be at least a metre above it.
+- **Flight ceiling, m above lowest terrain**, with an optional **fade
+  over** band, places `T3MissionFlightCeiling` and, with a band,
+  `T3MissionFlightCeilingFade`. Climbing fades through the band and stops
+  at the ceiling, like Tribes 2's `flightCeiling` and `flightCeilingRange`
+  or Ascend's `StallZ`. It fences nothing off, so flags and spawns may sit
+  above it.
+
+Imports fill these settings in when the source has them:
+- **Tribes 2:** a flight ceiling from the MissionArea.
+- **Tribes: Ascend:** a kill floor from `KillZ` and a flight ceiling from
+  `StallZ`.
+- **Tribes: Vengeance:** a kill floor at the bottom of the BoundaryVolume.
 
 For a custom shape, enable **Use a solid polygon** and select **Draw solid polygon…**. Draw the corners in order. The minimap shows the solid outline in cyan. Any enabled floor and ceiling follow the polygon, including concave corners. If the walls block Pawns, keep the whole flag-only limit inside them.
 

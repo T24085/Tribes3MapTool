@@ -12,15 +12,19 @@ import re
 from ascend_materials import placed_materials as ascend_placed_materials, resolve_material as resolve_ascend_material
 from ascend_static_mesh import read_placed_meshes as read_ascend_meshes
 from ascend_texture_cache import AscendTextureCache
+from remastered_textures import RemasteredTextures, validate_folder as validate_remaster_folder
 from intake_contract import (ASCEND_BASE_MATERIAL_VERSION, ASCEND_VERTEX_ATTRIBUTES_VERSION, MAX_INTAKE_INTERIORS,
                              MAX_INTAKE_INTERIOR_BYTES,
                              NATIVE_ENVIRONMENT_VERSION,
-                             NATIVE_LOCAL_LIGHTS_VERSION, PLAYABLE_BOUNDS,
+                             NATIVE_LOCAL_LIGHTS_VERSION, PLAYABLE_BOUNDS, BOUNDARY_RECIPE,
                              UNREAL_READER, UNREAL_SCENE, VENGEANCE_LOCAL_LIGHTS_VERSION, VENGEANCE_VERTEX_ATTRIBUTES_VERSION,
                              bounded, finite, validate_minimap)
 from interior_geometry import MAX_GEOMETRY_BYTES, NATIVE_VERTEX_FIELDS
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
+from ascend_bounds import boundary_recipe, derive_play_box, describe as describe_bounds, read_source_bounds
+from vengeance_bounds import (boundary_recipe as vengeance_boundary_recipe, describe as describe_vengeance_bounds,
+                              play_area as vengeance_play_area, read_boundary as read_vengeance_boundary)
 from source_profiles import (ASCEND_BSP_INTAKE_VERSION, ASCEND_CONVEX_COLLISION_VERSION, ASCEND_TERRAIN_PAINT_VERSION,
                              ASCEND_MESH_INTAKE_VERSION, ASCEND_MODEL_ART_VERSION,
                              ASCEND_PLACEMENT_ART_VERSION,
@@ -37,7 +41,7 @@ from source_profiles import (ASCEND_BSP_INTAKE_VERSION, ASCEND_CONVEX_COLLISION_
 from t1_reader import load_heightmap
 from t2_reader import publish_intake
 from terrain_grid import CELLS
-from unreal_binary_scene import actor_scene
+from unreal_binary_scene import MAX_MERGED_LEVELS, actor_scene, read_level_scenes
 from unreal_legacy_reader import attributes, descendants, read_unreal_export
 from unreal_native_terrain import decode_terrain
 from unreal_native_environment import read_environment
@@ -220,7 +224,7 @@ def project_rows(scene, markers, heightmap, *, placement_components=None):
                 row.update(conversion_class="unrealmeshactor", model_reference="unrealmesh:" + model[0]["source"].casefold(),
                            transform=dict(position_cm=[v * 100 for v in transform["position_m"]],
                                           rotation_xyzw=transform["rotation_xyzw"], scale=transform["scale"]))
-                if placement_components is not None:
+                if placement_components is not None and not actor.get("merged_level"):
                     components = [nodes[part["line"]] for part in actor["components"]
                                   if attributes(part["declaration"]).get("class", "").rsplit(".", 1)[-1].casefold()
                                   == "staticmeshcomponent"]
@@ -270,7 +274,17 @@ def validate_unreal_settings(settings):
             or type(settings["format"]) is not int or settings["format"] != 1
             or not isinstance(settings["game"], str) or settings["game"] not in UNREAL_PROFILES):
         raise ValueError("Invalid Unreal scene import settings.")
-    optional = settings.keys() - REQUIRED - {"bounds_m", "asset_packages"}
+    optional = settings.keys() - REQUIRED - {"bounds_m", "asset_packages", "levels", "remastered_textures"}
+    if "remastered_textures" in settings:
+        if settings["game"] != "ascend":
+            raise ValueError("Remastered textures are supported for Tribes: Ascend imports.")
+        validate_remaster_folder(settings["remastered_textures"])
+    levels = settings.get("levels", [])
+    if levels and (settings["game"] != "ascend" or not isinstance(levels, list) or len(levels) > MAX_MERGED_LEVELS
+                   or not all(isinstance(name, str) and re.fullmatch(r"[\w.-]{1,180}\.fmap", name, re.I)
+                              for name in levels)
+                   or len({name.casefold() for name in levels}) != len(levels)):
+        raise ValueError(f"List up to {MAX_MERGED_LEVELS} unique Ascend .fmap levels beside the world map.")
     packages = settings.get("asset_packages", [])
     extension = "upk" if settings["game"] == "ascend" else "pkg"
     if (not isinstance(packages, list) or len(packages) > 32
@@ -289,6 +303,36 @@ def validate_unreal_settings(settings):
     return settings
 
 
+SPLIT_GAMEPLAY = re.compile(r"(Tr\w+)-([\w.-]+)", re.I)
+
+
+def split_level_set(path):
+    """Return (world, levels) for an Ascend map cooked as separate gameplay, _Ter and _Sound levels.
+
+    Opening the gameplay level (for example TrCTF-Tartarus.fmap) selects its world level as the
+    import source (a variant's own TrTeamRabbit-Tartarus_Ter.fmap first, else Tartarus_Ter.fmap)
+    and merges the gameplay level and any matching _Sound level. Other files import alone.
+    """
+    path = Path(path)
+    match = SPLIT_GAMEPLAY.fullmatch(path.stem)
+    if not match or path.suffix.casefold() != ".fmap":
+        return path, []
+
+    def sibling(*stems):
+        for stem in stems:
+            candidate = path.with_name(f"{stem}.fmap")
+            if candidate.is_file() and not candidate.is_symlink():
+                return candidate
+        return None
+
+    base = match.group(2)
+    world = sibling(f"{path.stem}_Ter", f"{base}_Ter")
+    if world is None:
+        return path, []
+    sound = sibling(f"{path.stem}_Sound", f"{path.stem}-Sound", f"{base}_Sound")
+    return world, [path, *([sound] if sound else [])]
+
+
 def companion_paths(source, names):
     source = source.resolve(strict=True)
     paths = {}
@@ -298,6 +342,20 @@ def companion_paths(source, names):
             raise ValueError("Companion packages must be separate files beside the source map.")
         paths[path.stem.casefold()] = path
     return paths
+
+
+def mark_boundary_sources(rows, play, tolerance_m=1.0):
+    """Explain the source volumes and edge meshes behind an imported out-of-bounds box (#12)."""
+    used = set(play["volumes"])
+    lines = [(axis, value) for axis in (0, 1) for value in (play["lower_m"][axis], play["upper_m"][axis])]
+    for row in rows:
+        if row["name"] in used and row["source_class"].endswith("BlockingVolume"):
+            row["reason"] = (row["reason"] + " · Used for the source out-of-bounds box.")[:1000]
+        elif "model_reference" in row and row.get("transform"):
+            position = [value / 100 for value in row["transform"]["position_cm"]]
+            if any(abs(position[axis] - value) <= tolerance_m for axis, value in lines):
+                row["reason"] = (row["reason"] + " · Sits on the source boundary line, likely its visible force "
+                                 "field. Keep it as decoration or remove it.")[:1000]
 
 
 def convert_unreal(source, output, metadata=None, *, native_settings=None):
@@ -328,6 +386,11 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
     if names and not binary:
         raise ValueError("Companion packages require a binary map source.")
     companions = companion_paths(source, names) if names else {}
+    level_names = settings.get("levels", [])
+    if level_names and not binary:
+        raise ValueError("Merged levels require a binary Ascend world map.")
+    level_paths = [path for name in level_names
+                   for path in companion_paths(source, [name]).values()]
     artwork = None
     if binary:
         if game == "vengeance":
@@ -335,7 +398,10 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
             read_meshes = partial(read_vengeance_meshes, artwork=artwork)
         else:
             rtc = AscendTextureCache(source.resolve(strict=True).parent)
-            artwork = PackageMaterials(companions, partial(resolve_ascend_material, rtc=rtc), "Ascend")
+            folder = settings.get("remastered_textures")
+            remaster = RemasteredTextures(folder) if folder else None
+            artwork = PackageMaterials(companions, partial(resolve_ascend_material, rtc=rtc, remaster=remaster),
+                                       "Ascend")
             collision_review = {}
             read_meshes = partial(read_ascend_meshes, artwork=artwork, collision_review=collision_review)
         with open_package(source, game) as (report, stream):
@@ -349,6 +415,9 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
                 if height_package:
                     paint.packages[height_package["name"]] = height_package
                 companion_receipts.extend(dict(receipt, origin=name) for name, receipt in sorted(paint.packages.items()))
+            if level_paths:
+                # Gameplay and sound levels join after every read that uses this package's bytes.
+                companion_receipts.extend(read_level_scenes(scene, level_paths, game, units))
             assignments = project_markers(scene, settings["teams"])
             references = {row["model_reference"] for row in project_rows(scene, assignments, settings.get("heightmap"))
                           if "model_reference" in row}
@@ -416,6 +485,29 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
         if not all(low <= start < end <= high for low, start, end, high in zip(bounds[0], clip[0], clip[1], bounds[1])):
             raise ValueError("Playable bounds must be within the exported terrain.")
         bounds = clip
+    source_play = source_limits = None
+    if game == "ascend" and binary and "bounds_m" not in settings:
+        # Use the map's own out-of-bounds walls for the play area and Boundaries walls (#12).
+        markers_m = [[value / 100 for value in marker["position_cm"]]
+                     for marker in project_markers(scene, settings["teams"]).values()]
+        volumes, source_limits = read_source_bounds([source, *level_paths], units)
+        source_play = derive_play_box(volumes, markers_m)
+        if source_play:
+            clip = [[value * 100 for value in source_play["lower_m"]], [value * 100 for value in source_play["upper_m"]]]
+            if all(low <= start < end <= high for low, start, end, high in zip(bounds[0], clip[0], clip[1], bounds[1])):
+                bounds = clip
+            else:
+                source_play = None  # The source box reaches past the terrain; keep the terrain framing.
+    source_volume = None
+    if game == "vengeance" and binary and "bounds_m" not in settings:
+        # Use the map's BoundaryVolume for the play area and Boundaries walls (#17).
+        markers_m = [[value / 100 for value in marker["position_cm"]]
+                     for marker in project_markers(scene, settings["teams"]).values()]
+        volume, _ = read_vengeance_boundary(source, units)
+        area = vengeance_play_area(volume, bounds, markers_m) if volume else None
+        if area:
+            bounds, polygon, note = area
+            source_volume = (volume, polygon, note)
     minimap = framing(bounds)
     validate_minimap(minimap)
     markers = project_markers(scene, settings["teams"])
@@ -426,7 +518,24 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
         raise ValueError("A terrain actor cannot be assigned as a CTF marker.")
     placement_components = [] if binary and game == "ascend" else None
     rows = project_rows(scene, markers, settings.get("heightmap"), placement_components=placement_components)
-    next(row for row in rows if row["status"] == "boundary")["properties"][PLAYABLE_BOUNDS] = bounds
+    boundary = next(row for row in rows if row["status"] == "boundary")
+    boundary["properties"][PLAYABLE_BOUNDS] = bounds
+    if source_play:
+        from perimeter import terrain_elevations
+
+        boundary["reason"] = describe_bounds(source_play, source_limits)
+        boundary["properties"][BOUNDARY_RECIPE] = boundary_recipe(source_play, terrain_elevations(terrain),
+                                                                    source_limits)
+    if source_volume:
+        from perimeter import terrain_elevations
+
+        volume, polygon, note = source_volume
+        recipe = vengeance_boundary_recipe(volume, polygon, terrain_elevations(terrain))
+        boundary["properties"][BOUNDARY_RECIPE] = recipe
+        boundary["reason"] = describe_vengeance_bounds(volume, polygon, note, recipe)
+        for row in rows:
+            if row["name"] == volume["name"] and row["source_class"].endswith("BoundaryVolume"):
+                row["reason"] += " · Used for the playable bounds and Boundaries walls."
     interiors, files = {}, dict(paint.files)
     placed = {row["model_reference"] for row in rows if "model_reference" in row}
     mesh_docs = {reference: geometry for reference, geometry in mesh_docs.items() if reference in placed}
@@ -455,6 +564,8 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
                 row["reason"] += " · " + collision_review[reference]
         elif reference in mesh_issues:
             row["reason"] += " · " + mesh_issues[reference]
+    if source_play:
+        mark_boundary_sources(rows, source_play)
     placement_models = {}
     if placement_components:
         with open_package(source, game) as (report, stream):

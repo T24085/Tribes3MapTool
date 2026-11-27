@@ -10,7 +10,9 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 import zipfile
 
 from conversion_rules import checksum, sha256_file, write
+from game_workflows import game_choices, open_filetypes, select_game, steps_text, window_title
 from boundary_polygon_window import show_polygon
+from busy import run_busy
 from intake_contract import load_intake, load_mission_audio, playable_bounds
 from intake_exchange import export_private_intake
 from map_pipeline import PipelineRun, pipeline_config
@@ -40,7 +42,7 @@ from t2_reader import convert, members, unpack_intake
 from terrain_layers import FALLBACK, PALETTE_SURFACES, layer_choices
 from terrain_art import available_art
 from tk_runtime import configure_tk
-from unreal_legacy_intake import convert_unreal, read_unreal_settings
+from unreal_legacy_intake import convert_unreal, read_unreal_settings, split_level_set
 from unreal_package_reader import GAMES as NATIVE_PACKAGE_TYPES, inspect_package, write_report as write_package_report
 
 
@@ -219,8 +221,34 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         entry.insert(0, str(initial if saved is None else saved))
         entry.grid(row=index, column=1, sticky="w")
         warning_fields[key] = enabled, toggle, entry
+    kill_row = ttk.Frame(body)
+    kill_row.grid(row=14, columnspan=2, sticky="ew", pady=(8, 0))
+    ttk.Label(kill_row, text="Kill floor, metres below lowest terrain").pack(side="left")
+    kill_floor = ttk.Entry(kill_row, width=8)
+    if selection.get("kill_floor_m") is not None:
+        kill_floor.insert(0, f"{selection['kill_floor_m']:g}")
+    kill_floor.pack(side="left", padx=(8, 0))
+    ttk.Label(body, text="Leave blank for no kill floor. Players below it die (the source game's KillZ).",
+              wraplength=320).grid(row=15, columnspan=2, sticky="w")
+    flight_row = ttk.Frame(body)
+    flight_row.grid(row=16, columnspan=2, sticky="ew", pady=(8, 0))
+    ttk.Label(flight_row, text="Flight ceiling, m above lowest terrain").pack(side="left")
+    flight_height = ttk.Entry(flight_row, width=8)
+    flight_height.pack(side="left", padx=(8, 0))
+    ttk.Label(flight_row, text="fade over").pack(side="left", padx=(8, 0))
+    flight_fade = ttk.Entry(flight_row, width=6)
+    flight_fade.pack(side="left", padx=(6, 0))
+    ttk.Label(flight_row, text="m").pack(side="left", padx=(4, 0))
+    previous_ceiling = selection.get("flight_ceiling") or {}
+    if previous_ceiling.get("height_m") is not None:
+        flight_height.insert(0, f"{previous_ceiling['height_m']:g}")
+    if previous_ceiling.get("fade_m") is not None:
+        flight_fade.insert(0, f"{previous_ceiling['fade_m']:g}")
+    ttk.Label(body, text="Leave blank for no flight ceiling. Climbing fades through the band and stops at the "
+                         "ceiling (Tribes 2 flightCeiling, Ascend StallZ).", wraplength=320).grid(
+        row=17, columnspan=2, sticky="w")
     message = ttk.Label(body, wraplength=320)
-    message.grid(row=14, columnspan=2, sticky="w", pady=(6, 0))
+    message.grid(row=18, columnspan=2, sticky="w", pady=(6, 0))
 
     def distance(entry, label):
         try:
@@ -241,6 +269,14 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
                     key: distance(field, "the flag-only height limit") if field.get().strip() else None
                     for key, field in flag_height_fields.items()
                 }
+            if kill_floor.get().strip():
+                options["kill_floor_m"] = distance(kill_floor, "the kill floor depth")
+            if flight_height.get().strip():
+                options["flight_ceiling"] = {"height_m": distance(flight_height, "the flight ceiling height")}
+                if flight_fade.get().strip():
+                    options["flight_ceiling"]["fade_m"] = distance(flight_fade, "the flight ceiling fade band")
+            elif flight_fade.get().strip():
+                raise ValueError("Enter a flight ceiling height before its fade band.")
             if flag_timer.get().strip():
                 try:
                     options["flag_return_delay_s"] = int(flag_timer.get())
@@ -276,7 +312,7 @@ def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
         window.destroy()
 
     buttons = ttk.Frame(body)
-    buttons.grid(row=15, columnspan=2, sticky="ew", pady=(8, 0))
+    buttons.grid(row=19, columnspan=2, sticky="ew", pady=(8, 0))
     ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side="left")
     ttk.Button(buttons, text="Apply", command=save).pack(side="right")
     window.bind("<Escape>", lambda _event: window.destroy())
@@ -515,10 +551,10 @@ def show_source_library(parent, library, drafts, open_intake):
 
 
 def show_package_inventory(parent, path, import_draft):
-    report = inspect_package(path)
+    report = run_busy(parent, f"Reading package inventory of {path.name}…", lambda: inspect_package(path))
     summary = report["summary"]
     window = tk.Toplevel(parent)
-    window.title("Native map package inventory")
+    window.title(window_title("inventory", "Native map package inventory"))
     window.geometry("840x520")
     top = ttk.Frame(window, padding=12)
     top.pack(fill="x")
@@ -584,15 +620,42 @@ def show_package_inventory(parent, path, import_draft):
     search.focus_set()
 
 
-def run(library, meshes=(), drafts=()):
+def run(library, meshes=(), drafts=(), game=None):
     # A desktop launcher can inherit Tcl paths for a different Python installation.
     configure_tk()
     catalog = load_catalog(library)
     root = tk.Tk()
     mesh_paths = set(meshes)
-    root.title("TRIBES Map Editor · Import mission")
-    root.geometry("1110x640")
+    root.title("TRIBES Map Editor · Convert a map")
+    root.geometry("1110x720")
     root.minsize(900, 520)
+    # Game-first workflow (#8): choose the source game, then follow its numbered steps.
+    start = ttk.Frame(root, padding=(10, 10, 10, 0))
+    start.pack(fill="x")
+    ttk.Label(start, text="Converting from").pack(side="left")
+    source_game = ttk.Combobox(start, state="readonly", values=game_choices(), width=34)
+    source_game.current(0)
+    source_game.pack(side="left", padx=(8, 0))
+    steps = tk.StringVar(value=steps_text(source_game.get()))
+    ttk.Label(root, textvariable=steps, justify="left", wraplength=1060).pack(anchor="w", padx=10, pady=(4, 0))
+    stage = {"current": "open"}
+
+    def show_stage(name=None):
+        """Number the window title after the chosen game's step for what is on screen (#8)."""
+        if name:
+            stage["current"] = name
+        root.title(window_title(stage["current"], "TRIBES Map Editor · Convert a map"))
+
+    def choose_game(_event=None):
+        select_game(source_game.get())
+        steps.set(steps_text(source_game.get()))
+        show_stage()
+
+    source_game.bind("<<ComboboxSelected>>", choose_game)
+    if game in game_choices():
+        # Opened from a game's own menu: start on that game and its steps.
+        source_game.set(game)
+        choose_game()
     bar = ttk.Frame(root, padding=10)
     bar.pack(fill="x")
     notice = tk.StringVar(
@@ -780,6 +843,7 @@ def run(library, meshes=(), drafts=()):
 
     def inspect(path):
         nonlocal catalog, object_review, table
+        show_stage("review")
         header, terrain, rows = load_intake(path)
         if not state.get("manifest"):
             boundary_options.clear()
@@ -878,6 +942,8 @@ def run(library, meshes=(), drafts=()):
             notice.set("Decoding mission and resolving referenced assets…")
             root.update_idletasks()
 
+            member = choices.get() or None  # read Tk state here; decoding runs on a worker thread
+
             def decode_pipeline(terrain_source):
                 path = None
                 pipeline = PipelineRun(pipeline_config(library, source_profile=source_profile),
@@ -886,13 +952,13 @@ def run(library, meshes=(), drafts=()):
                 def decode_source(_):
                     nonlocal path
                     if source_profile == T1:
-                        path = convert_legacy(src, library, terrain_source, mission_member=choices.get() or None,
+                        path = convert_legacy(src, library, terrain_source, mission_member=member,
                                               artwork=state.get("artwork_source"), interiors=state.get("interior_source"))
                     elif source_profile in UNREAL_PROFILES.values():
                         path = convert_unreal(src, library, state["unreal_metadata"],
                                               native_settings=state.get("unreal_native_settings"))
                     else:
-                        path = convert(src, library, choices.get() or None, terrain_source,
+                        path = convert(src, library, member, terrain_source,
                                        dif_decoder=dif_decoder, dif_assets=dif_assets,
                                        dts_decoder=dts_decoder, dts_assets=dts_assets, sky_assets=sky_assets,
                                        audio_assets=audio_assets)
@@ -901,7 +967,8 @@ def run(library, meshes=(), drafts=()):
                 return path
 
             try:
-                path = decode_pipeline(state.get("terrain_source"))
+                path = run_busy(root, f"Converting {src.name}. Large maps can take a few minutes…",
+                                lambda: decode_pipeline(state.get("terrain_source")))
             except FileNotFoundError as exc:
                 if source_profile in UNREAL_PROFILES.values():
                     raise
@@ -913,7 +980,7 @@ def run(library, meshes=(), drafts=()):
                 if not name:
                     return
                 state["terrain_source"] = Path(name)
-                path = decode_pipeline(Path(name))
+                path = run_busy(root, f"Converting {src.name}…", lambda: decode_pipeline(Path(name)))
             inspect(path)
             try:
                 record_source(library, path, src, state.get("terrain_source"))
@@ -926,6 +993,7 @@ def run(library, meshes=(), drafts=()):
             messagebox.showerror("Map conversion", str(exc), parent=root)
 
     def clear():
+        show_stage("open")
         state.clear()
         boundary_options.clear()
         boundary_options.update(DEFAULT_BOUNDARY_OPTIONS)
@@ -951,7 +1019,11 @@ def run(library, meshes=(), drafts=()):
         metadata = path.with_suffix(".import.json")
         native_settings = None
         if not metadata.is_file() and path.suffix.casefold() in NATIVE_PACKAGE_TYPES:
-            selection = show_native_import(parent, path)
+            # A split Ascend map imports from its world (_Ter) level and merges the gameplay
+            # and sound levels, so opening TrCTF-Tartarus.fmap brings in the whole map.
+            path, levels = split_level_set(path)
+            metadata = path.with_suffix(".import.json")
+            selection = show_native_import(parent, path, levels)
             if selection is None:
                 return False
             if isinstance(selection, Path):
@@ -978,7 +1050,7 @@ def run(library, meshes=(), drafts=()):
     def open_file():
         name = filedialog.askopenfilename(
             parent=root,
-            filetypes=[("Mission, package or intake", "*.mis *.vl2 *.vol *.t3d *.tvm *.pkg *.fmap *.udk *.json *.zip")],
+            filetypes=open_filetypes(source_game.get()),
         )
         if not name:
             return
@@ -1257,7 +1329,8 @@ def run(library, meshes=(), drafts=()):
         notice.set("Exporting and verifying the private intake…")
         root.update_idletasks()
         try:
-            export_private_intake(state["manifest"], path)
+            run_busy(root, "Exporting and verifying the private intake…",
+                     lambda: export_private_intake(state["manifest"], path))
         except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
             notice.set("Private intake export failed.")
             messagebox.showerror("Export private intake", str(exc), parent=root)
@@ -1274,7 +1347,7 @@ def run(library, meshes=(), drafts=()):
         notice.set("Exporting private GLB mesh assets…")
         root.update_idletasks()
         try:
-            export_meshes(state["manifest"], path)
+            run_busy(root, "Exporting GLB mesh assets…", lambda: export_meshes(state["manifest"], path))
         except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
             notice.set("GLB mesh export failed.")
             messagebox.showerror("Export GLB meshes", str(exc), parent=root)
@@ -1319,7 +1392,8 @@ def run(library, meshes=(), drafts=()):
 
     bind_review()
     asset_options = ttk.Frame(root)
-    asset_options.pack(fill="x", padx=10, pady=(0, 6))
+    # Bottom bars claim their space before the review table, so a short window shrinks the table, not the buttons.
+    asset_options.pack(side="bottom", fill="x", padx=10, pady=(0, 6), before=review_area)
     mesh_export_button = ttk.Button(asset_options, text="Export GLB meshes…", state="disabled", command=save_mesh_assets)
     mesh_export_button.pack(side="left")
     mesh_button = ttk.Button(asset_options, text="Map selected mesh…", state="disabled", command=map_mesh)
@@ -1339,7 +1413,7 @@ def run(library, meshes=(), drafts=()):
     terrain_button.pack(side="right", padx=(0, 8))
     artwork_button = ttk.Button(asset_options, text="Source artwork…", command=choose_terrain_art)
     actions = ttk.Frame(root)
-    actions.pack(fill="x", padx=10, pady=(0, 10))
+    actions.pack(side="bottom", fill="x", padx=10, pady=(0, 10), before=asset_options)
     preview = ttk.Button(
         actions, text="Preview minimap", state="disabled",
         command=preview_map,

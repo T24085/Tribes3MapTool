@@ -38,7 +38,13 @@ DEFAULT_BOUNDARY_OPTIONS = {"perimeter": False, "flag_inset_m": None}
 BOUNDARY_OPTIONS = DEFAULT_BOUNDARY_OPTIONS.keys() | {
     "wall_limits", "flag_polygon_m", "wall_polygon_m", "wall_block_channels", "wall_visual",
     "warn_players", "warning_polygon_m", "warning_limits", "warning_audience", "flag_limits", "flag_return_delay_s",
+    "kill_floor_m", "flight_ceiling",
 }
+# Hosts kill players below a TargetPoint with this tag (T3BackEndServer#112, Tribes3MapTool#20).
+KILL_FLOOR = "T3MissionKillFloor"
+# Hosts stop climbing at this height, fading over the band from the optional lower marker (#22).
+FLIGHT_CEILING = "T3MissionFlightCeiling"
+FLIGHT_FADE = "T3MissionFlightCeilingFade"
 
 
 class PolygonWalls(NamedTuple):
@@ -187,7 +193,11 @@ def warning_surface(bounds, terrain, walls, polygon, limits, *, elevation_cm=Non
 def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limits=None, flag_polygon_m=None,
                     wall_polygon_m=None, wall_block_channels=None, wall_visual=None, warn_players=False,
                     warning_polygon_m=None, warning_limits=None, warning_audience=None, flag_limits=None,
-                    flag_return_delay_s=None):
+                    flag_return_delay_s=None, kill_floor_m=None, flight_ceiling=None):
+    if kill_floor_m is not None:
+        kill_floor_height(header, terrain, rows, kill_floor_m)
+    if flight_ceiling is not None:
+        flight_ceiling_heights(header, terrain, rows, flight_ceiling)
     if type(perimeter) is not bool:
         raise ValueError("Choose whether to add solid side walls.")
     if type(warn_players) is not bool:
@@ -237,6 +247,81 @@ def plan_boundaries(header, terrain, rows, *, perimeter, flag_inset_m, wall_limi
     warning = warning_surface(bounds, terrain, walls, warning_polygon_m, warning_limits,
                               elevation_cm=elevation_cm) if warn_players else None
     return walls, limit, warning
+
+
+def kill_floor_height(header, terrain, rows, kill_floor_m):
+    """The kill floor's height in draft centimetres: ``kill_floor_m`` below the lowest terrain.
+
+    Players below it die (the source game's KillZ). Every CTF marker must be at least a metre above it.
+    """
+    if type(kill_floor_m) not in (int, float) or not 0 <= kill_floor_m <= 10_000 or kill_floor_m != kill_floor_m:
+        raise ValueError("Enter a kill floor from 0 to 10,000 metres below the lowest terrain.")
+    recipe = read_boundary_recipe(rows)
+    low = (recipe["elevation_cm"] if recipe else terrain_elevations(terrain))[0]
+    height = low - kill_floor_m * 100
+    for row in rows:
+        if row["status"] == "marker" and row["position_cm"][2] < height + CLEARANCE:
+            raise ValueError(f"{row['name'] or row['kind']} must be at least one metre above the kill floor.")
+    return height
+
+
+def flight_ceiling_heights(header, terrain, rows, ceiling):
+    """(ceiling, fade or None) in draft centimetres from {"height_m": above lowest terrain, "fade_m": band}.
+
+    Climbing fades through the band below the ceiling and stops at it (Tribes 2 flightCeiling over
+    flightCeilingRange, Ascend StallZ). It fences nothing off, so markers may sit above it, as some
+    Tribes 2 spawns do; players there simply cannot climb higher.
+    """
+    if not isinstance(ceiling, dict) or not {"height_m"} <= ceiling.keys() <= {"height_m", "fade_m"}:
+        raise ValueError("Enter the flight ceiling as a height and an optional fade band.")
+    height, fade = ceiling["height_m"], ceiling.get("fade_m")
+    for value, label, limit in ((height, "flight ceiling height", 20_000), (fade, "flight ceiling fade band", 10_000)):
+        if value is not None and (type(value) not in (int, float) or value != value or not 0 < value <= limit):
+            raise ValueError(f"Enter the {label} as a positive distance up to {limit:,} metres.")
+    if fade is not None and fade >= height:
+        raise ValueError("The flight ceiling fade band must be smaller than its height.")
+    recipe = read_boundary_recipe(rows)
+    low = (recipe["elevation_cm"] if recipe else terrain_elevations(terrain))[0]
+    top = low + height * 100
+    return top, (top - fade * 100 if fade is not None else None)
+
+
+def place_flight_ceiling(actors, bounds, heights):
+    """Place the hidden TargetPoints that tell hosts where climbing fades and stops."""
+    import unreal
+
+    (x0, y0), (x1, y1) = bounds
+    top, fade = heights
+    placed = []
+    for label, tag, z in (("Flight ceiling", FLIGHT_CEILING, top), ("Flight ceiling fade", FLIGHT_FADE, fade)):
+        if z is None:
+            continue
+        point = actors.spawn_actor_from_class(unreal.TargetPoint, unreal.Vector((x0 + x1) / 2, (y0 + y1) / 2, z))
+        if not point:
+            raise RuntimeError("Could not create the flight ceiling marker.")
+        point.set_actor_label(label)
+        point.set_folder_path("TRIBES CTF/Mission perimeter")
+        point.set_editor_property("tags", [unreal.Name(tag)])
+        point.set_actor_enable_collision(False)
+        point.set_actor_hidden_in_game(True)
+        placed.append(point)
+    return placed
+
+
+def place_kill_floor(actors, bounds, height):
+    """Place the hidden, non-colliding TargetPoint that tells hosts where the kill floor is."""
+    import unreal
+
+    (x0, y0), (x1, y1) = bounds
+    point = actors.spawn_actor_from_class(unreal.TargetPoint, unreal.Vector((x0 + x1) / 2, (y0 + y1) / 2, height))
+    if not point:
+        raise RuntimeError("Could not create the kill floor marker.")
+    point.set_actor_label("Kill floor")
+    point.set_folder_path("TRIBES CTF/Mission perimeter")
+    point.set_editor_property("tags", [unreal.Name(KILL_FLOOR)])
+    point.set_actor_enable_collision(False)
+    point.set_actor_hidden_in_game(True)
+    return point
 
 
 def flag_bounds(bounds, inset_m, flags):

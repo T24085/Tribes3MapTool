@@ -3,21 +3,46 @@
 from contextlib import ExitStack, contextmanager
 from hashlib import sha256
 from math import isfinite
+import re
 import zlib
 
 from interior_geometry import material_slots
 from model_textures import MAX_SIDE, placement_key
 from unreal_binary_scene import property_tag, read_properties
-from unreal_package_reader import Cursor, open_package, table_name
+from unreal_package_reader import Cursor, decode_chunk, open_package, table_name
 from vengeance_terrain_layers import COLOR_FORMATS, texture_png
 
 
 COLOR_PARAMETERS = {"basecolor", "basetexture", "diffuse", "diffusecolor", "diffusetexture", "albedo"}
+# Base-color parameter names Tribes: Ascend materials use: Dif, DIF1, DIF01, Diffuse2 and the names above.
+COLOR_PARAMETER = re.compile(r"(?:dif|diffuse|albedo|basecolor|basetexture|diffusecolor|diffusetexture)\d{0,2}")
 PIXEL_FORMATS = {"PF_A8R8G8B8": 5, "PF_B8G8R8A8": 5, "PF_DXT1": 3, "PF_DXT3": 7, "PF_DXT5": 8}
-EXTERNAL_OR_UNUSED = 0x21
+# UE3 bulk data flags.
+BULK_SEPARATE_FILE = 0x01  # Stored in a texture file cache (.tfc) instead of the package.
+BULK_ZLIB = 0x02
+BULK_LZO = 0x10
+BULK_UNUSED = 0x20
+BULK_PAYLOAD_ONLY = 0x40
 TEXTURE_SAMPLE = "materialexpressiontexturesample"
 TEXTURE_PARAMETER = "materialexpressiontexturesampleparameter2d"
 MASK_FIELDS = {"mask", "maskr", "maskg", "maskb", "maska", "gcc64_padding"}
+# Shader graph nodes that carry the base color through to DiffuseColor, with the inputs that hold it.
+# LinearInterpolate's B input is a blended layer, so it ranks below A.
+COLOR_PATH = {
+    "materialexpressionmultiply": ("a", "b"),
+    "materialexpressionadd": ("a", "b"),
+    "materialexpressionlinearinterpolate": ("a", "b"),
+    "materialexpressiondesaturation": ("input",),
+    "materialexpressionconstantclamp": ("input",),
+    "materialexpressionclamp": ("input",),
+    "materialexpressionpower": ("base",),
+}
+SECONDARY_INPUTS = {("materialexpressionlinearinterpolate", "b")}
+# Layer and mask names that are not the surface's own base color.
+DETAIL_WORDS = ("detail", "overlay", "moss", "dirt", "grime", "mask", "msk", "noise", "emi", "nrm", "spec")
+BASE_WORDS = ("dif", "diffuse", "albedo", "basecolor", "_d")
+MAX_GRAPH_NODES = 64
+APPROXIMATE = "Tints, blended layers and custom tiling from the Ascend shader were not applied."
 
 
 class MissingArtPackage(ValueError):
@@ -215,6 +240,83 @@ def direct_sample(tags, report, stream, objects, open_art):
     raise ValueError("Ascend diffuse input is not a direct RGB texture sample or texture multiplied by vertex RGB.")
 
 
+def color_parameter(name):
+    return bool(COLOR_PARAMETER.fullmatch(name.casefold().replace("_", "").replace(" ", "")))
+
+
+def graph_samples(expression, owner, stream, objects, open_art):
+    """Find the texture samples on DiffuseColor's color path, for shaders with tints or blended layers.
+
+    Walks color-carrying nodes (multiply, add, lerp, desaturate, clamp, power) and returns
+    (sample scope, depth, secondary) for each RGB texture sample. Single-channel samples are masks,
+    and cube or reflection-vector samples are reflections, so neither is a base color.
+    """
+    found, pending, visited = [], [(expression, owner, stream, objects, 0, False)], 0
+    while pending:
+        node, owner, stream, objects, depth, secondary = pending.pop(0)
+        visited += 1
+        if visited > MAX_GRAPH_NODES:
+            raise ValueError("Ascend diffuse graph is too large to resolve.")
+        node, owner, stream, objects = open_art(node, owner, stream, objects)
+        klass = node["class_name"].casefold()
+        if klass in (TEXTURE_SAMPLE, TEXTURE_PARAMETER):
+            found.append(((node, owner, stream, objects), depth, secondary))
+            continue
+        inputs = COLOR_PATH.get(klass)
+        if not inputs:
+            continue  # Constants, parameters, vertex color and unknown nodes add no texture.
+        tags, _ = properties(node, owner, stream, objects)
+        for name in inputs:
+            tag = typed_tag(tags, name, "StructProperty", "expressioninput")
+            if tag is None:
+                continue
+            try:
+                fields = material_input(tag, owner, stream)
+            except ValueError:
+                continue
+            child = objects.get(fields.get("expression", 0))
+            channels = tuple(fields.get(key, 0) for key in ("maskr", "maskg", "maskb", "maska"))
+            if not child or fields.get("mask") and channels != (1, 1, 1, 0):
+                continue  # Masked to a single channel: a blend weight, not a color.
+            pending.append((child, owner, stream, objects, depth + 1,
+                            secondary or (klass, name) in SECONDARY_INPUTS))
+    return found
+
+
+def sample_parameter(sample):
+    node, owner, stream, objects = sample
+    if node["class_name"].casefold() != TEXTURE_PARAMETER:
+        return None
+    tags, _ = properties(node, owner, stream, objects)
+    parameter = typed_tag(tags, "parametername", "NameProperty")
+    if not parameter or parameter["size"] != 8:
+        return None
+    return table_name(tag_data(stream, parameter), owner["names"], True)
+
+
+def graph_texture(expression, owner, stream, objects, open_art, overrides):
+    """Pick the one base-color Texture2D on a shader graph's color path, or explain why not."""
+    ranked = {}
+    for sample, depth, secondary in graph_samples(expression, owner, stream, objects, open_art):
+        try:
+            texture, uv, custom = sample_texture(*sample, open_art, overrides, allow_custom_uv=True)
+        except ValueError:
+            continue  # Reflection, cube or otherwise unusable samples cannot be the base color.
+        label = texture[0]["object_path"].rsplit(".", 1)[-1]
+        words = (label + " " + (sample_parameter(sample) or "")).casefold()
+        rank = (any(word in words for word in DETAIL_WORDS), not any(word in words for word in BASE_WORDS),
+                secondary, custom, depth)
+        key = texture[0]["object_path"].casefold()
+        if key not in ranked or rank < ranked[key][0]:
+            ranked[key] = rank, texture, uv, label
+    if not ranked:
+        raise ValueError("Ascend diffuse graph has no RGB Texture2D sample on its color path.")
+    best = sorted(ranked.values(), key=lambda item: item[0])
+    if len(best) > 1 and best[0][0] == best[1][0]:
+        raise ValueError(f"Ascend base color is ambiguous between {best[0][3]} and {best[1][3]}.")
+    return best[0][1], best[0][2]
+
+
 def sample_coordinates(tags, owner, stream, objects, open_art):
     uv = typed_tag(tags, "coordinates", "StructProperty", "expressioninput")
     if uv is None:
@@ -254,24 +356,35 @@ def texture_scope(index, owner, stream, objects):
     return texture, owner, stream, objects
 
 
-def sample_texture(expression, owner, stream, objects, open_art, overrides):
+def sample_texture(expression, owner, stream, objects, open_art, overrides, *, allow_custom_uv=False):
+    """Return (texture scope, uv); with allow_custom_uv, (texture scope, uv, custom) and default tiling."""
     sample, owner, stream, objects = open_art(expression, owner, stream, objects)
     tags, _ = properties(sample, owner, stream, objects)
-    uv = sample_coordinates(tags, owner, stream, objects, open_art)
+    custom = False
+    try:
+        uv = sample_coordinates(tags, owner, stream, objects, open_art)
+    except ValueError as error:
+        if not allow_custom_uv or "custom coordinates" not in str(error):
+            raise
+        uv, custom = None, True
+    texture = None
     if sample["class_name"].casefold() == TEXTURE_PARAMETER:
         parameter = typed_tag(tags, "parametername", "NameProperty")
         if not parameter or parameter["size"] != 8:
             raise ValueError("Ascend diffuse sample has an invalid parameter name.")
         name = table_name(tag_data(stream, parameter), owner["names"], True).casefold()
         if name in overrides:
-            return texture_scope(*overrides[name]), uv
-    return texture_scope(object_reference(tags, stream, "texture"), owner, stream, objects), uv
+            texture = texture_scope(*overrides[name])
+    if texture is None:
+        texture = texture_scope(object_reference(tags, stream, "texture"), owner, stream, objects)
+    return (texture, uv, custom) if allow_custom_uv else (texture, uv)
 
 
 def material_texture(asset, owner, stream, objects, open_art):
     overrides = {}
     seen = set()
     unavailable = None
+    missing_diffuse = False
     for _ in range(16):
         try:
             material, owner, stream, objects = open_art(asset, owner, stream, objects)
@@ -285,14 +398,29 @@ def material_texture(asset, owner, stream, objects, open_art):
         klass = material["class_name"].casefold()
         tags, _ = properties(material, owner, stream, objects)
         if klass == "material":
-            diffuse = direct_sample(tags, owner, stream, objects, open_art)
+            try:
+                diffuse = direct_sample(tags, owner, stream, objects, open_art)
+            except ValueError as error:
+                if "not a direct RGB texture sample" not in str(error):
+                    raise
+                # Tinted, blended or layered shader: take its single base-color sample (#9).
+                tag = typed_tag(tags, "diffusecolor", "StructProperty", "colormaterialinput")
+                fields = material_input(tag, owner, stream)
+                expression = objects.get(fields.get("expression", 0))
+                channels = tuple(fields.get(key, 0) for key in ("maskr", "maskg", "maskb", "maska"))
+                if (not expression or fields.get("useconstant")
+                        or fields.get("mask") and channels != (1, 1, 1, 0)):
+                    raise
+                texture, uv = graph_texture(expression, owner, stream, objects, open_art, overrides)
+                return texture, ({"uv": uv} if uv is not None else {}), APPROXIMATE
             if diffuse:
                 sample, vertex_rgb = diffuse
                 texture, uv = sample_texture(*sample, open_art, overrides)
                 settings = {"uv": uv} if uv is not None else {}
                 if vertex_rgb:
                     settings["vertex_rgb"] = True
-                return texture, settings
+                return texture, settings, None
+            missing_diffuse = True
             break
         if klass != "materialinstanceconstant":
             raise ValueError("Ascend shader graph requires a destination material.")
@@ -307,25 +435,58 @@ def material_texture(asset, owner, stream, objects, open_art):
         asset = objects[parent]
     else:
         raise ValueError("Ascend material parent chain exceeds the supported depth.")
-    fallback = [scope for name, scope in overrides.items()
-                if name.replace("_", "").replace(" ", "") in COLOR_PARAMETERS]
+    fallback = [scope for name, scope in overrides.items() if color_parameter(name)]
     if len(fallback) == 1:
-        return texture_scope(*fallback[0]), {}
+        return texture_scope(*fallback[0]), {}, None
     if unavailable:
         raise unavailable
+    if missing_diffuse:
+        raise ValueError("Ascend material has no diffuse input (an emissive, effect or force-field shader).")
     raise ValueError("Ascend material has no unambiguous base-color Texture2D override.")
 
 
 def bulk_range(cursor):
+    """Return a mip payload as (where, offset, size, codec, count), or None when unusable.
+
+    ``where`` is "inline" for bytes inside the export or "cache" for bytes stored in the
+    texture file cache (.tfc) named by the texture's TextureFileCacheName property.
+    """
     flags, count, size, offset = cursor.fields("I3i")
+    if flags & BULK_UNUSED:
+        return None  # Unused mip slots carry size and offset -1.
     if count < 0 or size < 0 or (size and offset < 0):
         raise ValueError("Invalid Ascend texture bulk data header.")
-    if not size or flags & EXTERNAL_OR_UNUSED:
+    if not size:
         return None
+    codec = 2 if flags & BULK_LZO else 1 if flags & BULK_ZLIB else 0
+    if flags & ~(BULK_SEPARATE_FILE | BULK_ZLIB | BULK_LZO | BULK_PAYLOAD_ONLY) or flags & BULK_ZLIB and flags & BULK_LZO:
+        return None
+    if not codec and size != count:
+        return None
+    if flags & BULK_SEPARATE_FILE:
+        return "cache", offset, size, codec, count
     if offset != cursor.offset or size > cursor.limit - offset:
         raise ValueError("Ascend texture bulk data is outside its export.")
     cursor.offset += size
-    return (offset, size) if flags in (0, 0x40) and size == count else None
+    return "inline", offset, size, codec, count
+
+
+def cache_name(tags, report, stream):
+    tag = next((tag for tag in tags if tag["name"].casefold() == "texturefilecachename"), None)
+    if tag is None or tag["kind"] != "NameProperty" or tag["size"] != 8:
+        return None
+    return table_name(tag_data(stream, tag), report["names"], True)
+
+
+def mip_bytes(payload, stream, rtc, cache):
+    where, offset, size, codec, count = payload
+    if where == "cache":
+        if not cache:
+            raise ValueError("The Ascend texture stores its mips in a texture file cache but names none.")
+        return rtc.read_external(cache, offset, size, codec, count)
+    if not codec:
+        return stream[offset:offset + size]
+    return decode_chunk(stream, offset, size, count, codec)
 
 
 def texture_mip(asset, report, stream, objects, rtc):
@@ -339,6 +500,7 @@ def texture_mip(asset, report, stream, objects, rtc):
     kind = PIXEL_FORMATS.get(name)
     if kind is None:
         raise ValueError(f"Unsupported Ascend texture pixel format {name}.")
+    cache = cache_name(tags, report, stream)
     cursor = Cursor(stream, start, asset["serial_offset"] + asset["serial_bytes"])
     bulk_range(cursor)  # Optional authoring payload, followed by the runtime mip array.
     stride, block_size = COLOR_FORMATS[kind]
@@ -352,12 +514,13 @@ def texture_mip(asset, report, stream, objects, rtc):
         largest = max(largest, width * height)
         if not payload or max(width, height) > MAX_SIDE:
             continue
-        offset, length = payload
+        if payload[0] == "cache" and not cache:
+            continue
         expected = ((width + stride - 1) // stride) * ((height + stride - 1) // stride) * block_size
-        if length != expected:
+        if payload[4] != expected:
             raise ValueError("Ascend texture mip dimensions disagree with its byte count.")
         if best is None or width * height > best[0] * best[1]:
-            best = width, height, offset, length
+            best = width, height, payload
     cache_issue = None
     if rtc.available:
         try:
@@ -369,13 +532,20 @@ def texture_mip(asset, report, stream, objects, rtc):
             cache_issue = f"Ascend RTC cache could not be used. {error}"
     if best is None:
         raise ValueError(cache_issue or "No supported Ascend texture mip. Supply the matching RTC cache if available.")
-    width, height, offset, length = best
-    data = texture_png(kind, width, height, stream[offset:offset + length])
+    width, height, payload = best
+    receipts = ()
+    try:
+        pixels = mip_bytes(payload, stream, rtc, cache)
+    except (OSError, ValueError, zlib.error) as error:
+        raise ValueError(f"Ascend texture mip could not be read. {error}") from error
+    if payload[0] == "cache":
+        receipts = (rtc.cache_receipt(cache),)
+    data = texture_png(kind, width, height, pixels)
     fallback = cache_issue or ("Larger mips were unavailable." if width * height < largest else None)
-    return data, [width, height], fallback, ()
+    return data, [width, height], fallback, receipts
 
 
-def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc):
+def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc, remaster=None):
     receipts = {}
     main_name = report["source"]["name"]
     with ExitStack() as scope:
@@ -389,15 +559,26 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc)
                     raise ValueError("Ascend artwork package changed during import.")
             return local
 
-        texture, settings = material_texture(asset, report, stream, objects, open_art)
+        texture, settings, approximate = material_texture(asset, report, stream, objects, open_art)
         image, source, pixels, exports = open_art(*texture)
         data, size, fallback, cache_receipts = texture_mip(image, source, pixels, exports, rtc)
+        remastered, note = remaster.load(image["object_path"], size) if remaster else (None, None)
     warning = "Base color imported as opaque. Other Ascend shader inputs require review."
-    if fallback:
-        warning = f"{warning} {fallback}"[:240]
+    if approximate:
+        warning = f"{warning} {approximate}"
+    if remastered:
+        data, size, image_source = remastered
+        receipts[image_source["name"]] = image_source
+        warning = f"{warning} Remastered texture."
+    elif note:
+        warning = f"{warning} {note}"
+    if fallback and not remastered:
+        warning = f"{warning} {fallback}"
+    warning = warning[:240]
     for receipt in cache_receipts:
         receipts[receipt["name"]] = receipt
-    image_source = cache_receipts[-1] if cache_receipts else source["source"]
+    if not remastered:
+        image_source = cache_receipts[-1] if cache_receipts else source["source"]
     name = "texture_" + sha256(data).hexdigest()[:32] + ".png"
     binding = dict(file=name, source=image_source["name"], source_sha256=image_source["sha256"],
                    size=size, mode="opaque", two_sided=False, warning=warning)

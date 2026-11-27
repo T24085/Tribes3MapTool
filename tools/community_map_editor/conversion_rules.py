@@ -306,6 +306,18 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+def rule_tags_match(tags, snapshot):
+    """Whether a draft's T3RuleSet_ tags match its recorded rules snapshot.
+
+    The importer tags every terrain tile, so a tiled terrain carries the same tag several times;
+    what must hold is exactly one distinct rule set, equal to the snapshot. A draft with neither
+    tags nor snapshot (made before rules were recorded) also matches. (Tribes3MapTool#26)
+    """
+    if not tags and snapshot is None:
+        return True
+    return snapshot is not None and set(tags) == {"T3RuleSet_" + snapshot["sha256"]}
+
+
 def draft_rules_path(library, draft):
     if not isinstance(draft, str) or not DRAFT.fullmatch(draft):
         raise ValueError("Open a supported map draft.")

@@ -181,9 +181,10 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
             strings += ("MaterialExpressionTextureSampleParameter2D", "ShaderParent", "ColorParent", "Parent",
                         "ColorNode", "RoofPaint", "DiffuseColor", "ColorMaterialInput", "Expression",
                         "Mask", "MaskR", "MaskG", "MaskB", "MaskA", "UseConstant")
-        if ascend_shader == "vertex-rgb":
+        if ascend_shader in ("vertex-rgb", "tinted"):
             strings = tuple(dict.fromkeys((*strings, "Coordinates", "ExpressionInput", "CoordinateIndex", "UTiling",
                              "VTiling", "MaterialExpressionTextureCoordinate", "MaterialExpressionVertexColor",
+                             "MaterialExpressionConstant3Vector",
                              "MaterialExpressionMultiply", "UVNode", "VertexNode", "TintNode", "A", "B")))
     if ascend_component_materials:
         assert modern and ascend_shader == "direct"
@@ -644,7 +645,7 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                 # First slot inherits the named override through an intermediate instance.
                 # The second slot uses the same graph directly, so it uses the sample's default.
                 child = object_bytes(reference("Parent", 3), parameters("Normal"))
-                diffuse = (reference("Expression", 8 if ascend_shader == "vertex-rgb" else 5) + b"".join(
+                diffuse = (reference("Expression", 8 if ascend_shader in ("vertex-rgb", "tinted") else 5) + b"".join(
                     prop(channel, "IntProperty", pack("i", 1)) for channel in ("Mask", "MaskR", "MaskG", "MaskB")))
                 if ascend_shader == "masked-output":
                     diffuse += prop("MaskA", "IntProperty", pack("i", 1))
@@ -658,9 +659,11 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                                (-3, 0, "ShaderParent", 0, upstream, 3),
                                (-6, 0, "ColorParent", 0, graph, 3),
                                (-7, 4, "ColorNode", 0, node, 3)]
-                if ascend_shader == "vertex-rgb":
+                if ascend_shader in ("vertex-rgb", "tinted"):
+                    # "tinted" multiplies by a constant color, as most Tribes: Ascend shaders do (#9).
+                    tint_class = "MaterialExpressionConstant3Vector" if ascend_shader == "tinted" else "MaterialExpressionVertexColor"
                     types.extend(("Core", "Class", -1, klass) for klass in ("MaterialExpressionTextureCoordinate",
-                                 "MaterialExpressionVertexColor", "MaterialExpressionMultiply"))
+                                 tint_class, "MaterialExpressionMultiply"))
 
                     def expression_input(key, index):
                         return prop(key, "StructProperty", reference("Expression", index) + name("None"), "ExpressionInput")
@@ -1887,6 +1890,21 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 manifest.write_text(json.dumps(header), encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "requires intake version 42"):
                     load_intake(manifest)
+
+    def test_ascend_tinted_shader_binds_its_base_color_texture(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "ascend", static_mesh="companion", mesh_artwork=True,
+                                          ascend_shader="tinted", ascend_vertices="half")
+            manifest = convert_unreal(source, root / "Intakes")
+            header, _, rows = load_intake(manifest)
+            model, = header["interiors"].values()
+            bindings = load_texture_index(manifest.parent, header["files"])
+            self.assertEqual(len(bindings[model]), 2)
+            for binding in bindings[model].values():
+                # The constant tint is not applied, so there is no vertex_rgb flag; the sample's UVs are kept.
+                self.assertEqual(binding["ascend_base"], {"uv": [1, 2.0, .5]})
+                self.assertIn("Tints, blended layers", binding["warning"])
 
     def test_ascend_reports_cycles_and_nondirect_diffuse(self):
         for mode, reason in (("cycle", "parent chain contains a cycle"), ("masked-output", "not a direct RGB texture sample")):
