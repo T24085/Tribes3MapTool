@@ -419,7 +419,9 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
             record = authored.get(str(source_slot), {})
             name = record.get('file')
             legacy, mode = geometry['format'] >= 3, record.get('mode', 'opaque')
-            two_sided = bool(vengeance_destination and record.get('two_sided', False))
+            # Vengeance and Ascend record the source material's sidedness (Ascend foliage, #35).
+            two_sided = bool((vengeance_destination or geometry['format'] in (ASCEND_STATIC_MESH, ASCEND_BSP))
+                             and record.get('two_sided', False))
             if normal >= 0 or alarm >= 0:
                 atlases = lighting['atlases']
                 normal_map = atlases[normal]['color']['file'] if normal >= 0 else None

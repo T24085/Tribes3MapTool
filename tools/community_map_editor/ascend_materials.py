@@ -489,6 +489,69 @@ def mip_bytes(payload, stream, rtc, cache):
     return decode_chunk(stream, offset, size, count, codec)
 
 
+MASK_CHANNELS = ("maskr", "maskg", "maskb", "maska")
+
+
+def material_blend(asset, owner, stream, objects, open_art):
+    """Return the base Material's (blend mode, two-sided, mask) for an Ascend material (#35).
+
+    The mask is (texture scope, channel 0-3) when the material is BLEND_Masked: Ascend foliage
+    reads its cut-out from the diffuse alpha, a separate mask texture's channel, or a normal
+    map's alpha. Instances inherit blending from the base Material and may override textures.
+    """
+    overrides = {}
+    for _ in range(16):
+        material, owner, stream, objects = open_art(asset, owner, stream, objects)
+        tags, _ = properties(material, owner, stream, objects)
+        if material["class_name"].casefold() == "material":
+            break
+        for name, index in texture_overrides(tags, owner, stream).items():
+            overrides.setdefault(name, (index, owner, stream, objects))
+        parent = object_reference(tags, stream, "parent")
+        if not parent or parent not in objects:
+            return "BLEND_Opaque", False, None
+        asset = objects[parent]
+    else:
+        raise ValueError("Ascend material parent chain exceeds the supported depth.")
+    blend = typed_tag(tags, "blendmode", "ByteProperty")
+    mode = table_name(tag_data(stream, blend), owner["names"], True) if blend and blend["size"] == 8 else "BLEND_Opaque"
+    sided = typed_tag(tags, "twosided", "BoolProperty")
+    two_sided = bool(sided and sided["boolean"])
+    if mode != "BLEND_Masked":
+        return mode, two_sided, None
+    tag = typed_tag(tags, "opacitymask", "StructProperty", "scalarmaterialinput")
+    fields = material_input(tag, owner, stream) if tag else {}
+    expression = objects.get(fields.get("expression", 0))
+    if not expression or fields.get("useconstant"):
+        raise ValueError("Ascend masked material has no texture opacity mask.")
+    if fields.get("mask"):
+        channels = [index for index, key in enumerate(MASK_CHANNELS) if fields.get(key)]
+        if len(channels) != 1:
+            raise ValueError("Ascend opacity mask must read a single texture channel.")
+        channel, = channels
+    else:
+        channel = 0  # An unmasked colour output used as a scalar reads its red channel.
+    if expression["class_name"].casefold() not in (TEXTURE_SAMPLE, TEXTURE_PARAMETER):
+        raise ValueError("Ascend opacity mask is not a direct texture sample.")
+    texture, _ = sample_texture(expression, owner, stream, objects, open_art, overrides)
+    return mode, two_sided, (texture, channel)
+
+
+def with_alpha(color_png, mask_png, channel):
+    """Put one channel of the mask texture into the colour texture's alpha, at the colour's size."""
+    from io import BytesIO
+    from PIL import Image
+
+    color = Image.open(BytesIO(color_png)).convert("RGBA")
+    mask = Image.open(BytesIO(mask_png)).convert("RGBA").getchannel(channel)
+    if mask.size != color.size:
+        mask = mask.resize(color.size, Image.BILINEAR)
+    color.putalpha(mask)
+    buffer = BytesIO()
+    color.save(buffer, "PNG")
+    return buffer.getvalue()
+
+
 def texture_mip(asset, report, stream, objects, rtc):
     if asset["class_name"].casefold() != "texture2d":
         raise ValueError("Ascend base color requires a Texture2D export.")
@@ -563,7 +626,26 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
         image, source, pixels, exports = open_art(*texture)
         data, size, fallback, cache_receipts = texture_mip(image, source, pixels, exports, rtc)
         remastered, note = remaster.load(image["object_path"], size) if remaster else (None, None)
-    warning = "Base color imported as opaque. Other Ascend shader inputs require review."
+        mask_png, blend_issue = None, None
+        try:
+            blend, two_sided, mask = material_blend(asset, report, stream, objects, open_art)
+        except ValueError as error:
+            # Keep the base colour; an unreadable mask leaves the material opaque for review.
+            blend, two_sided, mask, blend_issue = "BLEND_Opaque", False, None, str(error)
+        if mask:
+            mask_image, mask_source, mask_pixels, mask_exports = open_art(*mask[0])
+            mask_png, _, _, mask_receipts = texture_mip(mask_image, mask_source, mask_pixels, mask_exports, rtc)
+            for receipt in mask_receipts:
+                receipts[receipt["name"]] = receipt
+    masked = mask_png is not None
+    if masked:
+        warning = "Base color and source opacity mask imported (masked material)."
+    else:
+        warning = "Base color imported as opaque. Other Ascend shader inputs require review."
+        if blend in ("BLEND_Additive", "BLEND_Translucent", "BLEND_Modulate"):
+            warning += f" Source blend {blend.removeprefix('BLEND_').lower()} is not converted yet."
+        if blend_issue:
+            warning += f" {blend_issue}"
     if approximate:
         warning = f"{warning} {approximate}"
     if remastered:
@@ -579,9 +661,12 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
         receipts[receipt["name"]] = receipt
     if not remastered:
         image_source = cache_receipts[-1] if cache_receipts else source["source"]
+    if masked:
+        data = with_alpha(data, mask_png, mask[1])
     name = "texture_" + sha256(data).hexdigest()[:32] + ".png"
     binding = dict(file=name, source=image_source["name"], source_sha256=image_source["sha256"],
-                   size=size, mode="opaque", two_sided=False, warning=warning)
+                   size=size, mode="masked" if masked else "opaque", two_sided=two_sided,
+                   warning=warning)
     if settings:
         binding["ascend_base"] = settings
     return binding, {name: data}, receipts.values()
