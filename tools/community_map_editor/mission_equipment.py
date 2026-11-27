@@ -13,6 +13,70 @@ EQUIPMENT_ROLES = {
     ('staticshape', 'stationvehiclepad'): 'vehicle_station',
     ('forcefieldbare', 'defaultforcefieldbare'): 'force_shield',
 }
+# Tribes: Ascend base equipment, by class without its team suffix. The host spawns the retail
+# TRIBES 3 object for each role; the source supplies only placement, team and power.
+ASCEND_ROLES = {
+    'tribesgame.trpowergenerator': 'generator',
+    'tribesgame.trradarstation': 'sensor',
+    'tribesgame.trbaseturret': 'base_turret',
+    'tribesgame.trinventorystation': 'inventory_station',
+    'tribesgame.trvehiclestation': 'vehicle_station',
+}
+ASCEND_TEAMS = ('_bloodeagle', '_diamondsword')
+# One power circuit per team: every Ascend base runs on its team's generators.
+ASCEND_GROUP_BASE = 49990
+
+
+def ascend_equipment_class(source_class):
+    """Return (role, team suffix) for a Tribes: Ascend equipment class, else (None, None)."""
+    cls = source_class.casefold()
+    for suffix in ASCEND_TEAMS:
+        if cls.endswith(suffix):
+            return ASCEND_ROLES.get(cls.removesuffix(suffix)), suffix
+    return None, None
+
+
+def ascend_flag_teams(rows):
+    """Map each Ascend team suffix to the CTF team whose assigned flag carries it."""
+    found = {}
+    for row in rows:
+        if row['status'] == 'marker' and row.get('kind') == 'flag':
+            cls = row['source_class'].casefold()
+            for suffix in ASCEND_TEAMS:
+                if cls.endswith(suffix):
+                    found.setdefault(suffix, set()).add(row['team'])
+    teams = {suffix: next(iter(values)) for suffix, values in found.items() if len(values) == 1}
+    # Both suffixes on one team cannot say which base is whose.
+    return teams if len(set(teams.values())) == len(teams) else {}
+
+
+def ascend_equipment(rows):
+    teams = ascend_flag_teams(rows)
+    equipment, groups = [], {}
+    for row in rows:
+        role, suffix = ascend_equipment_class(row['source_class'])
+        if role is None or row['status'] != 'review':
+            continue
+        team = teams.get(suffix, 0)
+        issues = []
+        if not team:
+            issues.append('Source team does not match an assigned CTF flag.')
+        transform = row.get('transform')
+        if transform is None:
+            issues.append('Re-import this map to record the equipment transform.')
+        group = ASCEND_GROUP_BASE + team if team else None
+        if group is not None:
+            groups.setdefault(group, dict(source_id=group, name=f'Team {team} base power', team=team,
+                                          declared_power=None, generators=[]))
+            if role == 'generator':
+                groups[group]['generators'].append(row['id'])
+        equipment.append(dict(source_id=row['id'], role=role, datablock=row['source_class'].rsplit('.', 1)[-1],
+                              team=team, transform=transform, power_group=group, review=issues))
+    for group in groups.values():
+        if not group['generators']:
+            # A base with no source generator stays powered, as it would be in the source map.
+            group['declared_power'] = True
+    return dict(format=1, equipment=equipment, power_groups=list(groups.values()))
 
 
 def power_context(rows, *, generator_scopes=False):
@@ -59,6 +123,8 @@ def power_context(rows, *, generator_scopes=False):
 
 def mission_equipment(rows, terrain, *, generator_scopes=False):
     """Keep exact source IDs and transforms, with auditable group evidence."""
+    if any(ascend_equipment_class(row['source_class'])[0] for row in rows):
+        return ascend_equipment(rows)
     teams, scopes, contexts = power_context(rows, generator_scopes=generator_scopes)
     equipment = {}
     for row in rows:

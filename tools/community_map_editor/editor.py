@@ -7,7 +7,7 @@ import re
 import unreal
 
 from perimeter import verify_flag_bounds, verify_walls
-from source_profiles import ANY_DRAFT, IMPORT_DRAFT, INVENTORY_STATION_TEMPLATE, T2_DRAFT, imported_draft, inventory_station_package
+from source_profiles import ANY_DRAFT, EQUIPMENT_DRAFT, IMPORT_DRAFT, INVENTORY_STATION_TEMPLATE, imported_draft, inventory_station_package
 from terrain_layers import PALETTE_SURFACES
 
 
@@ -622,7 +622,7 @@ def create_inventory_station_blueprint():
         raise ValueError('Install the inventory station authoring plugin for this Unreal Editor build.')
     current = world()
     level = current.get_path_name().split('.')[0] if current else ''
-    draft = re.fullmatch(LEVEL_ROOT + rf'/({T2_DRAFT})/Arena_\1_P', level)
+    draft = re.fullmatch(LEVEL_ROOT + rf'/({EQUIPMENT_DRAFT})/Arena_\1_P', level)
     path = inventory_station_package(draft[1]) if draft else INVENTORY_STATION_TEMPLATE
     if not ASSETS.does_asset_exist(path):
         if draft and ASSETS.does_asset_exist(INVENTORY_STATION_TEMPLATE):

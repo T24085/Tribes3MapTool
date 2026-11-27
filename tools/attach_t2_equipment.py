@@ -74,9 +74,9 @@ def powered_interiors(review, groups):
 
 def native_layout(equipment, review):
     map_id = review.get('map')
-    if (not isinstance(map_id, str) or not re.fullmatch(r'DraftT2[0-9]{3}', map_id)
+    if (not isinstance(map_id, str) or not re.fullmatch(r'DraftT[2A][0-9]{3}', map_id)
             or not isinstance(equipment, dict) or equipment.get('format') != 1):
-        raise ValueError('Expected a T2 draft and version-1 equipment projection.')
+        raise ValueError('Expected a Tribes 2 or Ascend draft and version-1 equipment projection.')
     sources = indexed(equipment.get('equipment'))
     power = indexed(equipment.get('power_groups'))
     approvals = indexed(review.get('placements'))

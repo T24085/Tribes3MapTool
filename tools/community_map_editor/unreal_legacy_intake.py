@@ -22,6 +22,7 @@ from intake_contract import (ASCEND_BASE_MATERIAL_VERSION, ASCEND_VERTEX_ATTRIBU
 from interior_geometry import MAX_GEOMETRY_BYTES, NATIVE_VERTEX_FIELDS
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
+from mission_equipment import ascend_equipment_class
 from ascend_bounds import boundary_recipe, derive_play_box, describe as describe_bounds, read_source_bounds
 from vengeance_bounds import (boundary_recipe as vengeance_boundary_recipe, describe as describe_vengeance_bounds,
                               play_area as vengeance_play_area, read_boundary as read_vengeance_boundary)
@@ -172,6 +173,17 @@ def project_rows(scene, markers, heightmap, *, placement_components=None):
                     row["properties"][key] = str(value)
         if line in markers:
             row.update(markers[line], status="marker", conversion_class="unrealctfmarker")
+        elif scene["profile"] == "ascend" and (role := ascend_equipment_class(row["source_class"])[0]):
+            transform = actor["transform"]
+            if (transform and transform["authored"] and not actor["references"].keys() & {"base", "attachparent"}
+                    and all(finite(value, 2e4) for value in transform["position_m"])):
+                # Placement, team and power only: the host spawns the retail TRIBES 3 object.
+                row.update(transform=dict(position_cm=[value * 100 for value in transform["position_m"]],
+                                          rotation_xyzw=transform["rotation_xyzw"], scale=[1, 1, 1]),
+                           reason=f"Ascend {role.replace('_', ' ')}: approve its marker to place the "
+                                  "retail TRIBES 3 equipment.")
+            else:
+                row["reason"] += " · Equipment needs an independent actor transform."
         elif light := lights.get(str(line)):
             transform = actor["transform"]
             row.update(conversion_class="unreallight", local_light=light, transform=dict(

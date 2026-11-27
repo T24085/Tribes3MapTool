@@ -25,6 +25,8 @@ UNITS_PER_METRE_DEFAULT = {game: 100 / presets[0][1] for game, presets in SCALE_
 BRUSH_PREVIEW_FOLDER = "/Game/Community/VengeanceBrushPreviews"
 INVENTORY_STATION_TEMPLATE = "/Game/Community/SharedEquipment/BP_CommunityInventoryStation"
 T2_DRAFT = r"DraftT2[0-9]{3}"
+# Drafts whose base equipment the host can place as retail TRIBES 3 objects: Tribes 2 and Ascend.
+EQUIPMENT_DRAFT = r"DraftT[2A][0-9]{3}"
 BRUSH_PREVIEW_REFERENCE = "unrealmesh:brush."
 PROXIMITY_CHAIN_MODES = {"othertriggerturnson": 1, "othertriggerturnsoff": 2, "othertriggertoggles": 3}
 IMPORT_DRAFT = r"DraftT[12VA][0-9]{3}"
@@ -83,8 +85,8 @@ UNREAL_INTAKE_VERSION = UNREAL_INTAKE_VERSIONS[-1]
 
 
 def inventory_station_package(map_id):
-    if not re.fullmatch(T2_DRAFT, map_id):
-        raise ValueError('Inventory station placement requires a Tribes 2 draft.')
+    if not re.fullmatch(EQUIPMENT_DRAFT, map_id):
+        raise ValueError('Inventory station placement requires a Tribes 2 or Ascend draft.')
     return f'/Game/Community/{map_id}/Equipment/BP_CommunityInventoryStation'
 
 
