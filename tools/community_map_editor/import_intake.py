@@ -33,6 +33,7 @@ from source_profiles import (BRUSH_PREVIEW_REFERENCE, PREFIX, T2_GENERATOR_SCOPE
 from terrain_art import SOURCE_ART, available_art
 from terrain_layers import ART_SLOT_OFFSET, FALLBACK, PALETTE_SURFACES, SIZE, layer_choices, load_weights, painted_cells
 from terrain_grid import ARTWORK_UV, TiledTerrain, footprint
+from terrain_smoothing import ASCEND_FACTOR, bilinear, smooth_grid
 
 
 def choose(game=None):
@@ -93,7 +94,7 @@ def choose(game=None):
 
 
 def terrain_mesh(ident, t, weights, *, tile_cm=None, name="Terrain", uv_origin=(0, 0), paint=None, materials=None,
-                 artwork_flags=None, mask_frame=None, source_material=None):
+                 artwork_flags=None, mask_frame=None, source_material=None, smooth=1):
     if tile_cm is None:
         tile_cm = profile_config()["conversions"]["terrain.tile_cm"]["value"]
     step = t["step_cm"]
@@ -113,21 +114,32 @@ def terrain_mesh(ident, t, weights, *, tile_cm=None, name="Terrain", uv_origin=(
     colors = []
     tri = []
     face_surfaces = []
-    for y in range(SIZE + 1):
-        for x in range(SIZE + 1):
+    # Smoothing subdivides each source cell (terrain_smoothing); the T1/T2 artwork-cell path keeps one cell.
+    factor = 1 if artwork_flags is not None else smooth
+    cells = SIZE * factor
+    stride = cells + 1
+
+    def source_height(x, y):
+        return heights[y * (SIZE + 1) + x if unwrapped else (y % SIZE) * SIZE + x % SIZE]
+
+    smoothed = smooth_grid(source_height, SIZE, factor)
+    for fy in range(stride):
+        for fx in range(stride):
+            x, y = fx // factor, fy // factor
             sample = (y % SIZE) * SIZE + x % SIZE
             height_sample = y * (SIZE + 1) + x if unwrapped else sample
+            local_x, local_y = fx * step / factor, fy * step / factor
             verts.append(
                 unreal.Vector(
-                    x * step,
-                    y_sign * y * step,
-                    heights[height_sample] * scale,
+                    local_x,
+                    y_sign * local_y,
+                    smoothed[fy * stride + fx] * scale,
                 )
             )
-            uv.append(unreal.Vector2D((x * step + uv_origin[0]) / tile_cm, (y * step + uv_origin[1]) / tile_cm))
+            uv.append(unreal.Vector2D((local_x + uv_origin[0]) / tile_cm, (local_y + uv_origin[1]) / tile_cm))
             if mask_frame is not None:
-                mask_uv.append(unreal.Vector2D(min(x0 + x, width - 1) / (width - 1),
-                                               min(y0 + y, height - 1) / (height - 1)))
+                mask_uv.append(unreal.Vector2D(min(x0 + fx / factor, width - 1) / (width - 1),
+                                               min(y0 + fy / factor, height - 1) / (height - 1)))
             if artwork_flags is not None:
                 # The UV corners for artwork cells need their own vertices. Share the geometric normal.
                 left, right = max(0, x - 1), min(SIZE, x + 1)
@@ -137,16 +149,20 @@ def terrain_mesh(ident, t, weights, *, tile_cm=None, name="Terrain", uv_origin=(
                 length = math.sqrt(1 + dx * dx + dy * dy)
                 normals.append(unreal.Vector(-dx / length, -dy / length, 1 / length))
             if weights is not None:
-                colors.append(unreal.LinearColor(*weights[height_sample if continuous_paint else sample], 1.0))
-    for y in range(256):
-        for x in range(256):
+                if continuous_paint and factor > 1:
+                    colors.append(unreal.LinearColor(*bilinear(weights, SIZE, factor, fx, fy), 1.0))
+                else:
+                    colors.append(unreal.LinearColor(*weights[height_sample if continuous_paint else sample], 1.0))
+    for cy in range(cells):
+        for cx in range(cells):
+            x, y = cx // factor, cy // factor
             cell = y * SIZE + x
             if cell in holes:
                 continue
-            a = y * 257 + x
+            a = cy * stride + cx
             b = a + 1
-            c = b + 257
-            d = a + 257
+            c = b + stride
+            d = a + stride
             if artwork_flags is not None and paint[cell] >= ART_SLOT_OFFSET:
                 first = len(verts)
                 for vertex, point in zip((a, b, c, d), ARTWORK_UV[artwork_flags[cell] & 7]):
@@ -154,7 +170,10 @@ def terrain_mesh(ident, t, weights, *, tile_cm=None, name="Terrain", uv_origin=(
                     normals.append(normals[vertex])
                     uv.append(unreal.Vector2D(*point))
                 a, b, c, d = range(first, first + 4)
-            flip = cell in turned if turned is not None else (x ^ y) & 1
+            if factor > 1:
+                flip = (cx ^ cy) & 1  # Subdivided cells are near-planar: alternate the diagonals.
+            else:
+                flip = cell in turned if turned is not None else (x ^ y) & 1
             faces = ((a, b, d), (b, c, d)) if flip else ((a, b, c), (a, c, d))
             for first, second, third in faces:
                 tri.append(
@@ -861,7 +880,9 @@ class DraftImport:
                     assets[key] = terrain_mesh(ident, mesh_input, tile_weights, tile_cm=repeat, name=name,
                                                uv_origin=uv_origin, paint=paint, materials=materials,
                                                artwork_flags=artwork_flags, mask_frame=mask_frame,
-                                               source_material=material if source_art else None)
+                                               source_material=material if source_art else None,
+                                               smooth=ASCEND_FACTOR if header["profile"] in MILF_ENVIRONMENT_CONVERTERS
+                                               else 1)
             if assets[key] is None:
                 continue
             actor = editor.ACTORS.spawn_actor_from_class(
