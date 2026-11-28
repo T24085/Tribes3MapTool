@@ -15,6 +15,7 @@ from ascend_post_process import GRADE_LUT_FILE, LUT_SIZE, png_size, read_grade
 from ascend_static_mesh import read_placed_meshes as read_ascend_meshes
 from ascend_texture_cache import AscendTextureCache
 from remastered_textures import RemasteredTextures, validate_folder as validate_remaster_folder
+from texture_remaster import AutoRemaster, validate_tool as validate_remaster_tool
 from intake_contract import (ASCEND_BASE_MATERIAL_VERSION, ASCEND_VERTEX_ATTRIBUTES_VERSION, MAX_INTAKE_INTERIORS,
                              MAX_INTAKE_INTERIOR_BYTES,
                              NATIVE_ENVIRONMENT_VERSION,
@@ -315,11 +316,18 @@ def validate_unreal_settings(settings):
             or type(settings["format"]) is not int or settings["format"] != 1
             or not isinstance(settings["game"], str) or settings["game"] not in UNREAL_PROFILES):
         raise ValueError("Invalid Unreal scene import settings.")
-    optional = settings.keys() - REQUIRED - {"bounds_m", "asset_packages", "levels", "remastered_textures"}
+    optional = settings.keys() - REQUIRED - {"bounds_m", "asset_packages", "levels", "remastered_textures",
+                                             "remaster_tool", "remaster_redo"}
     if "remastered_textures" in settings:
         if settings["game"] != "ascend":
             raise ValueError("Remastered textures are supported for Tribes: Ascend imports.")
         validate_remaster_folder(settings["remastered_textures"])
+    if "remaster_tool" in settings:
+        if settings["game"] != "ascend":
+            raise ValueError("Texture remastering is supported for Tribes: Ascend imports.")
+        validate_remaster_tool(settings["remaster_tool"])
+    if "remaster_redo" in settings and (settings["remaster_redo"] is not True or "remaster_tool" not in settings):
+        raise ValueError("Redo remaster needs the texture remaster tool.")
     levels = settings.get("levels", [])
     if levels and (settings["game"] != "ascend" or not isinstance(levels, list) or len(levels) > MAX_MERGED_LEVELS
                    or not all(isinstance(name, str) and re.fullmatch(r"[\w.-]{1,180}\.fmap", name, re.I)
@@ -442,6 +450,10 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
             rtc = AscendTextureCache(source.resolve(strict=True).parent)
             folder = settings.get("remastered_textures")
             remaster = RemasteredTextures(folder) if folder else None
+            if settings.get("remaster_tool"):
+                # Remaster every texture the map uses (base colours, glow maps, the sky) as it is read.
+                remaster = AutoRemaster(settings["remaster_tool"], manual=remaster,
+                                        redo=settings.get("remaster_redo") is True)
             artwork = PackageMaterials(companions, partial(resolve_ascend_material, rtc=rtc, remaster=remaster),
                                        "Ascend")
             collision_review = {}

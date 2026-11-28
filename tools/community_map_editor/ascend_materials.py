@@ -806,13 +806,16 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
             unlit = emissive[1]
         image, source, pixels, exports = open_art(*texture)
         data, size, fallback, cache_receipts = texture_mip(image, source, pixels, exports, rtc)
-        remastered, note = remaster.load(image["object_path"], size) if remaster else (None, None)
         mask_png, blend_issue = None, None
         try:
             blend, two_sided, mask = material_blend(asset, report, stream, objects, open_art)
         except ValueError as error:
             # Keep the base colour; an unreadable mask leaves the material opaque for review.
             blend, two_sided, mask, blend_issue = "BLEND_Opaque", False, None, str(error)
+        # Painted sky domes go through the AI; additive star fields and nebulae get a plain Lanczos 2x,
+        # because the AI smears point stars into soft blobs (Katabatic's star cards).
+        role = ("glow" if blend in ("BLEND_Additive", "BLEND_Translucent") else "sky") if unlit else "base"
+        remastered, note = remaster.load(image["object_path"], size, data, role) if remaster else (None, None)
         if mask:
             mask_image, mask_source, mask_pixels, mask_exports = open_art(*mask[0])
             mask_png, _, _, mask_receipts = texture_mip(mask_image, mask_source, mask_pixels, mask_exports, rtc)
@@ -830,6 +833,11 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
                 glow_source = glow_receipts[-1] if glow_receipts else glow_owner["source"]
                 if emissive[2] is not None:
                     glow_png = channel_png(glow_png, emissive[2])
+                if remaster:
+                    better, glow_note = remaster.load(glow_image["object_path"], glow_size, glow_png, "glow")
+                    if better:
+                        glow_png, glow_size, glow_source = better
+                        receipts[glow_source["name"]] = glow_source
                 glow = (glow_png, glow_size, glow_source, emissive[1])
         except ValueError as error:
             glow_issue = f"Glow left out: {error}"

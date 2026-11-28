@@ -69,8 +69,8 @@ GAMES = (
      (*package_steps("the gameplay level TrCTF-<Map>.fmap in the client's CookedPC\\Maps\\<Map> folder (its _Ter "
                      "and _Sound levels are added automatically)")[:2],
       ("settings", "Choose import settings",
-       "Pick each team's \"Flag or stand\" and spawns, a \"Scale preset\" and optionally \"Remastered "
-       "textures…\", then click \"Create intake\""),
+       "Pick each team's \"Flag or stand\" and spawns and a \"Scale preset\"; keep \"Remaster all textures 2x (sky, base colours, glow)\" "
+       "ticked (cached, so it runs once per map; \"Redo remaster\" rebuilds), then click \"Create intake\""),
       REVIEW, BUILD,
       ("sound", "Sound pack (optional)",
        "No button yet: run sound_packs.py pack once per game and sound_packs.py map for this map (see the guide)"),
