@@ -105,7 +105,7 @@ def install_editor_scripts(project, env, *, include_seed=True):
                  'batch_rebuild.py', 'batch_rebuild_unreal.py', 'batch_stage.py', 'batch_stage_unreal.py',
                  'minimap.py', 'map_pipeline.py', 'tribes2_pipeline.json', 'object_catalog.py', 'tribes2_catalog.json',
                  'dock_review.py', 'source_profiles.py', 'terrain_grid.py', 'terrain_art.py', 'game_workflows.py',
-                 'terrain_smoothing.py'):
+                 'terrain_smoothing.py', 'foliage_rules.py'):
         shutil.copyfile(TOOL/name, folder/name)
     env['T3_CONVERTER_TOOL'] = str(TOOL)
     env['T3_CONVERTER_PYTHON'] = sys.executable

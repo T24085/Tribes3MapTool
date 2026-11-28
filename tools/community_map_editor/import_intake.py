@@ -33,6 +33,7 @@ from source_profiles import (BRUSH_PREVIEW_REFERENCE, PREFIX, T2_GENERATOR_SCOPE
 from terrain_art import SOURCE_ART, available_art
 from terrain_layers import ART_SLOT_OFFSET, FALLBACK, PALETTE_SURFACES, SIZE, layer_choices, load_weights, painted_cells
 from terrain_grid import ARTWORK_UV, TiledTerrain, footprint
+from foliage_rules import is_ground_plant, soft_foliage
 from terrain_smoothing import ASCEND_FACTOR, bilinear, smooth_grid
 
 
@@ -350,6 +351,12 @@ def place_static_objects(actors, planned, meshes, material_overrides=None, light
             else:
                 actor.set_editor_property('is_editor_only_actor', True)
                 actor.static_mesh_component.set_collision_profile_name('NoCollision')
+        component = actor.static_mesh_component
+        if (str(component.get_collision_profile_name()) != 'NoCollision'
+                and is_ground_plant(source_reference(row) or "")):
+            # Standing rule: ground plants never block players or vehicles, but still stop shots. Plants the
+            # source made non-colliding stay that way.
+            soft_foliage(component)
         for slot, material in material_overrides.get(material_reference(row, material_overrides), {}).items():
             actor.static_mesh_component.set_material(slot, material)
         if lighting_links and row['id'] in lighting_links:
