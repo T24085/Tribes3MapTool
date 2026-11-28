@@ -294,7 +294,10 @@ def editor_plugin_args(project, engine, *, smoke, authoring_only=False):
         elif (folder / f'Binaries/Win64/UnrealEditor-{module}.dll').is_file():
             print(f'Build {name} for this Unreal Editor version to {purpose}.', flush=True)
     plugins = [*args[1].split(','), *enabled]
-    if authoring_only:
+    native = project.parent / 'Plugins' / 'CommunityNativeWorldSettings'
+    if authoring_only and not editor_plugin_matches(native, engine, 'Valhalla'):
+        # Authoring-only workspaces load the native mirror only when it is installed for this editor
+        # build, so drafts can place original-game volumes (lava). World settings stay unconverted.
         plugins.remove('CommunityNativeWorldSettings')
     return [args[0], ','.join(plugins)]
 

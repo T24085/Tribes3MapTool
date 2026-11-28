@@ -1,0 +1,14 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "1.0",
+  "FriendlyName": "Community native world settings authoring mirror",
+  "Description": "Private source-matching map authoring only. Never distribute these modules with the original game.",
+  "Category": "CommunityAuthoring",
+  "CanContainContent": false,
+  "EnabledByDefault": true,
+  "Modules": [
+    { "Name": "Valhalla", "Type": "Runtime", "LoadingPhase": "Default" },
+    { "Name": "CommunityWorldSettingsEditor", "Type": "Editor", "LoadingPhase": "Default" }
+  ]
+}
