@@ -15,6 +15,7 @@ from ascend_post_process import GRADE_LUT_FILE, LUT_SIZE, png_size, read_grade
 from ascend_static_mesh import read_placed_meshes as read_ascend_meshes
 from ascend_texture_cache import AscendTextureCache
 from remastered_textures import RemasteredTextures, validate_folder as validate_remaster_folder
+from texture_remaster import AutoRemaster, validate_tool as validate_remaster_tool
 from intake_contract import (ASCEND_BASE_MATERIAL_VERSION, ASCEND_VERTEX_ATTRIBUTES_VERSION, MAX_INTAKE_INTERIORS,
                              MAX_INTAKE_INTERIOR_BYTES,
                              NATIVE_ENVIRONMENT_VERSION,
@@ -26,6 +27,7 @@ from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_
 from minimap import framing, terrain_png
 from mission_equipment import ascend_equipment_class
 from hazards_ascend import read_ascend_hazards
+from unreal_binary_scene import COLLISION_FLAGS, SHADOW_FLAGS
 from ascend_bounds import (BOUNDARY_PANEL_REASON, boundary_panel, boundary_recipe, derive_play_box,
                            describe as describe_bounds, read_source_bounds)
 from vengeance_bounds import (boundary_recipe as vengeance_boundary_recipe, describe as describe_vengeance_bounds,
@@ -184,6 +186,13 @@ def project_rows(scene, markers, heightmap, *, placement_components=None):
                    name=actor["name"] or f'Actor at line {line}',
                    status="review", reason=" · ".join(actor["review"]) or "Source actor retained for review",
                    properties={item["key"]: item["value"] for item in raw["entries"] if "key" in item})
+        if any(field.get("key", "").casefold() in SHADOW_FLAGS and field.get("value") == "False"
+               for item in descendants(raw) for field in item.get("entries", ())):
+            row["properties"]["CastShadow"] = "False"  # Set on the source mesh component.
+        if scene["profile"] == "ascend" and any(
+                field.get("key", "").casefold() in COLLISION_FLAGS and field.get("value") == "False"
+                for item in (raw, *descendants(raw)) for field in item.get("entries", ())):
+            row["properties"]["Collision"] = "False"  # Players pass through it in the source.
         if str(line) in environment_notes:
             row["reason"] = " ".join(environment_notes[str(line)])
             for item in (raw, *descendants(raw)):
@@ -307,11 +316,18 @@ def validate_unreal_settings(settings):
             or type(settings["format"]) is not int or settings["format"] != 1
             or not isinstance(settings["game"], str) or settings["game"] not in UNREAL_PROFILES):
         raise ValueError("Invalid Unreal scene import settings.")
-    optional = settings.keys() - REQUIRED - {"bounds_m", "asset_packages", "levels", "remastered_textures"}
+    optional = settings.keys() - REQUIRED - {"bounds_m", "asset_packages", "levels", "remastered_textures",
+                                             "remaster_tool", "remaster_redo"}
     if "remastered_textures" in settings:
         if settings["game"] != "ascend":
             raise ValueError("Remastered textures are supported for Tribes: Ascend imports.")
         validate_remaster_folder(settings["remastered_textures"])
+    if "remaster_tool" in settings:
+        if settings["game"] != "ascend":
+            raise ValueError("Texture remastering is supported for Tribes: Ascend imports.")
+        validate_remaster_tool(settings["remaster_tool"])
+    if "remaster_redo" in settings and (settings["remaster_redo"] is not True or "remaster_tool" not in settings):
+        raise ValueError("Redo remaster needs the texture remaster tool.")
     levels = settings.get("levels", [])
     if levels and (settings["game"] != "ascend" or not isinstance(levels, list) or len(levels) > MAX_MERGED_LEVELS
                    or not all(isinstance(name, str) and re.fullmatch(r"[\w.-]{1,180}\.fmap", name, re.I)
@@ -434,6 +450,10 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
             rtc = AscendTextureCache(source.resolve(strict=True).parent)
             folder = settings.get("remastered_textures")
             remaster = RemasteredTextures(folder) if folder else None
+            if settings.get("remaster_tool"):
+                # Remaster every texture the map uses (base colours, glow maps, the sky) as it is read.
+                remaster = AutoRemaster(settings["remaster_tool"], manual=remaster,
+                                        redo=settings.get("remaster_redo") is True)
             artwork = PackageMaterials(companions, partial(resolve_ascend_material, rtc=rtc, remaster=remaster),
                                        "Ascend")
             collision_review = {}

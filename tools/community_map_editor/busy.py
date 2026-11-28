@@ -11,6 +11,8 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
+from progress_status import clear, current
+
 POLL_SECONDS = 0.05
 
 
@@ -40,6 +42,9 @@ def run_busy(parent, message, work):
     ttk.Label(body, text=message, wraplength=420, justify="left").pack(anchor="w")
     bar = ttk.Progressbar(body, mode="indeterminate", length=420)
     bar.pack(fill="x", pady=(10, 4))
+    clear()
+    step = tk.StringVar(window, "")
+    ttk.Label(body, textvariable=step, wraplength=420, justify="left", foreground="#555").pack(anchor="w")
     elapsed = tk.StringVar(window, elapsed_text(0))
     ttk.Label(body, textvariable=elapsed).pack(anchor="e")
     window.update_idletasks()
@@ -59,6 +64,7 @@ def run_busy(parent, message, work):
     try:
         while thread.is_alive():
             elapsed.set(elapsed_text(time.monotonic() - started))
+            step.set(current())
             window.update()
             thread.join(POLL_SECONDS)
     finally:

@@ -65,8 +65,9 @@ def validate(component):
     fog = component.get("fog")
     ranges = {"density": (0, 5), "start_m": (0, 100000), "height_m": (-100000, 100000),
               "height_falloff": (0, 2), "max_opacity": (0, 1)}
-    if fog is not None and (not isinstance(fog, dict) or fog.keys() - ranges.keys() - {"color"}
+    if fog is not None and (not isinstance(fog, dict) or fog.keys() - ranges.keys() - {"color", "sun_color"}
                             or "color" in fog and not colour(fog["color"])
+                            or "sun_color" in fog and not colour(fog["sun_color"])
                             or any(not finite(fog[key], *ranges[key]) for key in fog.keys() & ranges.keys())):
         raise ValueError("Invalid MILF environment fog.")
     exposure = component.get("exposure")

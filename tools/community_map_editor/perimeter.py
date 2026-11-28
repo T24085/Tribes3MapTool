@@ -32,7 +32,57 @@ SOLID_POLYGON = TAG + "Polygon"
 POLYGON_REQUIRED = TAG + "PolygonRequired"
 VISUAL_TAG = TAG + "Visual"
 VISUAL_REQUIRED = TAG + "VisualRequired"
-WALL_STYLES = {"energy": (0.08, 1.05, 1.35), "warning": (1.45, 0.44, 0.06)}
+WALL_STYLES = {"energy": (0.08, 1.05, 1.35), "warning": (1.45, 0.44, 0.06), "t3": (0.08, 1.05, 1.35)}
+# Styles drawn with a world-aligned grid, like the retail TRIBES 3 border: grid spacing in metres.
+# (The retail MIC_EnergyWall_Inst was tried on this mesh first: without the retail border's own
+# setup it showed solid from afar and vanished up close, the reverse of the retail fade.)
+GRID_STYLES = {"t3": 4.0}
+# The retail TRIBES 3 arena border (read from POI_TOOL_LevelDesign_Arena on Katabatic): four energy-wall
+# planes per quadrant, modelled around the arena centre and mirrored into the other quadrants with
+# negative scale. MIC_EnergyWall_Inst on these meshes gives the retail look and distance fade; on any
+# other mesh it shows solid from afar and vanishes up close. Placed scaled to a rectangular boundary,
+# the cooked map references the retail meshes and the game draws them; editor stand-ins are never exported.
+RETAIL_BORDER_STYLES = frozenset({"t3"})
+RETAIL_BORDER_FOLDER = "/Game/Environment/BorderWall"
+RETAIL_BORDER_HALF_CM = (44020.0, 28890.0)  # Quadrant reach from the arena centre in X and Y.
+RETAIL_BORDER_Z_CM = (2490.0, 100020.0)  # Bottom and top of the energy planes.
+# Each plane as (start xy, end xy) in the quadrant, from the meshes' bounds.
+RETAIL_BORDER_PLANES = {
+    "SM_Border_TopWall_A": ((44020.0, 0.0), (44020.0, 18974.0)),
+    "SM_Border_TopWall_B": ((44020.0, 18974.0), (34010.0, 28890.0)),
+    "SM_Border_TopWall_C": ((34011.0, 28890.0), (17005.0, 28890.0)),
+    "SM_Border_TopWall_D": ((17006.0, 28890.0), (0.0, 28890.0)),
+}
+RETAIL_BORDER_TAG = VISUAL_TAG + "Retail"
+
+
+def retail_border_pieces(walls):
+    """Retail border pieces for a rectangular boundary: [(mesh name, location cm, scale)], or None.
+
+    Each wall is drawn by the retail straight planes (TopWall_A on the X walls, TopWall_D on the Y walls),
+    one per half wall, mirrored with negative scale as the retail arena does and stretched corner to
+    corner, so the border lies exactly on the square collision walls. The retail diagonal corner piece is
+    left out: on Katabatic it ran up to 100 m inside the walls, and scaled with the box much further.
+    Non-rectangular outlines return None and keep the grid wall.
+    """
+    xs = sorted({x for x, _ in walls.vertices})
+    ys = sorted({y for _, y in walls.vertices})
+    if len(walls.vertices) != 4 or len(xs) != 2 or len(ys) != 2:
+        return None
+    cx, cy = (xs[0] + xs[1]) / 2, (ys[0] + ys[1]) / 2
+    hx, hy = (xs[1] - xs[0]) / 2, (ys[1] - ys[0]) / 2
+    bottom, top = RETAIL_BORDER_Z_CM
+    sz = (walls.z_max - walls.z_min) / (top - bottom)
+    if min(hx, hy) <= 0 or sz <= 0:
+        return None
+    z = walls.z_min - bottom * sz
+    (ax, _), (_, a_len) = RETAIL_BORDER_PLANES["SM_Border_TopWall_A"]  # Plane x = ax, y from 0 to a_len.
+    (d_len, dy), _ = RETAIL_BORDER_PLANES["SM_Border_TopWall_D"]  # Plane y = dy, x from d_len to 0.
+    pieces = []
+    for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+        pieces.append(("SM_Border_TopWall_A", (cx + sx * (hx - ax), cy, z), (sx, sy * hy / a_len, sz)))
+        pieces.append(("SM_Border_TopWall_D", (cx, cy + sy * (hy - dy), z), (sx * hx / d_len, sy, sz)))
+    return pieces
 WARNING_AUDIENCES = {None: "On foot and in vehicles", "foot": "On foot only", "vehicle": "Vehicles only"}
 DEFAULT_BOUNDARY_OPTIONS = {"perimeter": False, "flag_inset_m": None}
 BOUNDARY_OPTIONS = DEFAULT_BOUNDARY_OPTIONS.keys() | {
@@ -592,7 +642,7 @@ def verify_flag_bounds(actors, flags, hard_perimeter=None):
             raise ValueError("The flag-only limit must be inside the hard perimeter.")
 
 
-def place_walls(actors, boxes, *, draft=None, block_channels=None, visual=None):
+def place_walls(actors, boxes, *, draft=None, block_channels=None, visual=None, emissive_gain=1.0):
     import unreal
 
     if isinstance(boxes, PolygonWalls):
@@ -604,7 +654,7 @@ def place_walls(actors, boxes, *, draft=None, block_channels=None, visual=None):
     if visual is not None:
         from perimeter_visual import place_visual
 
-        place_visual(actors, draft, wall_surface(boxes), wall_appearance(visual))
+        place_visual(actors, draft, wall_surface(boxes), wall_appearance(visual), emissive_gain)
         for actor in collision_actors:
             actor.tags = [*actor.tags, unreal.Name(VISUAL_REQUIRED)]
 

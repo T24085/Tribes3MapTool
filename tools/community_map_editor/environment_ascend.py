@@ -9,14 +9,18 @@ A change to them is a new rules version. Per-map tuning goes through the convers
 layers, not through these constants.
 """
 
+import math
 from milf_environment import FORMAT, ev100_for_scale, exposure_scale, to_milf_axes, validate
 
-RULES = "ascend-environment-1"
-# UE3 lights a surface as albedo x brightness with no camera exposure. UE5's default sun is
-# 10 lux, so one UE3 brightness unit becomes 10 lux, and a fixed exposure of 1/10 shows it at the
-# brightness UE3 did.
-LUX_PER_BRIGHTNESS = 10.0
-EV100 = round(ev100_for_scale(1 / LUX_PER_BRIGHTNESS), 4)
+RULES = "ascend-environment-2"  # 2: lux x pi, grade folded as a display-space fit.
+# UE3 lights a surface as albedo x brightness with no camera exposure. A fixed exposure of 1/10
+# (one brightness unit at 10 lux shows as white) anchors the conversion; the lux carry pi below.
+EXPOSURE_UNIT_LUX = 10.0  # Fixed exposure shows one UE3 brightness unit as white (EV100 3.06).
+# UE3 multiplied light brightness straight onto surface colour; UE5 turns illuminance into reflected
+# brightness by dividing by pi. So one UE3 unit needs pi x 10 lux to look the same: at 10 lux Arx
+# Novena's sunlit desert came out about three times too dark (checked live in the editor).
+LUX_PER_BRIGHTNESS = math.pi * EXPOSURE_UNIT_LUX
+EV100 = round(ev100_for_scale(1 / EXPOSURE_UNIT_LUX), 4)
 # UE3 shows an emissive value as it is; under the fixed exposure above, UE5 needs it x this gain.
 EMISSIVE_GAIN = round(1 / exposure_scale(EV100), 4)
 # UE3 clipped each colour channel at white, so an over-bright glow kept its hue (a deep blue pod
@@ -60,7 +64,7 @@ def convert(environment, values):
         fog = {"start_m": round(start / 100, 4), "density": density}
         if "height_cm" in source_fog:
             fog["height_m"] = round(source_fog["height_cm"] / 100, 4)
-        for key in ("height_falloff", "max_opacity", "color"):
+        for key in ("height_falloff", "max_opacity", "color", "sun_color"):
             if key in source_fog:
                 fog[key] = source_fog[key]
         component["fog"] = fog

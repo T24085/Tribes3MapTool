@@ -138,7 +138,69 @@ STATION_RUNTIME = b'-- T3_EDITOR_INVENTORY_STATIONS_V2'
 MAX_EQUIPMENT_REVIEW_BYTES = 256 * 1024
 
 
+MAX_LIQUIDS = 32
+MAX_LIQUIDS_BYTES = 64 * 1024
+
+
+# Liquid types the client's liquid hook knows: converted lava and water (Tartarus's swamp is stagnant water).
+LIQUID_TYPES = frozenset({'lava', 'stagnant_water', 'river_water'})
+
+
+def draft_liquids(run, map_id):
+    """Validated lava and water rows the editor wrote for the client's liquid hook, or None."""
+    path = run / 'liquids.json'
+    if not path.is_file():
+        return None
+    data = load_json(path, MAX_LIQUIDS_BYTES)
+    rows = data.get('liquids') if isinstance(data, dict) else None
+    if data.get('map') != map_id or not isinstance(rows, list) or not 1 <= len(rows) <= MAX_LIQUIDS:
+        raise ValueError('The draft liquids must belong to the exported draft.')
+    for row in rows:
+        box = [row.get('box_min_cm'), row.get('box_max_cm')] if isinstance(row, dict) else None
+        if (not isinstance(row, dict) or set(row) != {'id', 'liquid_type', 'splash_pool_tag', 'box_min_cm', 'box_max_cm', 'surface_z_cm'}
+                or row['liquid_type'] not in LIQUID_TYPES or not all(isinstance(row[key], str) and 0 < len(row[key]) <= 64
+                                                            for key in ('id', 'splash_pool_tag'))
+                or not all(isinstance(corner, list) and len(corner) == 3 and all(
+                    type(value) in (int, float) and abs(value) <= 2_000_000 for value in corner) for corner in box)
+                or not all(low < high for low, high in zip(*box))
+                or type(row['surface_z_cm']) not in (int, float)
+                or not box[0][2] <= row['surface_z_cm'] <= box[1][2]):
+            raise ValueError('A draft liquid row is invalid.')
+    return rows
+
+
+def with_client_liquids(script, map_id, liquids):
+    """Add the client-read map identity and liquids to objectives.lua. The host reads only the
+    editor layout (or the CTF factory) and ignores these fields."""
+    def lua_data(value):
+        if isinstance(value, dict):
+            return '{' + ','.join('[' + lua_data(key) + ']=' + lua_data(item) for key, item in value.items()) + '}'
+        if isinstance(value, list):
+            return '{' + ','.join(map(lua_data, value)) + '}'
+        return json.dumps(value, allow_nan=False)
+
+    level = f'Arena_{map_id}_P'
+    package = f'/Game/Maps/Community/{map_id}/{level}'
+    client = dict(format=1, map_id=map_id, package=package, world=f'{package}.{level}:', liquids=liquids)
+    marker = 'return setmetatable({editor_layout='
+    if script.count(marker) == 1:
+        fields = lua_data(client)[1:-1]
+        return script.replace(marker, 'return setmetatable({' + fields + ',editor_layout=')
+    if script.startswith('return function(factory)'):
+        return 'local adapter=(function()\n' + script + 'end)()\nreturn adapter, ' + lua_data(client) + '\n'
+    raise ValueError('The objectives script has no place for the draft liquids.')
+
+
 def write_objectives(ctf, target, run, host, existing, preview_manifest, map_id, adapter):
+    result = write_objectives_script(ctf, target, run, host, existing, preview_manifest, map_id, adapter)
+    liquids = draft_liquids(run, map_id)
+    if liquids:
+        target.write_text(with_client_liquids(target.read_text(encoding='utf-8'), map_id, liquids),
+                          encoding='utf-8', newline='\n')
+    return result
+
+
+def write_objectives_script(ctf, target, run, host, existing, preview_manifest, map_id, adapter):
     source, review = run/'equipment.json', run/'equipment-review.json'
     if not (source.exists() or review.exists()):
         target.write_text(ctf, encoding='utf-8', newline='\n')

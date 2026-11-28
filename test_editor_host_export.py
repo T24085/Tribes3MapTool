@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from tools.community_map_editor import bootstrap, install_review, launch
 
@@ -496,7 +496,7 @@ Path(destination, 'export-receipt.json').write_text(json.dumps(
                     patch('tools.community_map_editor.export_window.choose', Mock(return_value=selection)) as choose:
                 launch.run(config)
 
-            choose.assert_called_once_with(DRAFT)
+            choose.assert_called_once_with(DRAFT, library=ANY)
             self.assertEqual(len(editor_calls), 2)
             self.assertIn(launch.package_path(DRAFT), editor_calls[1])
             receipt = json.loads((output / 'export-receipt.json').read_bytes())

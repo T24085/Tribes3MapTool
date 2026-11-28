@@ -356,6 +356,52 @@ def texture_scope(index, owner, stream, objects):
     return texture, owner, stream, objects
 
 
+PANNER = "materialexpressionpanner"
+TEXTURE_COORDINATE = "materialexpressiontexturecoordinate"
+MAX_PAN_SPEED = 64.0
+
+
+def sample_motion(expression, owner, stream, objects, open_art):
+    """{"tiling": [u, v], "pan": [x, y]} for a sample scrolled by a Panner over a TextureCoordinate, else None.
+
+    Effect textures (Tartarus's waterfall) scroll and repeat: a Panner's SpeedX and SpeedY move the
+    coordinate, and the TextureCoordinate under it sets the repeat. Anything else returns None and the
+    sample keeps the mesh's own coordinates.
+    """
+    try:
+        sample, owner, stream, objects = open_art(expression, owner, stream, objects)
+        tags, _ = properties(sample, owner, stream, objects)
+        tag = typed_tag(tags, "coordinates", "StructProperty", "expressioninput")
+        fields = material_input(tag, owner, stream) if tag else {}
+        node = objects.get(fields.get("expression", 0))
+        if not node or node["class_name"].casefold() != PANNER:
+            return None
+        node, owner, stream, objects = open_art(node, owner, stream, objects)
+        panner, _ = properties(node, owner, stream, objects)
+        pan = []
+        for name in ("speedx", "speedy"):
+            speed = typed_tag(panner, name, "FloatProperty")
+            pan.append(tag_data(stream, speed).fields("f")[0] if speed and speed["size"] == 4 else 0.0)
+        tiling = [1.0, 1.0]
+        coordinate = typed_tag(panner, "coordinate", "StructProperty", "expressioninput")
+        under = objects.get(material_input(coordinate, owner, stream).get("expression", 0)) if coordinate else None
+        if under and under["class_name"].casefold() == TEXTURE_COORDINATE:
+            under, owner, stream, objects = open_art(under, owner, stream, objects)
+            coordinate_tags, _ = properties(under, owner, stream, objects)
+            for axis, name in enumerate(("utiling", "vtiling")):
+                value = typed_tag(coordinate_tags, name, "FloatProperty")
+                if value and value["size"] == 4:
+                    tiling[axis] = tag_data(stream, value).fields("f")[0]
+        elif under:
+            return None  # A Panner over something other than plain coordinates: leave it out.
+    except (ValueError, KeyError, TypeError):
+        return None
+    if (any(not isfinite(value) or abs(value) > MAX_PAN_SPEED for value in pan)
+            or any(not isfinite(value) or not 0 < abs(value) <= 1024 for value in tiling)):
+        return None
+    return {"tiling": [round(value, 4) for value in tiling], "pan": [round(value, 4) for value in pan]}
+
+
 def sample_texture(expression, owner, stream, objects, open_art, overrides, *, allow_custom_uv=False):
     """Return (texture scope, uv); with allow_custom_uv, (texture scope, uv, custom) and default tiling."""
     sample, owner, stream, objects = open_art(expression, owner, stream, objects)
@@ -611,8 +657,145 @@ def colour_value(expression, tags, report, stream, vectors):
     return [values["r"], values["g"], values["b"]]
 
 
+LERP = "materialexpressionlinearinterpolate"
+CHANNELS = ("maskr", "maskg", "maskb", "maska")
+
+
+def input_link(tags, name, owner, stream, objects):
+    """(expression, channel letter or None) feeding a node's input; channel set when it reads one channel."""
+    tag = typed_tag(tags, name, "StructProperty", "expressioninput")
+    if not tag:
+        return None, None
+    fields = material_input(tag, owner, stream)
+    node = objects.get(fields.get("expression", 0))
+    picked = [letter for letter, key in zip("RGBA", CHANNELS) if fields.get(key)]
+    return node, (picked[0] if len(picked) == 1 else None)
+
+
+def material_layers(asset, owner, stream, objects, open_art):
+    """Two tiled layers blended by one mask channel and darkened by another, or None.
+
+    Tartarus's moss ship (MAT_SwampPlanet_Master_MossShip): base colour = Lerp(TileMoss x20, MetalMoss x15
+    + reflection, MSK.b) x MSK.r, with each piece's own MSK. Converting only the first texture left the
+    whole ship flat moss. Returns {"a", "b": (texture scope, uv), "mask": (texture scope, uv, blend channel),
+    "shade": shade channel or None}.
+    """
+    overrides = {}
+    for _ in range(16):
+        material, owner, stream, objects = open_art(asset, owner, stream, objects)
+        tags, _ = properties(material, owner, stream, objects)
+        if material["class_name"].casefold() == "material":
+            break
+        for name, index in texture_overrides(tags, owner, stream).items():
+            overrides.setdefault(name, (index, owner, stream, objects))
+        parent = object_reference(tags, stream, "parent")
+        if not parent or parent not in objects:
+            return None
+        asset = objects[parent]
+    else:
+        return None
+    tag = typed_tag(tags, "diffusecolor", "StructProperty", "colormaterialinput")
+    if not tag:
+        return None
+    fields = material_input(tag, owner, stream)
+    node = objects.get(fields.get("expression", 0))
+
+    def opened(expression):
+        found, scope_owner, scope_stream, scope_objects = open_art(expression, owner, stream, objects)
+        return found, properties(found, scope_owner, scope_stream, scope_objects)[0]
+
+    def is_sample(expression):
+        return expression is not None and expression["class_name"].casefold() in (TEXTURE_SAMPLE, TEXTURE_PARAMETER)
+
+    shade = None
+    if node is not None and node["class_name"].casefold() == "materialexpressionmultiply":
+        _, multiply = opened(node)
+        sides = [input_link(multiply, key, owner, stream, objects) for key in ("a", "b")]
+        darkening = [(expression, channel) for expression, channel in sides if is_sample(expression) and channel]
+        if len(darkening) != 1:
+            return None
+        shade_sample, shade = darkening[0]
+        node = next(expression for expression, channel in sides if (expression, channel) != darkening[0])
+    if node is None or node["class_name"].casefold() != LERP:
+        return None
+    _, lerp = opened(node)
+    layers = []
+    for key in ("a", "b"):
+        expression, channel = input_link(lerp, key, owner, stream, objects)
+        if expression is not None and not is_sample(expression):
+            # A layer with extras added on (the metal's cube reflection): keep its own texture.
+            _, extra = opened(expression)
+            parts = [input_link(extra, part, owner, stream, objects) for part in ("a", "b")]
+            expression = next((part for part, part_channel in parts if is_sample(part) and not part_channel), None)
+        if not is_sample(expression) or channel:
+            return None
+        layers.append(expression)
+    mask, blend = input_link(lerp, "alpha", owner, stream, objects)
+    if not is_sample(mask) or not blend:
+        return None
+    if shade is not None and shade_sample["index"] != mask["index"]:
+        shade = None  # The darkening comes from another texture: leave it out.
+    try:
+        a, b = (sample_texture(layer, owner, stream, objects, open_art, overrides) for layer in layers)
+        mask_texture, mask_uv = sample_texture(mask, owner, stream, objects, open_art, overrides)
+    except ValueError:
+        return None
+    return {"a": a, "b": b, "mask": (mask_texture, mask_uv, blend), "shade": shade}
+
+
+WATER_EXCLUDED = ("rushing", "fall", "plant", "lily", "splash", "droplet", "drip")
+WATER_PARAMETERS = {"slime color": "tint", "fill noise a": "fill_a", "fill noise b": "fill_b", "tiling": "tiling"}
+
+
+def water_surface(asset, owner, stream, objects, open_art):
+    """TA standing-water parameters for a material named as water, or None.
+
+    Tartarus's swamp (SPL_Water_Unlit_A and its instances) is an unlit, see-through surface coloured by a
+    "slime color", two "fill noise" colours mixed through a silt texture, and a "Tiling" repeat. Rushing
+    water, waterfalls and water plants are other effects and are left to the self-lit path.
+    """
+    vectors, names = {}, []
+    for _ in range(16):
+        material, owner, stream, objects = open_art(asset, owner, stream, objects)
+        names.append(material.get("object_path", "").casefold())
+        tags, _ = properties(material, owner, stream, objects)
+        if material["class_name"].casefold() == "material":
+            break
+        for name, value in vector_overrides(tags, owner, stream).items():
+            vectors.setdefault(name, value)
+        parent = object_reference(tags, stream, "parent")
+        if not parent or parent not in objects:
+            return None
+        asset = objects[parent]
+    else:
+        return None
+    if not any("water" in name.rsplit(".", 1)[-1] or ".water." in name for name in names) or any(
+            word in name.rsplit(".", 1)[-1] for name in names for word in WATER_EXCLUDED):
+        return None
+    found = {}
+    for row in owner["exports"]:
+        if row.get("outer") != material["index"] or row["class_name"].casefold() != VECTOR_PARAMETER:
+            continue
+        try:
+            node_tags, _ = properties(row, owner, stream, objects)
+            name_tag = typed_tag(node_tags, "parametername", "NameProperty")
+            name = table_name(tag_data(stream, name_tag), owner["names"], True).casefold() if name_tag else ""
+            if name in WATER_PARAMETERS:
+                found[WATER_PARAMETERS[name]] = colour_value(row, node_tags, owner, stream, vectors)
+        except ValueError:
+            continue
+    if "tint" not in found:
+        return None
+    clean = lambda values: [round(min(64.0, max(0.0, value)), 4) for value in values]  # noqa: E731
+    water = {"tint": clean(found["tint"]), "fill": [clean(found.get("fill_a", [0.2, 0.2, 0.2])),
+                                                     clean(found.get("fill_b", [0.2, 0.2, 0.2]))]}
+    tiling = found.get("tiling", [1.0, 1.0])[:2]
+    water["tiling"] = [round(min(1024.0, max(0.01, value)), 4) for value in tiling]
+    return water
+
+
 def material_emissive(asset, owner, stream, objects, open_art):
-    """Return (texture scope, linear tint, channel or None) for an Ascend material's glow, or None (#40).
+    """Return (texture scope, linear tint, channel or None, motion or None) for an Ascend glow, or None (#40).
 
     Ascend glows are usually an emissive texture multiplied by a colour parameter (above 1 for
     brightness), with masks and edge falloff around them. This takes the first texture and the
@@ -637,7 +820,7 @@ def material_emissive(asset, owner, stream, objects, open_art):
     tag = typed_tag(tags, "emissivecolor", "StructProperty", "colormaterialinput")
     fields = material_input(tag, owner, stream) if tag else {}
     queue, seen = [(fields.get("expression", 0), input_channel(fields))], set()
-    texture, tint, channel = None, None, None
+    texture, tint, channel, mask_fallback, motion = None, None, None, None, None
     while queue and len(seen) < GLOW_NODES and (texture is None or tint is None):
         index, reads = queue.pop(0)
         node = objects.get(index)
@@ -652,8 +835,17 @@ def material_emissive(asset, owner, stream, objects, open_art):
         if kind in (TEXTURE_SAMPLE, TEXTURE_PARAMETER):
             if texture is None:
                 # A glow that reads one channel (often a mask in the diffuse alpha) glows only there.
-                texture, _ = sample_texture(node, owner, stream, objects, open_art, textures)
-                channel = reads
+                # A glow or sky sampled through custom coordinates (a panning sky) falls back to the
+                # mesh's own UVs: the art shows, without the motion.
+                found, *_ = sample_texture(node, owner, stream, objects, open_art, textures, allow_custom_uv=True)
+                found_motion = sample_motion(node, owner, stream, objects, open_art)
+                name = found[0].get("object_path", "").rsplit(".", 1)[-1].casefold()
+                if name.endswith("_msk") or "mask" in name:
+                    # A cloud or opacity mask multiplied into a painted sky: keep looking for the art
+                    # (Arx Novena's sky is two _EMI halves x a cloud mask), using the mask only if alone.
+                    mask_fallback = mask_fallback or (found, reads, found_motion)
+                else:
+                    texture, channel, motion = found, reads, found_motion
             continue
         if kind in (VECTOR_PARAMETER, CONSTANT_COLOR):
             if tint is None:
@@ -671,12 +863,14 @@ def material_emissive(asset, owner, stream, objects, open_art):
                     tint = [(a + b) / 2 for a, b in zip(*colours)]
                     continue
         queue.extend(inputs)
+    if texture is None and mask_fallback:
+        texture, channel, motion = mask_fallback
     if texture is None:
         return None
     tint = [min(MAX_GLOW_TINT, max(0.0, value)) for value in (tint or [1.0, 1.0, 1.0])]
     if max(tint) < 0.01:
         return None  # A black glow colour: the surface does not glow in the source.
-    return texture, tint, channel
+    return texture, tint, channel, motion
 
 
 def channel_png(png, channel):
@@ -764,6 +958,9 @@ def texture_mip(asset, report, stream, objects, rtc):
 
 
 def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc, remaster=None):
+    from progress_status import status
+
+    status(f"Converting material {asset.get('object_path', '').rsplit('.', 1)[-1]}")
     receipts = {}
     main_name = report["source"]["name"]
     with ExitStack() as scope:
@@ -777,24 +974,78 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
                     raise ValueError("Ascend artwork package changed during import.")
             return local
 
-        texture, settings, approximate = material_texture(asset, report, stream, objects, open_art)
+        unlit, unlit_channel, unlit_motion, water = None, None, None, None
+        try:
+            texture, settings, approximate = material_texture(asset, report, stream, objects, open_art)
+        except ValueError as error:
+            # Self-lit Ascend surfaces (sky domes, skyline backdrops) have no base colour, only an
+            # emissive texture. That texture becomes the surface, drawn unlit at its own brightness.
+            if not any(text in str(error) for text in ("no diffuse input", "not a direct RGB texture sample",
+                                                       "custom coordinates")):
+                raise
+            try:
+                emissive = material_emissive(asset, report, stream, objects, open_art)
+            except ValueError:
+                emissive = None
+            if not emissive:
+                raise error
+            texture, settings, approximate = emissive[0], {}, None
+            unlit = emissive[1]
+            # An effect drawn from one channel of a mask (Tartarus's waterfall: T_RainDance_Waterfalls_MSK
+            # x a green-grey tint) becomes that channel as grey art; drawn additive it glows where the
+            # mask is bright and is see-through elsewhere. Its scrolling motion is left out for now.
+            unlit_channel = emissive[2]
+            unlit_motion = emissive[3]
+            try:
+                water = water_surface(asset, report, stream, objects, open_art)
+            except ValueError:
+                water = None
         image, source, pixels, exports = open_art(*texture)
         data, size, fallback, cache_receipts = texture_mip(image, source, pixels, exports, rtc)
-        remastered, note = remaster.load(image["object_path"], size) if remaster else (None, None)
+        if unlit and unlit_channel is not None:
+            data = channel_png(data, unlit_channel)
         mask_png, blend_issue = None, None
         try:
             blend, two_sided, mask = material_blend(asset, report, stream, objects, open_art)
         except ValueError as error:
             # Keep the base colour; an unreadable mask leaves the material opaque for review.
             blend, two_sided, mask, blend_issue = "BLEND_Opaque", False, None, str(error)
+        # Painted sky domes go through the AI; additive star fields and nebulae get a plain Lanczos 2x,
+        # because the AI smears point stars into soft blobs (Katabatic's star cards).
+        role = ("glow" if blend in ("BLEND_Additive", "BLEND_Translucent") else "sky") if unlit else "base"
+        remastered, note = remaster.load(image["object_path"], size, data, role) if remaster else (None, None)
         if mask:
             mask_image, mask_source, mask_pixels, mask_exports = open_art(*mask[0])
             mask_png, _, _, mask_receipts = texture_mip(mask_image, mask_source, mask_pixels, mask_exports, rtc)
             for receipt in mask_receipts:
                 receipts[receipt["name"]] = receipt
+        layers = None
+        if not unlit:
+            # Two tiled layers blended by a mask (the moss ship's metal plating under its moss).
+            try:
+                found = material_layers(asset, report, stream, objects, open_art)
+            except (ValueError, KeyError):
+                found = None
+            if found:
+                layers = {}
+                for key in ("a", "b", "mask"):
+                    layer_scope, uv = found[key][:2]
+                    layer_image, layer_owner, layer_pixels, layer_exports = open_art(*layer_scope)
+                    layer_png, layer_size, _, layer_receipts = texture_mip(layer_image, layer_owner, layer_pixels,
+                                                                           layer_exports, rtc)
+                    for receipt in layer_receipts:
+                        receipts[receipt["name"]] = receipt
+                    layer_source = layer_receipts[-1] if layer_receipts else layer_owner["source"]
+                    if key != "mask" and remaster:
+                        better, _ = remaster.load(layer_image["object_path"], layer_size, layer_png, "base")
+                        if better:
+                            layer_png, layer_size, layer_source = better
+                            receipts[layer_source["name"]] = layer_source
+                    layers[key] = (layer_png, layer_size, layer_source, uv)
+                layers["blend"], layers["shade"] = found["mask"][2], found["shade"]
         glow, glow_issue = None, None
         try:
-            emissive = material_emissive(asset, report, stream, objects, open_art)
+            emissive = None if unlit else material_emissive(asset, report, stream, objects, open_art)
             if emissive:
                 glow_image, glow_owner, glow_pixels, glow_exports = open_art(*emissive[0])
                 glow_png, glow_size, _, glow_receipts = texture_mip(glow_image, glow_owner, glow_pixels,
@@ -804,10 +1055,22 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
                 glow_source = glow_receipts[-1] if glow_receipts else glow_owner["source"]
                 if emissive[2] is not None:
                     glow_png = channel_png(glow_png, emissive[2])
+                if remaster:
+                    better, glow_note = remaster.load(glow_image["object_path"], glow_size, glow_png, "glow")
+                    if better:
+                        glow_png, glow_size, glow_source = better
+                        receipts[glow_source["name"]] = glow_source
                 glow = (glow_png, glow_size, glow_source, emissive[1])
         except ValueError as error:
             glow_issue = f"Glow left out: {error}"
     masked = mask_png is not None
+    if unlit and not masked and blend in ("BLEND_Translucent", "BLEND_Additive", "BLEND_Masked"):
+        # A see-through self-lit backdrop (Arx Novena's painted city skyline) is cut out by its own alpha.
+        from io import BytesIO
+        from PIL import Image
+
+        alpha = Image.open(BytesIO(data)).convert("RGBA").getchannel("A").getextrema()
+        masked = alpha[0] < 128 <= alpha[1]
     if masked:
         warning = "Base color and source opacity mask imported (masked material)."
     else:
@@ -828,6 +1091,8 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
         warning = f"{warning} {fallback}"
     if glow:
         warning = f"Glow imported as texture x colour. {warning}"
+    if unlit:
+        warning = f"Self-lit surface (sky or backdrop) imported unlit from its emissive texture. {warning}"
     elif glow_issue:
         warning = f"{warning} {glow_issue}"
     warning = warning[:240]
@@ -835,7 +1100,7 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
         receipts[receipt["name"]] = receipt
     if not remastered:
         image_source = cache_receipts[-1] if cache_receipts else source["source"]
-    if masked:
+    if mask_png is not None:
         data = with_alpha(data, mask_png, mask[1])
     name = "texture_" + sha256(data).hexdigest()[:32] + ".png"
     binding = dict(file=name, source=image_source["name"], source_sha256=image_source["sha256"],
@@ -844,6 +1109,26 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
     if settings:
         binding["ascend_base"] = settings
     files = {name: data}
+    if unlit:
+        binding["ascend_glow"] = dict(color=dict(file=name, source=image_source["name"],
+                                                 source_sha256=image_source["sha256"], size=size),
+                                      tint=[round(min(MAX_GLOW_TINT, max(0.0, value)), 4) for value in unlit])
+        if unlit_motion:
+            # The waterfall's streaks repeat and scroll as in the source.
+            binding["ascend_glow"].update(unlit_motion)
+        if water:
+            # Standing water (Tartarus's swamp): a see-through surface in TA's colours over a water volume.
+            binding["ascend_water"] = water
+            binding.pop("ascend_additive", None)
+        binding["ascend_unlit"] = True
+        if not masked and blend == "BLEND_Translucent" and unlit_motion:
+            # A scrolling translucent effect (Tartarus's waterfall): solid where its mask is bright and
+            # see-through elsewhere. Drawn additive with the star cards' dimming it all but vanished.
+            binding["ascend_effect"] = True
+        elif not masked and blend in ("BLEND_Additive", "BLEND_Translucent"):
+            # Star fields, nebulae and light shafts: black adds nothing, bright parts glow. Drawn opaque
+            # they became dark panels in Katabatic's sky.
+            binding["ascend_additive"] = True
     if glow:
         glow_png, glow_size, glow_source, tint = glow
         glow_name = "texture_" + sha256(glow_png).hexdigest()[:32] + ".png"
@@ -851,4 +1136,19 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
         binding["ascend_glow"] = dict(color=dict(file=glow_name, source=glow_source["name"],
                                                  source_sha256=glow_source["sha256"], size=glow_size),
                                       tint=[round(value, 4) for value in tint])
+    if layers:
+        records = {}
+        for key in ("a", "b", "mask"):
+            layer_png, layer_size, layer_source, uv = layers[key]
+            layer_name = "texture_" + sha256(layer_png).hexdigest()[:32] + ".png"
+            files[layer_name] = layer_png
+            record = dict(file=layer_name, source=layer_source["name"], source_sha256=layer_source["sha256"],
+                          size=layer_size)
+            record["uv"] = [int(uv[0]), round(uv[1], 4), round(uv[2], 4)] if uv else [0, 1.0, 1.0]
+            records[key] = record
+        records["mask"]["blend"] = layers["blend"]
+        if layers["shade"]:
+            records["mask"]["shade"] = layers["shade"]
+        binding["ascend_layers"] = records
+        binding["warning"] = f"Two layers blended by a mask. {binding['warning']}"[:240]
     return binding, files, receipts.values()

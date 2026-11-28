@@ -77,6 +77,7 @@ def ascend_fog(actor, node, stream, endian, cm_per_unit):
         "fogenabled": BOOL, "benabled": BOOL, "fogdensity": FLOAT, "startdistance": FLOAT,
         "fogheight": FLOAT, "fogheightfalloff": FLOAT, "fogmaxopacity": FLOAT,
         "oppositelightcolor": COLOR, "lightinscatteringcolor": COLOR,
+        "oppositelightbrightness": FLOAT, "lightinscatteringbrightness": FLOAT,
     })
     if not values.get("benabled", True) or not values.get("fogenabled", True):
         return {}, "Height fog is disabled in the source."
@@ -100,8 +101,19 @@ def ascend_fog(actor, node, stream, endian, cm_per_unit):
             result[key] = value / cm_per_unit if key == "height_falloff" else value
     opposite = values.get("oppositelightcolor")
     primary = values.get("lightinscatteringcolor")
+    # UE3 height fog has two colours, each with a brightness: OppositeLightColor looking away from
+    # the sun and LightInscatteringColor looking toward it. Arx Novena's are blue-violet and warm
+    # pink at 0.5; taking only the first at full strength turned its haze purple.
+    def scaled(colour, key):
+        brightness = values.get(key, 1.0)
+        if not 0 <= brightness <= 16:
+            raise ValueError("Saved fog brightness exceeds the editor range.")
+        return [min(1.0, channel * brightness) for channel in rgb(colour)]
+
     if primary or opposite:
-        result["color"] = rgb(opposite or primary)
+        result["color"] = scaled(opposite or primary, "oppositelightbrightness" if opposite else "lightinscatteringbrightness")
+    if primary and opposite:
+        result["sun_color"] = scaled(primary, "lightinscatteringbrightness")
     note = "Imported global height fog. Source directional scattering remains in review."
     return result, note
 

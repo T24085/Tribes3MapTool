@@ -11,6 +11,7 @@ from game_workflows import window_title
 from intake_contract import finite
 from source_profiles import SCALE_PRESETS, UNITS_PER_METRE_DEFAULT
 from unreal_binary_scene import read_binary_scene
+from texture_remaster import remember_tool, remembered_tool
 from unreal_legacy_intake import companion_paths, project_markers, usable_marker, validate_unreal_settings, world_lines
 from unreal_native_terrain import terrain_candidates
 from unreal_package_reader import GAMES
@@ -75,7 +76,8 @@ def suggested_teams(flags, spawns, actors=()):
     return teams
 
 
-def native_settings(scene, terrain, units, teams, companions, levels=(), remastered=None):
+def native_settings(scene, terrain, units, teams, companions, levels=(), remastered=None, remaster_tool=None,
+                    remaster_redo=False):
     if terrain is None:
         raise ValueError("Select a native terrain, or use a settings file with a supplied heightmap.")
     if not finite(units, 1e6) or units <= 0:
@@ -88,6 +90,10 @@ def native_settings(scene, terrain, units, teams, companions, levels=(), remaste
         settings["levels"] = [Path(level).name for level in levels]
     if remastered:
         settings["remastered_textures"] = str(remastered)
+    if remaster_tool:
+        settings["remaster_tool"] = str(remaster_tool)
+        if remaster_redo:
+            settings["remaster_redo"] = True
     ground = {"export_index": terrain["line"]}
     project_markers(dict(scene, native_terrain=ground), teams)
     return validate_unreal_settings(settings)
@@ -230,6 +236,10 @@ def show_native_import(parent, source, levels=()):
     ttk.Label(package_row, textvariable=package_text).pack(side="left", padx=6)
     # Optional 2x (or other) remastered base colors, used in place of matching source textures (#9).
     remastered = tk.StringVar(window, "")
+    auto = tk.BooleanVar(window, False)
+    # Off by default: results are cached by source pixels, so a map is remastered once. Tick to rebuild.
+    redo = tk.BooleanVar(window, False)
+    remaster_tool = lambda: None  # noqa: E731
     remaster_text = tk.StringVar(window, "Original textures")
     if game == "ascend":
         remaster_row = ttk.Frame(body)
@@ -251,6 +261,33 @@ def show_native_import(parent, source, levels=()):
         ttk.Button(remaster_row, text="Remastered textures…", command=select_remastered).pack(side="left")
         ttk.Button(remaster_row, text="Clear", command=clear_remastered).pack(side="left", padx=4)
         ttk.Label(remaster_row, textvariable=remaster_text, wraplength=560).pack(side="left", padx=6)
+        # Remaster all of the map's textures 2x as they are read (Real-ESRGAN, cached between imports).
+        auto_row = ttk.Frame(body)
+        auto_row.pack(fill="x", pady=(4, 0))
+        tool_folder = remembered_tool()
+        auto.set(tool_folder is not None)
+        auto_text = tk.StringVar(window, tool_folder and f"Real-ESRGAN: {tool_folder}" or "Real-ESRGAN not set up")
+
+        def select_tool():
+            nonlocal tool_folder
+            folder = filedialog.askdirectory(parent=window, title="Select the Real-ESRGAN folder "
+                                             "(realesrgan-ncnn-vulkan.exe and models)")
+            if not folder:
+                return
+            try:
+                tool_folder = remember_tool(Path(folder))
+            except ValueError as error:
+                messagebox.showerror("Real-ESRGAN", str(error), parent=window)
+                return
+            auto.set(True)
+            auto_text.set(f"Real-ESRGAN: {tool_folder}")
+
+        ttk.Checkbutton(auto_row, text="Remaster all textures 2x (sky, base colours, glow)", variable=auto
+                        ).pack(side="left")
+        ttk.Checkbutton(auto_row, text="Redo remaster", variable=redo).pack(side="left", padx=4)
+        ttk.Button(auto_row, text="Real-ESRGAN…", command=select_tool).pack(side="left", padx=4)
+        ttk.Label(auto_row, textvariable=auto_text, wraplength=420).pack(side="left", padx=6)
+        remaster_tool = lambda: tool_folder if auto.get() else None  # noqa: E731
     notice = tk.StringVar(window)
     ttk.Label(body, textvariable=notice, wraplength=670).pack(fill="x", pady=(10, 6))
     actions = ttk.Frame(body)
@@ -269,7 +306,8 @@ def show_native_import(parent, source, levels=()):
         nonlocal result
         try:
             result = native_settings(scene, terrains.get(terrain.get()), float(units.get()), selections(), companions,
-                                     levels, remastered.get() or None)
+                                     levels, remastered.get() or None, remaster_tool(),
+                                     bool(remaster_tool()) and redo.get())
         except ValueError as error:
             notice.set(str(error))
             return

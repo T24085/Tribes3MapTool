@@ -136,7 +136,7 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                          bsp_world=False, static_mesh=None, external_height=False, painted=False, source_artwork=False,
                          bsp_artwork=False, mesh_artwork=False, shader_inputs=False, surface_detail=False, brush_mover=False,
                          ascend_shader=None, ascend_component_materials=None, ascend_body=None, spawn_base=None,
-                         environment=False, local_lights=False, ascend_vertices=None):
+                         environment=False, local_lights=False, ascend_vertices=None, simple_box_collision=False):
     exported, settings = unreal_draft_fixture(root, game)
     modern = game == "ascend"
     source = exported.with_suffix(".fmap" if modern else ".tvm")
@@ -197,6 +197,9 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                            "SphylElems", "TM", "Matrix", "X", "Y", "Z", "Radius", "Length",
                            "UseSimpleLineCollision", "bNoRBCollision", "ConvexElems", "VertexData", "FaceTriData")
         strings = tuple(dict.fromkeys((*strings, *collision_names)))
+    if static_mesh:
+        # Fixture meshes collide per triangle (UseSimpleBoxCollision off) unless a test asks for UE3's default.
+        strings = tuple(dict.fromkeys((*strings, "UseSimpleBoxCollision")))
 
     def pack(form, *values):
         return struct.pack("<" + form, *values)
@@ -226,6 +229,9 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
     def reference(key, index):
         data = pack("i", index) if modern else compact(index)
         return prop(key, "ObjectProperty", data)
+
+    box_flag = () if simple_box_collision or not static_mesh else (
+        prop("UseSimpleBoxCollision", "BoolProperty", b"\x00"),)
 
     def object_bytes(*fields, component=False, stateful=0, truncated=False):
         if modern:
@@ -721,6 +727,7 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
                 art_exports.append((-2, 0, "OriginalMesh", 0, mesh, 3))
                 art_exports.append((-len(types), mesh_index_in_package, "BodySetup", 0, object_bytes(body_prop), 3))
             else:
+                mesh = object_bytes(*box_flag) + mesh[len(object_bytes()):]
                 art_exports.append((-2, 0, "OriginalMesh", 0, mesh, 3))
             companion = source.with_name("Fixture.upk")
             companion.write_bytes(build_package(game, strings, types, art_exports))
@@ -728,11 +735,11 @@ def binary_draft_fixture(root, game, *, corrupt=False, attached=False, native_te
             source.with_suffix(".import.json").write_text(json.dumps(settings), encoding="utf-8")
         elif static_mesh == "embedded":
             imports.extend(materials)
-            mesh = object_bytes() + ascend_mesh_lod((-len(imports) + 1, -len(imports)), ascend_vertices)
+            mesh = object_bytes(*box_flag) + ascend_mesh_lod((-len(imports) + 1, -len(imports)), ascend_vertices)
             exports.append((-7, 0, "OriginalMesh", 0, mesh, 3))
         else:
             types = [("Core", "Package", 0, "Fixture"), ("Core", "Class", -1, "StaticMesh")]
-            mesh = object_bytes() + ascend_mesh_lod((-3, -4), ascend_vertices)
+            mesh = object_bytes(*box_flag) + ascend_mesh_lod((-3, -4), ascend_vertices)
             companion = source.with_name("Fixture.upk")
             companion.write_bytes(build_package(game, strings, [*types, *materials],
                                                  [(-2, 0, "OriginalMesh", 0, mesh, 3)]))
@@ -1678,6 +1685,18 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 manifest.write_text(json.dumps(dict(header, format=22)), encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "Invalid intake interiors"):
                     load_intake(manifest)
+
+    def test_ascend_meshes_without_simple_shapes_let_players_through_by_default(self):
+        # UE3: with UseSimpleBoxCollision on (the default) and no simple shapes, players pass through
+        # (Tartarus's biolamp stalks); the fixture above turns it off and keeps per-triangle collision.
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = binary_draft_fixture(root, "ascend", static_mesh="embedded", simple_box_collision=True)
+            manifest = convert_unreal(source, root / "Intakes")
+            header, _, _ = load_intake(manifest)
+            name, = header["interiors"].values()
+            geometry, _ = load_intake_geometry(manifest.parent, name, header["files"][name])
+            self.assertEqual(geometry["collision"]["triangles"], [])
 
     def test_ascend_vertex_attributes_from_full_and_half_precision_streams(self):
         for mode, stream in (("embedded", "half"), ("companion", "full")):

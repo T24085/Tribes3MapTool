@@ -9,6 +9,21 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 import zipfile
 
+from tk_runtime import configure_tk
+
+# Started from the Unreal menu, the window takes a while to appear (imports and the conversion catalog):
+# show "Loading Map Tool..." at once so step 1 never looks dead. run() closes it when the window is ready.
+SPLASH = None
+if __name__ == "__main__":
+    configure_tk()
+    SPLASH = tk.Tk()
+    SPLASH.title("TRIBES Map Editor")
+    SPLASH.resizable(False, False)
+    frame = ttk.Frame(SPLASH, padding=20)
+    frame.pack()
+    ttk.Label(frame, text="Loading Map Tool…").pack()
+    SPLASH.update()
+
 from conversion_rules import checksum, sha256_file, write
 from game_workflows import game_choices, open_filetypes, select_game, steps_text, window_title
 from boundary_polygon_window import show_polygon
@@ -41,7 +56,6 @@ from t1_terrain import volume_missions
 from t2_reader import convert, members, unpack_intake
 from terrain_layers import FALLBACK, PALETTE_SURFACES, layer_choices
 from terrain_art import available_art
-from tk_runtime import configure_tk
 from unreal_legacy_intake import convert_unreal, read_unreal_settings, split_level_set
 from unreal_package_reader import GAMES as NATIVE_PACKAGE_TYPES, inspect_package, write_report as write_package_report
 
@@ -52,7 +66,8 @@ WALL_COLLISION_CHOICES = {
     "Vehicles (Vehicle)": ("vehicle",),
     "Pawn and Vehicle": ("pawn", "vehicle"),
 }
-WALL_VISUAL_CHOICES = {"Invisible": None, "Cyan energy": "energy", "Amber warning": "warning"}
+WALL_VISUAL_CHOICES = {"Invisible": None, "Cyan energy": "energy", "Amber warning": "warning",
+                       "T3 style (retail border)": "t3"}
 
 
 def show_boundary_settings(parent, header, terrain, rows, selection, on_save):
@@ -624,6 +639,10 @@ def run(library, meshes=(), drafts=(), game=None):
     # A desktop launcher can inherit Tcl paths for a different Python installation.
     configure_tk()
     catalog = load_catalog(library)
+    global SPLASH
+    if SPLASH is not None:
+        SPLASH.destroy()
+        SPLASH = None
     root = tk.Tk()
     mesh_paths = set(meshes)
     root.title("TRIBES Map Editor · Convert a map")
@@ -844,7 +863,9 @@ def run(library, meshes=(), drafts=(), game=None):
     def inspect(path):
         nonlocal catalog, object_review, table
         show_stage("review")
-        header, terrain, rows = load_intake(path)
+        # Reading and verifying a large intake takes a while (Katabatic: 4,375 objects): show progress.
+        header, terrain, rows = run_busy(root, f"Opening and verifying intake {Path(path).parent.name}…",
+                                         lambda: load_intake(path))
         if not state.get("manifest"):
             boundary_options.clear()
             recipe = read_boundary_recipe(rows)
@@ -991,6 +1012,13 @@ def run(library, meshes=(), drafts=(), game=None):
         except (ValueError, KeyError, TypeError, OSError, RuntimeError, zipfile.BadZipFile) as exc:
             notice.set("Map conversion could not finish.")
             messagebox.showerror("Map conversion", str(exc), parent=root)
+        except Exception as exc:  # noqa: BLE001 - an unexpected bug must still be reported, not just vanish.
+            import traceback
+
+            notice.set("Map conversion stopped on an unexpected error.")
+            where = traceback.extract_tb(exc.__traceback__)[-1]
+            messagebox.showerror("Map conversion", f"Unexpected error: {type(exc).__name__}: {exc}\n\n"
+                                 f"at {Path(where.filename).name}:{where.lineno}. Please report this.", parent=root)
 
     def clear():
         show_stage("open")
@@ -1065,7 +1093,7 @@ def run(library, meshes=(), drafts=(), game=None):
                 inspect(path)
                 return
             if path.suffix.lower() == ".zip":
-                inspect(unpack_intake(path, library))
+                inspect(run_busy(root, f"Unpacking {path.name}…", lambda: unpack_intake(path, library)))
                 return
             if path.suffix.lower() == ".t3d":
                 import_unreal(path, root)

@@ -14,7 +14,7 @@ from ascend_collision import array_fields, convex_elements
 from ascend_materials import properties, tag_data, typed_tag
 from unreal_package_reader import open_package
 
-MAX_VOLUMES = 512
+MAX_VOLUMES = 4096  # ArxNovena, a city map, has 781 blocking volumes.
 WALL_RATIO = 0.05  # A wall is at most this thin across, relative to its length.
 CEILING_COVER = 0.9  # A ceiling volume covers at least this share of the play box.
 # Ascend's visible out-of-bounds force fields: flat panels that never closed the box (Tartarus leaves

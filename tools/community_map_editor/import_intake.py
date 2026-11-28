@@ -33,6 +33,8 @@ from source_profiles import (BRUSH_PREVIEW_REFERENCE, PREFIX, T2_GENERATOR_SCOPE
 from terrain_art import SOURCE_ART, available_art
 from terrain_layers import ART_SLOT_OFFSET, FALLBACK, PALETTE_SURFACES, SIZE, layer_choices, load_weights, painted_cells
 from terrain_grid import ARTWORK_UV, TiledTerrain, footprint
+from foliage_rules import is_ground_plant, soft_foliage
+from terrain_smoothing import ASCEND_FACTOR, bilinear, smooth_grid
 
 
 def choose(game=None):
@@ -40,11 +42,17 @@ def choose(game=None):
     from game_workflows import game_label
 
     tool = Path(os.environ["T3_CONVERTER_TOOL"])
-    registry = unreal.AssetRegistryHelpers.get_asset_registry()
-    meshes = sorted(str(data.package_name)
-                    for data in registry.get_assets_by_path("/Game/Community", recursive=True)
-                    if str(data.asset_class_path.asset_name) == "StaticMesh")
-    drafts = editor.list_drafts()
+    # Listing every project mesh and draft takes a while on a large project: show Unreal's progress
+    # dialog at once, so the button never looks dead. The window shows its own notice as it starts.
+    with unreal.ScopedSlowTask(2, "Loading Map Tool…") as task:
+        task.make_dialog(False)
+        task.enter_progress_frame(1, "Loading Map Tool… listing project meshes")
+        registry = unreal.AssetRegistryHelpers.get_asset_registry()
+        meshes = sorted(str(data.package_name)
+                        for data in registry.get_assets_by_path("/Game/Community", recursive=True)
+                        if str(data.asset_class_path.asset_name) == "StaticMesh")
+        task.enter_progress_frame(1, "Loading Map Tool… listing drafts")
+        drafts = editor.list_drafts()
     result = subprocess.run(
         [
             os.environ["T3_CONVERTER_PYTHON"],
@@ -93,7 +101,7 @@ def choose(game=None):
 
 
 def terrain_mesh(ident, t, weights, *, tile_cm=None, name="Terrain", uv_origin=(0, 0), paint=None, materials=None,
-                 artwork_flags=None, mask_frame=None, source_material=None):
+                 artwork_flags=None, mask_frame=None, source_material=None, smooth=1):
     if tile_cm is None:
         tile_cm = profile_config()["conversions"]["terrain.tile_cm"]["value"]
     step = t["step_cm"]
@@ -113,21 +121,32 @@ def terrain_mesh(ident, t, weights, *, tile_cm=None, name="Terrain", uv_origin=(
     colors = []
     tri = []
     face_surfaces = []
-    for y in range(SIZE + 1):
-        for x in range(SIZE + 1):
+    # Smoothing subdivides each source cell (terrain_smoothing); the T1/T2 artwork-cell path keeps one cell.
+    factor = 1 if artwork_flags is not None else smooth
+    cells = SIZE * factor
+    stride = cells + 1
+
+    def source_height(x, y):
+        return heights[y * (SIZE + 1) + x if unwrapped else (y % SIZE) * SIZE + x % SIZE]
+
+    smoothed = smooth_grid(source_height, SIZE, factor)
+    for fy in range(stride):
+        for fx in range(stride):
+            x, y = fx // factor, fy // factor
             sample = (y % SIZE) * SIZE + x % SIZE
             height_sample = y * (SIZE + 1) + x if unwrapped else sample
+            local_x, local_y = fx * step / factor, fy * step / factor
             verts.append(
                 unreal.Vector(
-                    x * step,
-                    y_sign * y * step,
-                    heights[height_sample] * scale,
+                    local_x,
+                    y_sign * local_y,
+                    smoothed[fy * stride + fx] * scale,
                 )
             )
-            uv.append(unreal.Vector2D((x * step + uv_origin[0]) / tile_cm, (y * step + uv_origin[1]) / tile_cm))
+            uv.append(unreal.Vector2D((local_x + uv_origin[0]) / tile_cm, (local_y + uv_origin[1]) / tile_cm))
             if mask_frame is not None:
-                mask_uv.append(unreal.Vector2D(min(x0 + x, width - 1) / (width - 1),
-                                               min(y0 + y, height - 1) / (height - 1)))
+                mask_uv.append(unreal.Vector2D(min(x0 + fx / factor, width - 1) / (width - 1),
+                                               min(y0 + fy / factor, height - 1) / (height - 1)))
             if artwork_flags is not None:
                 # The UV corners for artwork cells need their own vertices. Share the geometric normal.
                 left, right = max(0, x - 1), min(SIZE, x + 1)
@@ -137,16 +156,20 @@ def terrain_mesh(ident, t, weights, *, tile_cm=None, name="Terrain", uv_origin=(
                 length = math.sqrt(1 + dx * dx + dy * dy)
                 normals.append(unreal.Vector(-dx / length, -dy / length, 1 / length))
             if weights is not None:
-                colors.append(unreal.LinearColor(*weights[height_sample if continuous_paint else sample], 1.0))
-    for y in range(256):
-        for x in range(256):
+                if continuous_paint and factor > 1:
+                    colors.append(unreal.LinearColor(*bilinear(weights, SIZE, factor, fx, fy), 1.0))
+                else:
+                    colors.append(unreal.LinearColor(*weights[height_sample if continuous_paint else sample], 1.0))
+    for cy in range(cells):
+        for cx in range(cells):
+            x, y = cx // factor, cy // factor
             cell = y * SIZE + x
             if cell in holes:
                 continue
-            a = y * 257 + x
+            a = cy * stride + cx
             b = a + 1
-            c = b + 257
-            d = a + 257
+            c = b + stride
+            d = a + stride
             if artwork_flags is not None and paint[cell] >= ART_SLOT_OFFSET:
                 first = len(verts)
                 for vertex, point in zip((a, b, c, d), ARTWORK_UV[artwork_flags[cell] & 7]):
@@ -154,7 +177,10 @@ def terrain_mesh(ident, t, weights, *, tile_cm=None, name="Terrain", uv_origin=(
                     normals.append(normals[vertex])
                     uv.append(unreal.Vector2D(*point))
                 a, b, c, d = range(first, first + 4)
-            flip = cell in turned if turned is not None else (x ^ y) & 1
+            if factor > 1:
+                flip = (cx ^ cy) & 1  # Subdivided cells are near-planar: alternate the diagonals.
+            else:
+                flip = cell in turned if turned is not None else (x ^ y) & 1
             faces = ((a, b, d), (b, c, d)) if flip else ((a, b, c), (a, c, d))
             for first, second, third in faces:
                 tri.append(
@@ -303,6 +329,12 @@ def place_static_objects(actors, planned, meshes, material_overrides=None, light
         if not actor or not actor.static_mesh_component.set_static_mesh(meshes[path]):
             raise RuntimeError(f"Could not place mesh for {row['name'] or row['id']}.")
         actor.set_actor_scale3d(unreal.Vector(*scale))
+        if str(row.get('properties', {}).get('CastShadow')) == 'False':
+            # The source mesh cast no shadow (sky domes, skyline backdrops, grass).
+            actor.static_mesh_component.set_cast_shadow(False)
+        if str(row.get('properties', {}).get('Collision')) == 'False':
+            # The source mesh did not collide (grass, small props): players pass through it.
+            actor.static_mesh_component.set_collision_profile_name('NoCollision')
         if native_modes and path in native_modes:
             visible, solid, format_version = native_modes[path]
             if format_version == VENGEANCE_STATIC_MESH:
@@ -325,6 +357,12 @@ def place_static_objects(actors, planned, meshes, material_overrides=None, light
             else:
                 actor.set_editor_property('is_editor_only_actor', True)
                 actor.static_mesh_component.set_collision_profile_name('NoCollision')
+        component = actor.static_mesh_component
+        if (str(component.get_collision_profile_name()) != 'NoCollision'
+                and is_ground_plant(source_reference(row) or "")):
+            # Standing rule: ground plants never block players or vehicles, but still stop shots. Plants the
+            # source made non-colliding stay that way.
+            soft_foliage(component)
         for slot, material in material_overrides.get(material_reference(row, material_overrides), {}).items():
             actor.static_mesh_component.set_material(slot, material)
         if lighting_links and row['id'] in lighting_links:
@@ -340,7 +378,13 @@ def place_static_objects(actors, planned, meshes, material_overrides=None, light
 
             actor.tags = list(actor.tags) + [unreal.Name(f"{BINDING_TAG}{ident}") for ident in light_commands[row["id"]]]
         actor.set_actor_label(row["name"] or f"{row['source_class']} {row['id']}")
-        actor.set_folder_path("TRIBES Import/Moving brushes" if motion else "TRIBES Import/Mapped meshes")
+        folder = "TRIBES Import/Moving brushes" if motion else "TRIBES Import/Mapped meshes"
+        if not motion and self_lit(actor.static_mesh_component):
+            # Sky domes, skylines, star fields and light shafts: grouped and tagged so every map's
+            # backdrops can be found, checked or hidden in one place.
+            folder = "TRIBES Import/Sky and backdrops"
+            actor.tags = [*actor.tags, unreal.Name("T3SelfLit")]
+        actor.set_folder_path(folder)
         if row["source_class"].casefold() in ("interiorinstance", "interiorshape"):
             placed.append(actor)
         if motion:
@@ -481,6 +525,30 @@ def place_local_lights(actors, rows):
             component.set_inner_cone_angle(light["inner_angle"])
 
 
+def self_lit(component):
+    """True when any of a mesh's materials is unlit: an imported sky, backdrop or light effect."""
+    for slot in range(component.get_num_materials()):
+        material = component.get_material(slot)
+        base = material.get_base_material() if material else None
+        if base and base.get_editor_property("shading_model") == unreal.MaterialShadingModel.MSM_UNLIT:
+            return True
+    return False
+
+
+def has_sky_dome(actors):
+    """True when a placed mesh uses an Is Sky material: the map brings its own painted sky."""
+    for actor in actors.get_all_level_actors():
+        if not isinstance(actor, unreal.StaticMeshActor):
+            continue
+        component = actor.static_mesh_component
+        for slot in range(component.get_num_materials()):
+            material = component.get_material(slot)
+            base = material.get_base_material() if material else None
+            if base and base.get_editor_property('is_sky'):
+                return True
+    return False
+
+
 def ascend_environment():
     from environment_ascend import convert
 
@@ -542,8 +610,9 @@ def place_equipment_markers(actors, records, rows, source_hash=None):
     from equipment_unreal import INTAKE_TAG, SOURCE_TAG, store_source
 
     if not records['equipment']:
-        return
+        return []
     source_hash = source_hash or store_source(records)
+    placed = []
     names = {row['id']: row['name'] for row in rows}
     for record in records['equipment']:
         transform = record['transform']
@@ -567,6 +636,29 @@ def place_equipment_markers(actors, records, rows, source_hash=None):
         role = 'Force shield opening' if shield else record['role'].replace('_', ' ').capitalize()
         actor.set_actor_label(f'{role} · {name}')
         actor.set_folder_path('TRIBES CTF/Equipment review')
+        placed.append((actor, record['role']))
+    return placed
+
+
+def approve_default_equipment(world, placed, map_id, mode="ctf"):
+    """Approve the mode's default equipment (CTF: base turrets, generators, sensors) as the editor's
+    Approve Selected Equipment would, one marker at a time: a marker that fails the review stays in review.
+    """
+    from equipment_unreal import set_approval
+    from mission_equipment import auto_approved
+
+    approved, kept = 0, []
+    for actor, role in placed:
+        if not auto_approved(role, mode):
+            continue
+        try:
+            set_approval(world, [actor], map_id, True)
+            approved += 1
+        except ValueError as error:
+            kept.append(f"{actor.get_actor_label()}: {error}")
+    for line in kept:
+        unreal.log_warning(f"Equipment left in review: {line}")
+    return approved
 
 
 class DraftImport:
@@ -825,7 +917,9 @@ class DraftImport:
                     assets[key] = terrain_mesh(ident, mesh_input, tile_weights, tile_cm=repeat, name=name,
                                                uv_origin=uv_origin, paint=paint, materials=materials,
                                                artwork_flags=artwork_flags, mask_frame=mask_frame,
-                                               source_material=material if source_art else None)
+                                               source_material=material if source_art else None,
+                                               smooth=ASCEND_FACTOR if header["profile"] in MILF_ENVIRONMENT_CONVERTERS
+                                               else 1)
             if assets[key] is None:
                 continue
             actor = editor.ACTORS.spawn_actor_from_class(
@@ -836,8 +930,13 @@ class DraftImport:
                 actor.static_mesh_component.set_material(0, material)
             ground.append(actor)
         if boxes:
+            # Under a MILF fixed exposure (Ascend) the wall glow needs the same gain as source glows, or the
+            # energy field shows as a dark sheet (Katabatic).
+            gain = 1.0
+            if self.header["profile"] in MILF_ENVIRONMENT_CONVERTERS:
+                from environment_ascend import EMISSIVE_GAIN as gain
             place_walls(editor.ACTORS, boxes, draft=ident, block_channels=self.options.get("wall_block_channels"),
-                        visual=self.options.get("wall_visual"))
+                        visual=self.options.get("wall_visual"), emissive_gain=gain)
         if self.warning_zone is not None:
             from perimeter_warning_unreal import place_warning
 
@@ -898,7 +997,9 @@ class DraftImport:
             from draft_elevators import place_brush_triggers
 
             place_brush_triggers(editor.ACTORS, self.ident, triggers, self.trigger_relays)
-        place_equipment_markers(editor.ACTORS, equipment, rows, source_hash)
+        equipment_markers = place_equipment_markers(editor.ACTORS, equipment, rows, source_hash)
+        if equipment_markers:
+            approve_default_equipment(editor.world(), equipment_markers, self.ident)
         placed_markers = []
         for row in rows:
             if row["status"] != "marker":
@@ -952,7 +1053,8 @@ class DraftImport:
 
             assets = dict(folder=self.folder, inventory=self.header["files"],
                           destination=f"/Game/Community/{self.ident}/Environment")
-            view = apply_environment(self.editor.ACTORS, converter()(self.environment, self.values), assets)
+            view = apply_environment(self.editor.ACTORS, converter()(self.environment, self.values), assets,
+                                     own_sky=has_sky_dome(self.editor.ACTORS))
         else:
             view = None
             place_environment(self.editor.ACTORS, self.environment, self.values)
@@ -962,6 +1064,11 @@ class DraftImport:
             from hazards_ue5 import apply as apply_hazards
 
             apply_hazards(self.editor.ACTORS, self.header["hazards"], f"/Game/Community/{self.ident}/Hazards", view)
+        # Source water surfaces (an Ascend swamp) get a native water volume with drag and an underwater look,
+        # as QuagmireTWLT22026 has, and export as liquid rows.
+        from hazards_ue5 import place_water
+
+        place_water(self.editor.ACTORS)
 
     def weather(self, _):
         header, terrain, rows, editor, ident = self.header, self.terrain, self.rows, self.editor, self.ident

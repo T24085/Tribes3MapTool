@@ -46,11 +46,14 @@ class RemasteredTextures:
     def find(self, object_path):
         return self.files.get(remaster_name(object_path).casefold())
 
-    def load(self, object_path, original_size):
+    def load(self, object_path, original_size, png=None, role="base"):
         """Return ((png, [width, height], receipt) or None, note) for one source texture.
 
         ``note`` explains a skipped match; it is None when the remaster is used or none exists.
+        Hand-made folders hold base colours and skies; glow maps keep their original.
         """
+        if role == "glow":
+            return None, None
         key = object_path.casefold()
         if key not in self.loaded:
             self.loaded[key] = self._load(object_path, original_size)

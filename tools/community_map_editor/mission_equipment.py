@@ -22,6 +22,16 @@ ASCEND_ROLES = {
     'tribesgame.trinventorystation': 'inventory_station',
     'tribesgame.trvehiclestation': 'vehicle_station',
 }
+# Equipment approved for Direct Host automatically when a draft is built, per game mode. Inventory and
+# vehicle stations stay in review until the host supports them; other modes get their own sets.
+AUTO_APPROVED_ROLES = {"ctf": frozenset({"base_turret", "generator", "sensor"})}
+
+
+def auto_approved(role, mode="ctf"):
+    """True when equipment of this role is approved by default in this game mode."""
+    return role in AUTO_APPROVED_ROLES.get(mode, frozenset())
+
+
 ASCEND_TEAMS = ('_bloodeagle', '_diamondsword')
 # One power circuit per team: every Ascend base runs on its team's generators.
 ASCEND_GROUP_BASE = 49990
