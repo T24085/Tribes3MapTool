@@ -26,6 +26,7 @@ from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_
 from minimap import framing, terrain_png
 from mission_equipment import ascend_equipment_class
 from hazards_ascend import read_ascend_hazards
+from unreal_binary_scene import SHADOW_FLAGS
 from ascend_bounds import (BOUNDARY_PANEL_REASON, boundary_panel, boundary_recipe, derive_play_box,
                            describe as describe_bounds, read_source_bounds)
 from vengeance_bounds import (boundary_recipe as vengeance_boundary_recipe, describe as describe_vengeance_bounds,
@@ -184,6 +185,9 @@ def project_rows(scene, markers, heightmap, *, placement_components=None):
                    name=actor["name"] or f'Actor at line {line}',
                    status="review", reason=" · ".join(actor["review"]) or "Source actor retained for review",
                    properties={item["key"]: item["value"] for item in raw["entries"] if "key" in item})
+        if any(field.get("key", "").casefold() in SHADOW_FLAGS and field.get("value") == "False"
+               for item in descendants(raw) for field in item.get("entries", ())):
+            row["properties"]["CastShadow"] = "False"  # Set on the source mesh component.
         if str(line) in environment_notes:
             row["reason"] = " ".join(environment_notes[str(line)])
             for item in (raw, *descendants(raw)):

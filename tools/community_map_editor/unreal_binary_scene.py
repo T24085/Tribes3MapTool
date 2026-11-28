@@ -20,6 +20,9 @@ VECTORS = {"location", "relativelocation", "translation", "drawscale3d", "relati
 ROTATIONS = {"rotation", "relativerotation"}
 SCALARS = {"drawscale", "scale"}
 VENGEANCE_ACTOR_FLAGS = {"bhidden", "bcollideactors", "bblockactors", "bblockplayers", "bblockhavok"}
+# Mesh components that cast no shadow in the source: sky domes, skyline backdrops, grass. Arx Novena's sky
+# hemisphere with a floor shaded the whole map when imported as a shadow caster.
+SHADOW_FLAGS = {"castshadow", "bcastdynamicshadow"}
 REFERENCES = set(ACTOR_REFERENCES + MODEL_REFERENCES)
 PLACEMENT = PLACEMENT_FIELDS | VECTORS | ROTATIONS | SCALARS | REFERENCES | ABSOLUTE_COMPONENT_FIELDS
 NON_ACTORS = {"actorgroup", "class", "level", "model", "package", "polys", "world"}
@@ -143,7 +146,7 @@ def placement_value(value, tag, modern, objects):
         if index not in objects or not IDENTITY.fullmatch(path := objects[index]["object_path"]):
             raise ValueError(f"Unresolved object reference in {tag['name']}.")
         return path
-    elif key in ABSOLUTE_COMPONENT_FIELDS | VENGEANCE_ACTOR_FLAGS and kind == "BoolProperty":
+    elif key in ABSOLUTE_COMPONENT_FIELDS | VENGEANCE_ACTOR_FLAGS | SHADOW_FLAGS and kind == "BoolProperty":
         return "True" if tag["boolean"] else "False"
     else:
         raise ValueError(f"Unsupported placement property {tag['name']} ({kind}).")
@@ -165,7 +168,7 @@ def read_properties(stream, summary, export, names, objects):
         end = cursor.offset + tag["size"]
         tags.append(tag)
         key = tag["name"].casefold()
-        if key in PLACEMENT or not modern and key in VENGEANCE_ACTOR_FLAGS:
+        if key in PLACEMENT or key in SHADOW_FLAGS or not modern and key in VENGEANCE_ACTOR_FLAGS:
             payload = Cursor(stream, cursor.offset, end, cursor.endian)
             try:
                 data = placement_value(payload, tag, modern, objects)

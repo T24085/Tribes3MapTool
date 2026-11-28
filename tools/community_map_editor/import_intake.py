@@ -303,6 +303,9 @@ def place_static_objects(actors, planned, meshes, material_overrides=None, light
         if not actor or not actor.static_mesh_component.set_static_mesh(meshes[path]):
             raise RuntimeError(f"Could not place mesh for {row['name'] or row['id']}.")
         actor.set_actor_scale3d(unreal.Vector(*scale))
+        if str(row.get('properties', {}).get('CastShadow')) == 'False':
+            # The source mesh cast no shadow (sky domes, skyline backdrops, grass).
+            actor.static_mesh_component.set_cast_shadow(False)
         if native_modes and path in native_modes:
             visible, solid, format_version = native_modes[path]
             if format_version == VENGEANCE_STATIC_MESH:
