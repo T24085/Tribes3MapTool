@@ -11,16 +11,17 @@ from game_workflows import window_title
 from intake_contract import finite
 from source_profiles import SCALE_PRESETS, UNITS_PER_METRE_DEFAULT
 from unreal_binary_scene import read_binary_scene
-from unreal_legacy_intake import companion_paths, project_markers, usable_marker, validate_unreal_settings
+from unreal_legacy_intake import companion_paths, project_markers, usable_marker, validate_unreal_settings, world_lines
 from unreal_native_terrain import terrain_candidates
 from unreal_package_reader import GAMES
 
 
 def marker_choices(actors, ascend_terrain, show_all):
+    worlds = world_lines(actors)
     flags = [actor for actor in actors if (show_all or actor["role"] in {"flag", "capture-point"})
-             and usable_marker(actor, "flag", ascend_terrain)]
+             and usable_marker(actor, "flag", ascend_terrain, worlds)]
     spawns = [actor for actor in actors if (show_all or actor["role"] == "spawn")
-              and usable_marker(actor, "spawn", ascend_terrain)]
+              and usable_marker(actor, "spawn", ascend_terrain, worlds)]
     return flags, spawns
 
 
