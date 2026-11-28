@@ -597,8 +597,9 @@ def place_equipment_markers(actors, records, rows, source_hash=None):
     from equipment_unreal import INTAKE_TAG, SOURCE_TAG, store_source
 
     if not records['equipment']:
-        return
+        return []
     source_hash = source_hash or store_source(records)
+    placed = []
     names = {row['id']: row['name'] for row in rows}
     for record in records['equipment']:
         transform = record['transform']
@@ -622,6 +623,29 @@ def place_equipment_markers(actors, records, rows, source_hash=None):
         role = 'Force shield opening' if shield else record['role'].replace('_', ' ').capitalize()
         actor.set_actor_label(f'{role} · {name}')
         actor.set_folder_path('TRIBES CTF/Equipment review')
+        placed.append((actor, record['role']))
+    return placed
+
+
+def approve_default_equipment(world, placed, map_id, mode="ctf"):
+    """Approve the mode's default equipment (CTF: base turrets, generators, sensors) as the editor's
+    Approve Selected Equipment would, one marker at a time: a marker that fails the review stays in review.
+    """
+    from equipment_unreal import set_approval
+    from mission_equipment import auto_approved
+
+    approved, kept = 0, []
+    for actor, role in placed:
+        if not auto_approved(role, mode):
+            continue
+        try:
+            set_approval(world, [actor], map_id, True)
+            approved += 1
+        except ValueError as error:
+            kept.append(f"{actor.get_actor_label()}: {error}")
+    for line in kept:
+        unreal.log_warning(f"Equipment left in review: {line}")
+    return approved
 
 
 class DraftImport:
@@ -960,7 +984,9 @@ class DraftImport:
             from draft_elevators import place_brush_triggers
 
             place_brush_triggers(editor.ACTORS, self.ident, triggers, self.trigger_relays)
-        place_equipment_markers(editor.ACTORS, equipment, rows, source_hash)
+        equipment_markers = place_equipment_markers(editor.ACTORS, equipment, rows, source_hash)
+        if equipment_markers:
+            approve_default_equipment(editor.world(), equipment_markers, self.ident)
         placed_markers = []
         for row in rows:
             if row["status"] != "marker":
