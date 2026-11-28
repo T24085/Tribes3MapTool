@@ -26,6 +26,9 @@ WALL_OVERLAP_CM = 100.0  # Lava raised to a shaft's first wall covers its bottom
 BODY_GAP_CM = 10.0  # The lava body's top sits this far under the surface plane, out of sight from above.
 UNDER_LAVA = dict(priority=10.0, blend_radius=50.0, tint=(1.0, 0.42, 0.1), bloom=4.0, vignette=0.8)
 HAZARD_TAG = "T3Hazard"
+SURFACE_TAG = "T3HazardSurface"
+SPLASH_POOL_TAG = "T3HazardSplash"  # The client's liquid hook needs a pool name; lava needs no pool meshes.
+LIQUIDS_FILE = "liquids.json"
 LOOK_DEFAULT = {"lava": "t3-lava", "liquid": "t3-lava", "void": "none"}
 # Colours as they should be SEEN, after the map's exposure and grade: bright orange molten cracks,
 # near-black crust and a softer orange glow, all below full brightness so the tonemapper keeps their
@@ -279,7 +282,7 @@ def unit_mesh(folder, name, sphere):
     return asset
 
 
-def mesh_actor(actors, mesh, material, center, scale, label, item, folder_path):
+def mesh_actor(actors, mesh, material, center, scale, label, item, folder_path, *tags):
     import unreal
 
     actor = actors.spawn_actor_from_class(unreal.StaticMeshActor, unreal.Vector(*center))
@@ -291,7 +294,7 @@ def mesh_actor(actors, mesh, material, center, scale, label, item, folder_path):
     actor.set_actor_scale3d(unreal.Vector(*scale))
     actor.set_actor_label(label)
     actor.set_folder_path(folder_path)
-    actor.set_editor_property("tags", tag_names(item, "T3HazardLook"))
+    actor.set_editor_property("tags", tag_names(item, "T3HazardLook", *tags))
     return actor
 
 
@@ -357,7 +360,8 @@ def apply(actors, component, destination, view=None):
             plane = unit_mesh(destination, "SM_HazardPlane", sphere=False)
             material = lava_material(destination, "M_HazardLava", item["tint"], view)
             mesh_actor(actors, plane, material, surface["center"],
-                       (surface["half"][0] / 100.0, surface["half"][1] / 100.0, 1.0), label + " · surface", item, folder_path)
+                       (surface["half"][0] / 100.0, surface["half"][1] / 100.0, 1.0), label + " · surface", item, folder_path,
+                       SURFACE_TAG)
             body = item["body"]
             cube = unit_mesh(destination, "SM_HazardBody", sphere="box")
             inside = lava_material(destination, "M_HazardLavaBody", item["tint"], view, two_sided=True)
@@ -372,3 +376,37 @@ def apply(actors, component, destination, view=None):
                            f"{label} · glow {index + 1}", item, folder_path)
         placed += 1
     return placed
+
+
+def liquid_row(zone_id, box_min_cm, box_max_cm, surface_z_cm):
+    """One row for the client's liquid hook (T3FrontEndClient lua/damnation_water.lua): lava entry and
+    exit sounds by speed, from the map's sound set (Ascend maps fall back to Tribes 2's lava)."""
+    return dict(id=zone_id, liquid_type="lava", splash_pool_tag=SPLASH_POOL_TAG,
+                box_min_cm=[round(value, 1) for value in box_min_cm],
+                box_max_cm=[round(value, 1) for value in box_max_cm], surface_z_cm=round(surface_z_cm, 1))
+
+
+def host_liquids(actors):
+    """Liquid rows for the draft's placed lava: each damage volume's box and its surface height."""
+    import unreal
+
+    volumes, surfaces = {}, {}
+    for actor in actors.get_all_level_actors():
+        tags = [str(tag) for tag in actor.get_editor_property("tags")]
+        zone = next((tag[len(HAZARD_TAG) + 1:] for tag in tags if tag.startswith(HAZARD_TAG + "_")), None)
+        if zone is None:
+            continue
+        origin, extent = actor.get_actor_bounds(False)
+        if "T3HazardVolume" in tags:
+            volumes[zone] = ([origin.x - extent.x, origin.y - extent.y, origin.z - extent.z],
+                             [origin.x + extent.x, origin.y + extent.y, origin.z + extent.z])
+        elif SURFACE_TAG in tags:
+            surfaces[zone] = origin.z
+    rows = []
+    for zone in sorted(volumes.keys() & surfaces.keys()):
+        low, high = volumes[zone]
+        if low[2] <= surfaces[zone] <= high[2]:
+            rows.append(liquid_row(zone, low, high, surfaces[zone]))
+        else:
+            unreal.log_warning(f"Lava {zone}: its surface lies outside its damage volume; no lava sounds.")
+    return rows

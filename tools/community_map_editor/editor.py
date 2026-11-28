@@ -320,6 +320,18 @@ def write_host_equipment(destination, equipment):
         review_path.write_text(json.dumps(review_data), encoding='utf-8')
 
 
+def write_host_liquids(draft, directory):
+    """Lava rows for the client's liquid hook, or none (T3BackEndServer#150)."""
+    from hazards_ue5 import LIQUIDS_FILE, host_liquids
+
+    path = directory / LIQUIDS_FILE
+    rows = host_liquids(ACTORS)
+    if rows:
+        path.write_text(json.dumps({'map': draft, 'liquids': rows}), encoding='utf-8')
+    else:
+        path.unlink(missing_ok=True)
+
+
 def write_host_boundary_features(draft, directory):
     from conversion_rules import write
     from perimeter import FLAG_CAPS, FLAG_REQUIREMENTS, FLAG_RETURN_TIMER
@@ -355,6 +367,7 @@ def request_build(kind='playtest'):
     if kind == 'host':
         write_host_equipment(request.parent, equipment)
         write_host_boundary_features(payload['map'], request.parent)
+        write_host_liquids(payload['map'], request.parent)
     write_outside_audio(payload['map'], request.parent)
     temporary = request.with_suffix('.tmp')
     with temporary.open('x', encoding='utf-8') as stream:
