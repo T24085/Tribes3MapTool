@@ -418,7 +418,11 @@ def build_playtest():
 
 def import_t2(game=None):
     """Open the conversion window; a game menu passes its game key so the window starts on it."""
-    from import_intake import choose
+    # The first import of the import pipeline is slow: show the notice before it, not after.
+    with unreal.ScopedSlowTask(1, "Loading Map Tool…") as task:
+        task.make_dialog(False)
+        task.enter_progress_frame(1, "Loading Map Tool…")
+        from import_intake import choose
     return choose(game)
 
 

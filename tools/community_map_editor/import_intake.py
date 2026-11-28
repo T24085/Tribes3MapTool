@@ -42,11 +42,17 @@ def choose(game=None):
     from game_workflows import game_label
 
     tool = Path(os.environ["T3_CONVERTER_TOOL"])
-    registry = unreal.AssetRegistryHelpers.get_asset_registry()
-    meshes = sorted(str(data.package_name)
-                    for data in registry.get_assets_by_path("/Game/Community", recursive=True)
-                    if str(data.asset_class_path.asset_name) == "StaticMesh")
-    drafts = editor.list_drafts()
+    # Listing every project mesh and draft takes a while on a large project: show Unreal's progress
+    # dialog at once, so the button never looks dead. The window shows its own notice as it starts.
+    with unreal.ScopedSlowTask(2, "Loading Map Tool…") as task:
+        task.make_dialog(False)
+        task.enter_progress_frame(1, "Loading Map Tool… listing project meshes")
+        registry = unreal.AssetRegistryHelpers.get_asset_registry()
+        meshes = sorted(str(data.package_name)
+                        for data in registry.get_assets_by_path("/Game/Community", recursive=True)
+                        if str(data.asset_class_path.asset_name) == "StaticMesh")
+        task.enter_progress_frame(1, "Loading Map Tool… listing drafts")
+        drafts = editor.list_drafts()
     result = subprocess.run(
         [
             os.environ["T3_CONVERTER_PYTHON"],
