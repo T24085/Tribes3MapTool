@@ -674,7 +674,7 @@ def run(config, *, smoke=False, authoring_smoke=False):
             from tools.community_map_editor.export_window import choose
             if env['T3_EDITOR_HOST_EXPORT'] != '1' or not imported_draft(ident):
                 raise ValueError('Direct Host export requires an imported draft and the configured exporter.')
-            selection = choose(ident)
+            selection = choose(ident, library=env.get('T3_CONVERTER_LIBRARY'))
             if selection is None:
                 continue
             host_request.rename(request)
