@@ -637,7 +637,7 @@ def material_emissive(asset, owner, stream, objects, open_art):
     tag = typed_tag(tags, "emissivecolor", "StructProperty", "colormaterialinput")
     fields = material_input(tag, owner, stream) if tag else {}
     queue, seen = [(fields.get("expression", 0), input_channel(fields))], set()
-    texture, tint, channel = None, None, None
+    texture, tint, channel, mask_fallback = None, None, None, None
     while queue and len(seen) < GLOW_NODES and (texture is None or tint is None):
         index, reads = queue.pop(0)
         node = objects.get(index)
@@ -652,8 +652,16 @@ def material_emissive(asset, owner, stream, objects, open_art):
         if kind in (TEXTURE_SAMPLE, TEXTURE_PARAMETER):
             if texture is None:
                 # A glow that reads one channel (often a mask in the diffuse alpha) glows only there.
-                texture, _ = sample_texture(node, owner, stream, objects, open_art, textures)
-                channel = reads
+                # A glow or sky sampled through custom coordinates (a panning sky) falls back to the
+                # mesh's own UVs: the art shows, without the motion.
+                found, *_ = sample_texture(node, owner, stream, objects, open_art, textures, allow_custom_uv=True)
+                name = found[0].get("object_path", "").rsplit(".", 1)[-1].casefold()
+                if name.endswith("_msk") or "mask" in name:
+                    # A cloud or opacity mask multiplied into a painted sky: keep looking for the art
+                    # (Arx Novena's sky is two _EMI halves x a cloud mask), using the mask only if alone.
+                    mask_fallback = mask_fallback or (found, reads)
+                else:
+                    texture, channel = found, reads
             continue
         if kind in (VECTOR_PARAMETER, CONSTANT_COLOR):
             if tint is None:
@@ -671,6 +679,8 @@ def material_emissive(asset, owner, stream, objects, open_art):
                     tint = [(a + b) / 2 for a, b in zip(*colours)]
                     continue
         queue.extend(inputs)
+    if texture is None and mask_fallback:
+        texture, channel = mask_fallback
     if texture is None:
         return None
     tint = [min(MAX_GLOW_TINT, max(0.0, value)) for value in (tint or [1.0, 1.0, 1.0])]
@@ -777,7 +787,23 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
                     raise ValueError("Ascend artwork package changed during import.")
             return local
 
-        texture, settings, approximate = material_texture(asset, report, stream, objects, open_art)
+        unlit = None
+        try:
+            texture, settings, approximate = material_texture(asset, report, stream, objects, open_art)
+        except ValueError as error:
+            # Self-lit Ascend surfaces (sky domes, skyline backdrops) have no base colour, only an
+            # emissive texture. That texture becomes the surface, drawn unlit at its own brightness.
+            if not any(text in str(error) for text in ("no diffuse input", "not a direct RGB texture sample",
+                                                       "custom coordinates")):
+                raise
+            try:
+                emissive = material_emissive(asset, report, stream, objects, open_art)
+            except ValueError:
+                emissive = None
+            if not emissive or emissive[2] is not None:
+                raise error
+            texture, settings, approximate = emissive[0], {}, None
+            unlit = emissive[1]
         image, source, pixels, exports = open_art(*texture)
         data, size, fallback, cache_receipts = texture_mip(image, source, pixels, exports, rtc)
         remastered, note = remaster.load(image["object_path"], size) if remaster else (None, None)
@@ -794,7 +820,7 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
                 receipts[receipt["name"]] = receipt
         glow, glow_issue = None, None
         try:
-            emissive = material_emissive(asset, report, stream, objects, open_art)
+            emissive = None if unlit else material_emissive(asset, report, stream, objects, open_art)
             if emissive:
                 glow_image, glow_owner, glow_pixels, glow_exports = open_art(*emissive[0])
                 glow_png, glow_size, _, glow_receipts = texture_mip(glow_image, glow_owner, glow_pixels,
@@ -808,6 +834,13 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
         except ValueError as error:
             glow_issue = f"Glow left out: {error}"
     masked = mask_png is not None
+    if unlit and not masked and blend in ("BLEND_Translucent", "BLEND_Additive", "BLEND_Masked"):
+        # A see-through self-lit backdrop (Arx Novena's painted city skyline) is cut out by its own alpha.
+        from io import BytesIO
+        from PIL import Image
+
+        alpha = Image.open(BytesIO(data)).convert("RGBA").getchannel("A").getextrema()
+        masked = alpha[0] < 128 <= alpha[1]
     if masked:
         warning = "Base color and source opacity mask imported (masked material)."
     else:
@@ -828,6 +861,8 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
         warning = f"{warning} {fallback}"
     if glow:
         warning = f"Glow imported as texture x colour. {warning}"
+    if unlit:
+        warning = f"Self-lit surface (sky or backdrop) imported unlit from its emissive texture. {warning}"
     elif glow_issue:
         warning = f"{warning} {glow_issue}"
     warning = warning[:240]
@@ -835,7 +870,7 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
         receipts[receipt["name"]] = receipt
     if not remastered:
         image_source = cache_receipts[-1] if cache_receipts else source["source"]
-    if masked:
+    if mask_png is not None:
         data = with_alpha(data, mask_png, mask[1])
     name = "texture_" + sha256(data).hexdigest()[:32] + ".png"
     binding = dict(file=name, source=image_source["name"], source_sha256=image_source["sha256"],
@@ -844,6 +879,11 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
     if settings:
         binding["ascend_base"] = settings
     files = {name: data}
+    if unlit:
+        binding["ascend_glow"] = dict(color=dict(file=name, source=image_source["name"],
+                                                 source_sha256=image_source["sha256"], size=size),
+                                      tint=[round(min(MAX_GLOW_TINT, max(0.0, value)), 4) for value in unlit])
+        binding["ascend_unlit"] = True
     if glow:
         glow_png, glow_size, glow_source, tint = glow
         glow_name = "texture_" + sha256(glow_png).hexdigest()[:32] + ".png"

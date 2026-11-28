@@ -487,6 +487,20 @@ def place_local_lights(actors, rows):
             component.set_inner_cone_angle(light["inner_angle"])
 
 
+def has_sky_dome(actors):
+    """True when a placed mesh uses an Is Sky material: the map brings its own painted sky."""
+    for actor in actors.get_all_level_actors():
+        if not isinstance(actor, unreal.StaticMeshActor):
+            continue
+        component = actor.static_mesh_component
+        for slot in range(component.get_num_materials()):
+            material = component.get_material(slot)
+            base = material.get_base_material() if material else None
+            if base and base.get_editor_property('is_sky'):
+                return True
+    return False
+
+
 def ascend_environment():
     from environment_ascend import convert
 
@@ -958,7 +972,8 @@ class DraftImport:
 
             assets = dict(folder=self.folder, inventory=self.header["files"],
                           destination=f"/Game/Community/{self.ident}/Environment")
-            view = apply_environment(self.editor.ACTORS, converter()(self.environment, self.values), assets)
+            view = apply_environment(self.editor.ACTORS, converter()(self.environment, self.values), assets,
+                                     own_sky=has_sky_dome(self.editor.ACTORS))
         else:
             view = None
             place_environment(self.editor.ACTORS, self.environment, self.values)

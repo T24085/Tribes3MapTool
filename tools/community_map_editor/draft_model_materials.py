@@ -177,7 +177,7 @@ def source_material(folder, inventory, record, *, destination, mode='opaque', tw
     prefix = 'M_Masked_' if masked else 'M_'
     if two_sided:
         prefix += 'TwoSided_'
-    extended = has_shader_inputs(record) or bool(record.keys() & {'ascend_base', 'ascend_glow'})
+    extended = has_shader_inputs(record) or bool(record.keys() & {'ascend_base', 'ascend_glow', 'ascend_unlit'})
     if extended:
         digest = sha256(json.dumps(shader_signature(record, inventory), separators=(',', ':')).encode()).hexdigest()
     name = 'M_Shader_' + digest[:32] if extended else prefix + texture.get_name()
@@ -191,13 +191,20 @@ def source_material(folder, inventory, record, *, destination, mode='opaque', tw
         sample.set_editor_property('texture', texture)
         if two_sided:
             material.set_editor_property('two_sided', True)
+        if record.get('ascend_unlit'):
+            # Ascend sky domes and backdrops light themselves: only the emissive (the glow binding) shows.
+            material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_UNLIT)
+            if not masked:
+                # An opaque self-lit surface is the sky dome. Tagged Is Sky, the real-time sky light
+                # captures the map's own painted sky, and UE's SkyAtmosphere can be left out.
+                material.set_editor_property('is_sky', True)
         base, output = (bind_ascend_base(material, lib, sample, record['ascend_base'])
                         if 'ascend_base' in record else (sample, 'RGB'))
         if not lib.connect_material_property(base, output, unreal.MaterialProperty.MP_BASE_COLOR):
             raise ValueError('Unreal did not bind the source texture to the base color.')
         if extended:
             bind_shader_inputs(material, lib, sample, folder, inventory, record, destination)
-        elif masked:
+        if masked and (not extended or record.get('ascend_unlit')):
             material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_MASKED)
             if not lib.connect_material_property(sample, 'A', unreal.MaterialProperty.MP_OPACITY_MASK):
                 raise ValueError('Unreal did not bind the source texture to the opacity mask.')

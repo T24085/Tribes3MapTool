@@ -147,7 +147,10 @@ def apply(actors, component, assets=None, own_sky=False):
     sky_light.set_intensity(settings["sky"]["intensity"])
     if settings["sky"]["color"]:
         sky_light.set_light_color(unreal.LinearColor(*settings["sky"]["color"], 1))
-    actors.spawn_actor_from_class(unreal.SkyAtmosphere, unreal.Vector(0, 0, 0))
+    if not own_sky:
+        # A map with its own painted sky dome (an Is Sky material) keeps it: UE's atmosphere would add a
+        # sun glow and aerial haze the source never had (Arx Novena's skyline washed out toward the sun).
+        actors.spawn_actor_from_class(unreal.SkyAtmosphere, unreal.Vector(0, 0, 0))
     fog = settings.get("fog")
     if fog:
         actor = actors.spawn_actor_from_class(unreal.ExponentialHeightFog, unreal.Vector(0, 0, fog["height_cm"]))
