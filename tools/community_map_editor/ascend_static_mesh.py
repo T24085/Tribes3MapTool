@@ -4,7 +4,7 @@ from hashlib import sha256
 from pathlib import Path
 import struct
 
-from ascend_collision import read_simple_collision
+from ascend_collision import enabled, read_simple_collision
 from interior_geometry import ASCEND_STATIC_MESH, valid_vertex_normal, validate_geometry
 from unreal_binary_scene import read_properties
 from unreal_package_reader import Cursor
@@ -134,6 +134,11 @@ def read_mesh(report, stream, export, objects, units_per_m, decoder_sha):
         if simple:
             geometry["collision"]["simple"] = simple
             validate_geometry(geometry)
+        elif enabled(tags, "usesimpleboxcollision", True):
+            # UE3 blocks players with a mesh's simple shapes unless UseSimpleBoxCollision is off; with no
+            # shapes they pass through (Tartarus's thin biolamp stalks). Per-triangle collision is kept
+            # only for meshes that turn simple box collision off (rocks and other solid props).
+            geometry["collision"]["triangles"] = []
     except ValueError as error:
         geometry["collision"].pop("simple", None)
         issue = str(error)
