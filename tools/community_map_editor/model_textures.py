@@ -46,8 +46,29 @@ def texture_records(record, *, detail=True):
             yield record['glow']['mask']
         if 'ascend_glow' in record:
             yield record['ascend_glow']['color']
+        if 'ascend_layers' in record:
+            yield from (record['ascend_layers'][key] for key in ('a', 'b', 'mask'))
         if detail:
             yield from (record[channel] for channel in SURFACE_DETAIL if channel in record)
+
+
+LAYER_CHANNELS = ('R', 'G', 'B', 'A')
+
+
+def valid_layers(layers, uv_count):
+    """Two tiled layers and a mask: each a texture receipt with a UV channel and repeat; the mask names
+    its blend channel and, optionally, the channel that darkens the result."""
+    if not isinstance(layers, dict) or layers.keys() != {'a', 'b', 'mask'}:
+        return False
+    for key, layer in layers.items():
+        extra = {'blend', 'shade'} if key == 'mask' else set()
+        uv = layer.get('uv') if isinstance(layer, dict) else None
+        if (not isinstance(layer, dict) or not SOURCE_FIELDS | {'uv'} <= layer.keys() <= SOURCE_FIELDS | {'uv'} | extra
+                or not isinstance(uv, list) or len(uv) != 3 or type(uv[0]) is not int or not 0 <= uv[0] < uv_count
+                or any(type(value) not in (int, float) or not isfinite(value) or abs(value) > 1024 for value in uv[1:])):
+            return False
+    mask = layers['mask']
+    return mask.get('blend') in LAYER_CHANNELS and mask.get('shade', 'R') in LAYER_CHANNELS
 
 
 def valid_water(water):
@@ -75,6 +96,11 @@ def shader_signature(record, inventory):
     detail = [(key, inventory[record[key]['file']]) for key in SURFACE_DETAIL if key in record]
     # The glow tint names the material too: blue and orange Ascend pods share every texture (#40).
     glow_tint = record.get('ascend_glow', {}).get('tint')
+    if 'ascend_layers' in record:
+        # Layered materials (the moss ship) are named by their layers' repeats and mask channels too.
+        layers = record['ascend_layers']
+        signature = (*signature, 'layers-2', *(tuple(layers[key]['uv']) for key in ('a', 'b', 'mask')),
+                     layers['mask']['blend'], layers['mask'].get('shade'))
     # A scrolling effect (the waterfall) names its repeat and speed too.
     glow_motion = tuple(tuple(record['ascend_glow'][key]) for key in ('tiling', 'pan')
                         if key in record.get('ascend_glow', {}))
@@ -218,6 +244,10 @@ def validate_bindings(bindings, models, inventory, *, legacy_sizes=None, receipt
                         or 'ascend_additive' in record or 'pan' not in record.get('ascend_glow', {})):
                     raise ValueError('Invalid Ascend translucent effect binding.')
                 required.add('ascend_effect')
+            if 'ascend_layers' in record and ascend_uvs is not None:
+                if not valid_layers(record['ascend_layers'], max(1, ascend_uvs.get(filename, 1))):
+                    raise ValueError('Invalid Ascend layered material binding.')
+                required.add('ascend_layers')
             if 'ascend_water' in record and ascend_uvs is not None:
                 if 'ascend_unlit' not in record or not valid_water(record['ascend_water']):
                     raise ValueError('Invalid Ascend water binding.')

@@ -29,7 +29,8 @@ LEGACY_BAKED_PREFIX = 'M_T1Baked_'
 BAKED_MATERIAL_PREFIXES = (BAKED_MATERIAL_PREFIX, LEGACY_BAKED_PREFIX)
 
 
-def source_texture(folder, filename, digest, *, srgb, destination=DESTINATION, normal=False, intensity=False):
+def source_texture(folder, filename, digest, *, srgb, destination=DESTINATION, normal=False, intensity=False,
+                   mask=False):
     assets = unreal.EditorAssetLibrary
     pinned = (folder / filename).resolve(strict=True)
     if pinned.parent != folder or sha256(bounded(pinned, 16 * 1024 * 1024)).hexdigest() != digest:
@@ -39,11 +40,20 @@ def source_texture(folder, filename, digest, *, srgb, destination=DESTINATION, n
         texture = assets.load_asset(texture_path)
         if not isinstance(texture, unreal.Texture2D) or assets.get_metadata_tag(texture, HASH_TAG) != digest:
             raise ValueError(f'The generated texture path is already in use: {texture_path}')
+        if mask and texture.get_editor_property('compression_settings') != unreal.TextureCompressionSettings.TC_MASKS:
+            # Imported before as something else (Unreal's import guessed a bluish mask was a normal map).
+            texture.set_editor_property('srgb', False)
+            texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_MASKS)
+            if not assets.save_loaded_asset(texture, only_if_is_dirty=False):
+                raise ValueError(f'Unreal could not save the source texture: {texture_path}')
     else:
         texture = import_texture(pinned, destination, unreal.Texture2D)
         texture.set_editor_property('srgb', srgb)
         if normal:
             texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_NORMALMAP)
+        elif mask:
+            # Packed mask channels (the moss ship's MSK): linear, never guessed as a normal map from its colour.
+            texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_MASKS)
         elif intensity:
             texture.set_editor_property('mip_gen_settings', unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS)
             texture.set_editor_property('compression_settings', unreal.TextureCompressionSettings.TC_GRAYSCALE)
@@ -160,6 +170,42 @@ def bind_shader_inputs(material, lib, sample, folder, inventory, record, destina
                 or not lib.connect_material_expressions(masked, '', scaled, 'A')
                 or not lib.connect_material_property(scaled, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)):
             raise ValueError('Unreal did not bind the source glow color and mask.')
+    if 'ascend_layers' in record:
+        # Two tiled layers blended by a mask channel and darkened by another (the moss ship's metal under moss).
+        layers = record['ascend_layers']
+        samples = {}
+        for row, key in enumerate(('a', 'b', 'mask')):
+            layer = layers[key]
+            node = lib.create_material_expression(material, unreal.MaterialExpressionTextureSampleParameter2D,
+                                                  -900, 1200 + 260 * row)
+            node.set_editor_property('parameter_name', 'SourceLayer' + key.upper())
+            node.set_editor_property('texture', source_texture(folder, layer['file'], inventory[layer['file']],
+                                                               srgb=key != 'mask', destination=destination,
+                                                               mask=key == 'mask'))
+            if key == 'mask':
+                node.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_MASKS)
+            index, u_tiling, v_tiling = layer['uv']
+            coordinate = lib.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate,
+                                                        -1150, 1200 + 260 * row)
+            coordinate.set_editor_property('coordinate_index', index)
+            coordinate.set_editor_property('u_tiling', u_tiling)
+            coordinate.set_editor_property('v_tiling', v_tiling)
+            if not lib.connect_material_expressions(coordinate, '', node, 'UVs'):
+                raise ValueError('Unreal did not bind an Ascend layer UV.')
+            samples[key] = node
+        blend = lib.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate, -600, 1300)
+        if (not lib.connect_material_expressions(samples['a'], 'RGB', blend, 'A')
+                or not lib.connect_material_expressions(samples['b'], 'RGB', blend, 'B')
+                or not lib.connect_material_expressions(samples['mask'], layers['mask']['blend'], blend, 'Alpha')):
+            raise ValueError('Unreal did not blend the Ascend layers.')
+        result = blend
+        if 'shade' in layers['mask']:
+            result = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -400, 1300)
+            if (not lib.connect_material_expressions(blend, '', result, 'A')
+                    or not lib.connect_material_expressions(samples['mask'], layers['mask']['shade'], result, 'B')):
+                raise ValueError('Unreal did not shade the Ascend layers.')
+        if not lib.connect_material_property(result, '', unreal.MaterialProperty.MP_BASE_COLOR):
+            raise ValueError('Unreal did not bind the Ascend layered base color.')
     if 'ascend_glow' in record:
         # Ascend glow is HDR: texture x linear tint, then x the Ascend exposure gain so it shows at
         # its UE3 brightness under the MILF environment's fixed exposure (#40, T3BackEndServer#146).
@@ -292,7 +338,8 @@ def source_material(folder, inventory, record, *, destination, mode='opaque', tw
     prefix = 'M_Masked_' if masked else 'M_'
     if two_sided:
         prefix += 'TwoSided_'
-    extended = has_shader_inputs(record) or bool(record.keys() & {'ascend_base', 'ascend_glow', 'ascend_unlit'})
+    extended = has_shader_inputs(record) or bool(record.keys() & {'ascend_base', 'ascend_glow', 'ascend_unlit',
+                                                                  'ascend_layers'})
     if extended:
         digest = sha256(json.dumps(shader_signature(record, inventory), separators=(',', ':')).encode()).hexdigest()
     name = 'M_Shader_' + digest[:32] if extended else prefix + texture.get_name()
@@ -591,7 +638,7 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
                 key = (name, destination, mode, two_sided)
                 # Materials that share a base texture can differ in their shader settings, such as
                 # the Ascend glow tint of blue and orange bio pods (#40), so the settings are in the key.
-                if has_shader_inputs(record) or record.keys() & {'ascend_base', 'ascend_glow'}:
+                if has_shader_inputs(record) or record.keys() & {'ascend_base', 'ascend_glow', 'ascend_layers'}:
                     key += (json.dumps(shader_signature(record, inventory), separators=(',', ':')),)
                 if key not in materials:
                     materials[key] = source_material(folder, inventory, record, destination=destination,

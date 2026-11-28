@@ -657,6 +657,92 @@ def colour_value(expression, tags, report, stream, vectors):
     return [values["r"], values["g"], values["b"]]
 
 
+LERP = "materialexpressionlinearinterpolate"
+CHANNELS = ("maskr", "maskg", "maskb", "maska")
+
+
+def input_link(tags, name, owner, stream, objects):
+    """(expression, channel letter or None) feeding a node's input; channel set when it reads one channel."""
+    tag = typed_tag(tags, name, "StructProperty", "expressioninput")
+    if not tag:
+        return None, None
+    fields = material_input(tag, owner, stream)
+    node = objects.get(fields.get("expression", 0))
+    picked = [letter for letter, key in zip("RGBA", CHANNELS) if fields.get(key)]
+    return node, (picked[0] if len(picked) == 1 else None)
+
+
+def material_layers(asset, owner, stream, objects, open_art):
+    """Two tiled layers blended by one mask channel and darkened by another, or None.
+
+    Tartarus's moss ship (MAT_SwampPlanet_Master_MossShip): base colour = Lerp(TileMoss x20, MetalMoss x15
+    + reflection, MSK.b) x MSK.r, with each piece's own MSK. Converting only the first texture left the
+    whole ship flat moss. Returns {"a", "b": (texture scope, uv), "mask": (texture scope, uv, blend channel),
+    "shade": shade channel or None}.
+    """
+    overrides = {}
+    for _ in range(16):
+        material, owner, stream, objects = open_art(asset, owner, stream, objects)
+        tags, _ = properties(material, owner, stream, objects)
+        if material["class_name"].casefold() == "material":
+            break
+        for name, index in texture_overrides(tags, owner, stream).items():
+            overrides.setdefault(name, (index, owner, stream, objects))
+        parent = object_reference(tags, stream, "parent")
+        if not parent or parent not in objects:
+            return None
+        asset = objects[parent]
+    else:
+        return None
+    tag = typed_tag(tags, "diffusecolor", "StructProperty", "colormaterialinput")
+    if not tag:
+        return None
+    fields = material_input(tag, owner, stream)
+    node = objects.get(fields.get("expression", 0))
+
+    def opened(expression):
+        found, scope_owner, scope_stream, scope_objects = open_art(expression, owner, stream, objects)
+        return found, properties(found, scope_owner, scope_stream, scope_objects)[0]
+
+    def is_sample(expression):
+        return expression is not None and expression["class_name"].casefold() in (TEXTURE_SAMPLE, TEXTURE_PARAMETER)
+
+    shade = None
+    if node is not None and node["class_name"].casefold() == "materialexpressionmultiply":
+        _, multiply = opened(node)
+        sides = [input_link(multiply, key, owner, stream, objects) for key in ("a", "b")]
+        darkening = [(expression, channel) for expression, channel in sides if is_sample(expression) and channel]
+        if len(darkening) != 1:
+            return None
+        shade_sample, shade = darkening[0]
+        node = next(expression for expression, channel in sides if (expression, channel) != darkening[0])
+    if node is None or node["class_name"].casefold() != LERP:
+        return None
+    _, lerp = opened(node)
+    layers = []
+    for key in ("a", "b"):
+        expression, channel = input_link(lerp, key, owner, stream, objects)
+        if expression is not None and not is_sample(expression):
+            # A layer with extras added on (the metal's cube reflection): keep its own texture.
+            _, extra = opened(expression)
+            parts = [input_link(extra, part, owner, stream, objects) for part in ("a", "b")]
+            expression = next((part for part, part_channel in parts if is_sample(part) and not part_channel), None)
+        if not is_sample(expression) or channel:
+            return None
+        layers.append(expression)
+    mask, blend = input_link(lerp, "alpha", owner, stream, objects)
+    if not is_sample(mask) or not blend:
+        return None
+    if shade is not None and shade_sample["index"] != mask["index"]:
+        shade = None  # The darkening comes from another texture: leave it out.
+    try:
+        a, b = (sample_texture(layer, owner, stream, objects, open_art, overrides) for layer in layers)
+        mask_texture, mask_uv = sample_texture(mask, owner, stream, objects, open_art, overrides)
+    except ValueError:
+        return None
+    return {"a": a, "b": b, "mask": (mask_texture, mask_uv, blend), "shade": shade}
+
+
 WATER_EXCLUDED = ("rushing", "fall", "plant", "lily", "splash", "droplet", "drip")
 WATER_PARAMETERS = {"slime color": "tint", "fill noise a": "fill_a", "fill noise b": "fill_b", "tiling": "tiling"}
 
@@ -930,6 +1016,30 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
             mask_png, _, _, mask_receipts = texture_mip(mask_image, mask_source, mask_pixels, mask_exports, rtc)
             for receipt in mask_receipts:
                 receipts[receipt["name"]] = receipt
+        layers = None
+        if not unlit:
+            # Two tiled layers blended by a mask (the moss ship's metal plating under its moss).
+            try:
+                found = material_layers(asset, report, stream, objects, open_art)
+            except (ValueError, KeyError):
+                found = None
+            if found:
+                layers = {}
+                for key in ("a", "b", "mask"):
+                    layer_scope, uv = found[key][:2]
+                    layer_image, layer_owner, layer_pixels, layer_exports = open_art(*layer_scope)
+                    layer_png, layer_size, _, layer_receipts = texture_mip(layer_image, layer_owner, layer_pixels,
+                                                                           layer_exports, rtc)
+                    for receipt in layer_receipts:
+                        receipts[receipt["name"]] = receipt
+                    layer_source = layer_receipts[-1] if layer_receipts else layer_owner["source"]
+                    if key != "mask" and remaster:
+                        better, _ = remaster.load(layer_image["object_path"], layer_size, layer_png, "base")
+                        if better:
+                            layer_png, layer_size, layer_source = better
+                            receipts[layer_source["name"]] = layer_source
+                    layers[key] = (layer_png, layer_size, layer_source, uv)
+                layers["blend"], layers["shade"] = found["mask"][2], found["shade"]
         glow, glow_issue = None, None
         try:
             emissive = None if unlit else material_emissive(asset, report, stream, objects, open_art)
@@ -1023,4 +1133,19 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
         binding["ascend_glow"] = dict(color=dict(file=glow_name, source=glow_source["name"],
                                                  source_sha256=glow_source["sha256"], size=glow_size),
                                       tint=[round(value, 4) for value in tint])
+    if layers:
+        records = {}
+        for key in ("a", "b", "mask"):
+            layer_png, layer_size, layer_source, uv = layers[key]
+            layer_name = "texture_" + sha256(layer_png).hexdigest()[:32] + ".png"
+            files[layer_name] = layer_png
+            record = dict(file=layer_name, source=layer_source["name"], source_sha256=layer_source["sha256"],
+                          size=layer_size)
+            record["uv"] = [int(uv[0]), round(uv[1], 4), round(uv[2], 4)] if uv else [0, 1.0, 1.0]
+            records[key] = record
+        records["mask"]["blend"] = layers["blend"]
+        if layers["shade"]:
+            records["mask"]["shade"] = layers["shade"]
+        binding["ascend_layers"] = records
+        binding["warning"] = f"Two layers blended by a mask. {binding['warning']}"[:240]
     return binding, files, receipts.values()
