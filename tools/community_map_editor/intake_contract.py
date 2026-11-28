@@ -39,7 +39,7 @@ from terrain_grid import CELLS, VERTICES, legacy_holes, preview_size
 BASE_FILES = r"objects\.json|terrain\.json|height\.png|material-(?:index|[0-7])\.png"
 INTERIOR_FILE = re.compile(r"interior-[0-9]{4}\.json")
 SHAPE_FILE = re.compile(r"shape-[0-9]{4}\.json")
-MAX_INTAKE_INTERIORS = 128
+MAX_INTAKE_INTERIORS = 256  # ArxNovena (Ascend) uses 167 distinct meshes.
 MAX_INTAKE_INTERIOR_BYTES = 96 * 1024 * 1024
 PLAYABLE_BOUNDS = "playable_bounds_cm"
 BOUNDARY_RECIPE = "draft_boundary_recipe"
