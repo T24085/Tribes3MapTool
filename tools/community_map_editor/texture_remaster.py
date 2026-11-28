@@ -225,6 +225,9 @@ class AutoRemaster:
                 raw = path.read_bytes()
                 how = "cached"
             else:
+                from progress_status import status
+
+                status(f"Remastering {object_path.rsplit('.', 1)[-1]} ({method(object_path, role)})")
                 raw, how = self.remaster(png, object_path, role, self.tool)
                 self.cache.mkdir(parents=True, exist_ok=True)
                 partial = path.with_suffix(".part")

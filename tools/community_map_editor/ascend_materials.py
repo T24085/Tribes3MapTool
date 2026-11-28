@@ -958,6 +958,9 @@ def texture_mip(asset, report, stream, objects, rtc):
 
 
 def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc, remaster=None):
+    from progress_status import status
+
+    status(f"Converting material {asset.get('object_path', '').rsplit('.', 1)[-1]}")
     receipts = {}
     main_name = report["source"]["name"]
     with ExitStack() as scope:

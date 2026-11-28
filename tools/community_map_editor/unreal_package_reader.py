@@ -364,6 +364,9 @@ def object_paths(imports, exports):
 
 @contextmanager
 def open_package(path, game=None):
+    from progress_status import status
+
+    status(f"Reading {Path(path).name}")
     path = Path(path)
     game = game if game is not None else GAMES.get(path.suffix.casefold())
     if game not in GAMES.values():
