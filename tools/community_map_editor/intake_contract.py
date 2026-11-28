@@ -32,6 +32,7 @@ from source_profiles import (ASCEND, ASCEND_ART_VERSIONS, ASCEND_BSP_INTAKE_VERS
                              PROXIMITY_CHAIN_MODES, VENGEANCE_PERMANENT_DOOR_VERSION, VENGEANCE_SURFACE_DETAIL_VERSION,
                              VENGEANCE_TRIGGER_CHAIN_VERSION, VENGEANCE_TRIGGER_DOOR_VERSION,
                              VENGEANCE_TERRAIN_VERSIONS, profiles_for_version)
+from milf_hazard import validate as validate_hazards
 from terrain_art import ART_FILE, MAX_ART_BYTES, MAX_ART_TEXTURES, validate_art
 from terrain_grid import CELLS, VERTICES, legacy_holes, preview_size
 
@@ -796,7 +797,7 @@ def load_intake(manifest):
         raise ValueError("Unreal model review belongs in the source scene.")
     if unreal and header.keys() - {"format", "profile", "source_game", "name", "reader", "profile_sha256",
                                   "sources", "files", "coverage", "minimap", "environment", "interiors", "interior_review",
-                                  "terrain_paint", "terrain_art", "terrain_uv"}:
+                                  "terrain_paint", "terrain_art", "terrain_uv", "hazards"}:
         raise ValueError("Unexpected Unreal intake manifest fields.")
     if header["format"] == 14 and "terrain_art" not in header or header["format"] < 14 and "terrain_art" in header:
         raise ValueError("Terrain artwork requires a compatible intake and its artwork bindings.")
@@ -816,6 +817,10 @@ def load_intake(manifest):
         raise ValueError("Invalid intake environment format.")
     if "environment" in header:
         validate_environment(header["environment"], unreal=native_envelope)
+    if "hazards" in header:
+        if header["profile"] != ASCEND:
+            raise ValueError("Only Ascend intakes carry converted hazards so far.")
+        validate_hazards(header["hazards"])
     grade_lut = header.get("environment", {}).get("grade", {}).get("lut")
     if (GRADE_LUT_FILE in header["files"]) != (grade_lut is not None) or grade_lut and header["profile"] != ASCEND:
         raise ValueError("The colour-grading table must belong to an Ascend intake's grade.")

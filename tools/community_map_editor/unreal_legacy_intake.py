@@ -25,6 +25,7 @@ from interior_geometry import MAX_GEOMETRY_BYTES, NATIVE_VERTEX_FIELDS
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
 from mission_equipment import ascend_equipment_class
+from hazards_ascend import read_ascend_hazards
 from ascend_bounds import (BOUNDARY_PANEL_REASON, boundary_panel, boundary_recipe, derive_play_box,
                            describe as describe_bounds, read_source_bounds)
 from vengeance_bounds import (boundary_recipe as vengeance_boundary_recipe, describe as describe_vengeance_bounds,
@@ -760,6 +761,11 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
         header["sources"][1]["origin"] = "Editor import settings"
     if environment:
         header["environment"] = environment
+    if game == "ascend" and binary:
+        # Kill volumes and their glow become MILF hazards (T3BackEndServer#150).
+        hazards = read_ascend_hazards([source, *level_paths], units)
+        if hazards:
+            header["hazards"] = hazards
     if ascend_material:
         header.update(format=ASCEND_BASE_MATERIAL_VERSION, scene_format=version)
     elif game == "vengeance" and any("local_light" in row for row in rows):

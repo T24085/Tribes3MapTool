@@ -99,6 +99,7 @@ def install_editor_scripts(project, env, *, include_seed=True):
                  'model_textures.py', 'draft_model_materials.py', 'mission_equipment.py', 'mission_weather.py',
                  'mission_audio.py', 'mission_audio_profiles.py', 'draft_audio.py', 'outside_audio.py', 'mission_lighting.py',
                  'milf_environment.py', 'environment_ascend.py', 'environment_ue5.py', 'ascend_post_process.py',
+                 'milf_hazard.py', 'hazards_ascend.py',
                  'equipment_unreal.py', 'source_library.py', 'draft_showcase.py', 'model_library.py',
                  'contact_sheets_unreal.py', 'conversion_rules.py', 'tribes2_conversion.json', 'profile_exchange.py',
                  'batch_rebuild.py', 'batch_rebuild_unreal.py', 'batch_stage.py', 'batch_stage_unreal.py',
