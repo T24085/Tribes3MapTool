@@ -50,6 +50,24 @@ def texture_records(record, *, detail=True):
             yield from (record[channel] for channel in SURFACE_DETAIL if channel in record)
 
 
+def valid_water(water):
+    """TA standing water: slime tint, two fill colours (0..64 per channel) and a repeat (0.01..1024)."""
+    colour = lambda value: (isinstance(value, list) and len(value) == 3 and all(  # noqa: E731
+        type(c) in (int, float) and isfinite(c) and 0 <= c <= 64 for c in value))
+    return (isinstance(water, dict) and water.keys() == {'tint', 'fill', 'tiling'} and colour(water['tint'])
+            and isinstance(water['fill'], list) and len(water['fill']) == 2 and all(map(colour, water['fill']))
+            and isinstance(water['tiling'], list) and len(water['tiling']) == 2
+            and all(type(v) in (int, float) and isfinite(v) and 0.01 <= v <= 1024 for v in water['tiling']))
+
+
+def valid_motion(glow):
+    """A self-lit glow's repeat (0 < |tiling| <= 1024) and scroll speed (|pan| <= 64) per axis."""
+    tiling, pan = glow['tiling'], glow['pan']
+    return (isinstance(tiling, list) and isinstance(pan, list) and len(tiling) == len(pan) == 2
+            and all(type(value) in (int, float) and isfinite(value) for value in (*tiling, *pan))
+            and all(0 < abs(value) <= 1024 for value in tiling) and all(abs(value) <= 64 for value in pan))
+
+
 def shader_signature(record, inventory):
     glow = record.get('glow')
     signature = (record['mode'], record['two_sided'], record.get('opacity', {}).get('pan'),
@@ -57,11 +75,20 @@ def shader_signature(record, inventory):
     detail = [(key, inventory[record[key]['file']]) for key in SURFACE_DETAIL if key in record]
     # The glow tint names the material too: blue and orange Ascend pods share every texture (#40).
     glow_tint = record.get('ascend_glow', {}).get('tint')
+    # A scrolling effect (the waterfall) names its repeat and speed too.
+    glow_motion = tuple(tuple(record['ascend_glow'][key]) for key in ('tiling', 'pan')
+                        if key in record.get('ascend_glow', {}))
     # 'glow-clip-1' names the hue-keeping glow cap, so materials built before it are not reused.
     tinted = (glow_tint, 'glow-clip-1') if glow_tint else ()
     if record.get('ascend_unlit'):
         # 'is-sky-1' names the Is Sky dome tag, so self-lit materials built before it are not reused.
-        tinted = (*tinted, 'unlit', 'is-sky-1', 'additive-fade-1' if record.get('ascend_additive') else 'solid')
+        tinted = (*tinted, 'unlit', 'is-sky-1', 'additive-fade-1' if record.get('ascend_additive') else 'solid',
+                  *glow_motion)
+        if record.get('ascend_effect'):
+            tinted = (*tinted, 'effect-2')
+        if 'ascend_water' in record:
+            water = record['ascend_water']
+            tinted = (*tinted, 'water-4', tuple(water['tint']), tuple(map(tuple, water['fill'])), tuple(water['tiling']))
     if 'ascend_base' in record:
         shader = record['ascend_base']
         return (*signature, 'ascend', shader.get('uv'), shader.get('vertex_rgb', False), *tinted)
@@ -171,17 +198,30 @@ def validate_bindings(bindings, models, inventory, *, legacy_sizes=None, receipt
                 has_ascend_shader = True
             if 'ascend_glow' in record and ascend_uvs is not None:
                 glow = record['ascend_glow']
-                if (not isinstance(glow, dict) or glow.keys() != {'color', 'tint'}
+                motion = glow.keys() - {'color', 'tint'} if isinstance(glow, dict) else None
+                if (not isinstance(glow, dict) or not {'color', 'tint'} <= glow.keys()
+                        or motion not in (set(), {'tiling', 'pan'})
+                        or motion and not record.get('ascend_unlit')
                         or not isinstance(glow['color'], dict) or glow['color'].keys() != SOURCE_FIELDS
                         or not isinstance(glow['tint'], list) or len(glow['tint']) != 3
                         or any(type(value) not in (int, float) or not isfinite(value) or not 0 <= value <= 64
-                               for value in glow['tint'])):
+                               for value in glow['tint'])
+                        or motion and not valid_motion(glow)):
                     raise ValueError('Invalid Ascend glow binding.')
                 required.add('ascend_glow')
             if 'ascend_unlit' in record and ascend_uvs is not None:
                 if record['ascend_unlit'] is not True or 'ascend_glow' not in record:
                     raise ValueError('Invalid Ascend self-lit binding.')
                 required.add('ascend_unlit')
+            if 'ascend_effect' in record and ascend_uvs is not None:
+                if (record['ascend_effect'] is not True or 'ascend_unlit' not in record
+                        or 'ascend_additive' in record or 'pan' not in record.get('ascend_glow', {})):
+                    raise ValueError('Invalid Ascend translucent effect binding.')
+                required.add('ascend_effect')
+            if 'ascend_water' in record and ascend_uvs is not None:
+                if 'ascend_unlit' not in record or not valid_water(record['ascend_water']):
+                    raise ValueError('Invalid Ascend water binding.')
+                required.add('ascend_water')
             if 'ascend_additive' in record and ascend_uvs is not None:
                 if record['ascend_additive'] is not True or 'ascend_unlit' not in record:
                     raise ValueError('Invalid Ascend additive self-lit binding.')

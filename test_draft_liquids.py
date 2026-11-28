@@ -31,6 +31,15 @@ class DraftLiquidTests(unittest.TestCase):
             self.assertEqual(draft_liquids(run, "DraftTA023"), [ROW])
             with self.assertRaises(ValueError):
                 draft_liquids(run, "DraftTA024")
+            # Converted water (Tartarus's swamp) passes as well; an unknown liquid type does not.
+            water = liquid_row("water1", [-98211.9, -126581.8, -5910.7], [98396.2, 129008.7, -2910.7], -2910.7,
+                               "stagnant_water")
+            (run / "liquids.json").write_text(json.dumps({"map": "DraftTA023", "liquids": [ROW, water]}), encoding="utf-8")
+            self.assertEqual(draft_liquids(run, "DraftTA023"), [ROW, water])
+            (run / "liquids.json").write_text(json.dumps({"map": "DraftTA023", "liquids": [dict(water, liquid_type="slime")]}),
+                                              encoding="utf-8")
+            with self.assertRaises(ValueError):
+                draft_liquids(run, "DraftTA023")
             bad = dict(ROW, surface_z_cm=9000.0)
             (run / "liquids.json").write_text(json.dumps({"map": "DraftTA023", "liquids": [bad]}), encoding="utf-8")
             with self.assertRaises(ValueError):

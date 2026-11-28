@@ -77,6 +77,23 @@ def save_material(material, digest):
         raise ValueError(f'Unreal could not save the source material: {material.get_path_name()}')
 
 
+# TA standing water: how see-through the surface is, how far (cm) it fades out where it meets the shore,
+# and the metadata tag that marks the material, so the draft gives its surfaces a water volume.
+WATER_OPACITY = 0.9  # TA's swamp reads as muddy and nearly opaque, with light silt streaks.
+WATER_SILT_CONTRAST = 0.8  # How strongly the silt texture's brightness shows as streaks.
+WATER_BRIGHTNESS = 1.5  # Lifts TA's murky olive so it holds against the swamp fog (it read grey in DraftTA041).
+WATER_SHORE_FADE_CM = 50.0  # TA's DepthBiasedAlpha BiasScale: only the very edge fades (300 cm left shallow swamp clear).
+WATER_TAG = 'T3LiquidType'
+# TA's water samples its silt through texture coordinates repeated 20 times, scaled by the instance's
+# Tiling (6 x 3 on Tartarus): on a 2.5 km swamp plane the silt then repeats every 20-30 m. With the
+# Tiling alone each tile was about 400 m and the water read as one flat colour.
+WATER_BASE_REPEAT = 20.0
+# A scrolling translucent effect (the waterfall): a faint body of water everywhere on the sheet, so it never
+# vanishes against bright fog, plus bright streaks where the scrolling mask is bright.
+EFFECT_GLOW = """float Streak = saturate(Tex.r * 1.6);
+return Tint * (0.35 + 1.4 * Streak);"""
+EFFECT_OPACITY = """return saturate(0.25 + 0.7 * saturate(Tex.r * 1.6));"""
+
 # Additive star fields and nebulae: drop the near-black floor, fade out over the outer 35 % of the card
 # and keep 70 % of the source brightness, so the card blends into the sky instead of showing its edges.
 ADDITIVE_FADE = """float2 Edge = abs(UV - 0.5) * 2.0;
@@ -88,7 +105,7 @@ return Lit * Tint * Fade * 0.7;"""
 def bind_shader_inputs(material, lib, sample, folder, inventory, record, destination):
     def texture_input(channel, label, x, y, *, normal=False):
         name = channel['file']
-        if not normal and name == record['file'] and 'pan' not in channel:
+        if not normal and name == record['file'] and 'pan' not in channel and 'tiling' not in channel:
             return sample
         node = lib.create_material_expression(material, unreal.MaterialExpressionTextureSampleParameter2D, x, y)
         node.set_editor_property('parameter_name', label)
@@ -97,14 +114,24 @@ def bind_shader_inputs(material, lib, sample, folder, inventory, record, destina
                                                            destination=texture_folder, normal=normal))
         if normal:
             node.set_editor_property('sampler_type', unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL)
+        coordinate = None
+        if 'tiling' in channel:
+            # The source's repeat (the waterfall streaks tile 4 x 4).
+            coordinate = lib.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate,
+                                                        x - 480, y)
+            coordinate.set_editor_property('u_tiling', channel['tiling'][0])
+            coordinate.set_editor_property('v_tiling', channel['tiling'][1])
         if 'pan' in channel:
             panner = lib.create_material_expression(material, unreal.MaterialExpressionPanner, x - 240, y)
             x_rate, y_rate = channel['pan']
             panner.set_editor_property('speed_x', x_rate)
             panner.set_editor_property('speed_y', y_rate)
             panner.set_editor_property('fractional_part', True)
-            if not lib.connect_material_expressions(panner, '', node, 'UVs'):
-                raise ValueError('Unreal did not bind the source UV panner.')
+            if coordinate is not None and not lib.connect_material_expressions(coordinate, '', panner, 'Coordinate'):
+                raise ValueError('Unreal did not bind the source UV repeat.')
+            coordinate = panner
+        if coordinate is not None and not lib.connect_material_expressions(coordinate, '', node, 'UVs'):
+            raise ValueError('Unreal did not bind the source UV panner.')
         return node
 
     mode = record['mode']
@@ -139,11 +166,71 @@ def bind_shader_inputs(material, lib, sample, folder, inventory, record, destina
         from environment_ascend import EMISSIVE_GAIN, glow_colour
 
         glow = record['ascend_glow']
-        color = texture_input(glow['color'], 'SourceGlowColor', -840, 520)
+        # A scrolling self-lit effect samples its texture with the source's repeat and speed.
+        color = texture_input({**glow['color'], **{key: glow[key] for key in ('tiling', 'pan') if key in glow}},
+                              'SourceGlowColor', -840, 520)
         tint = lib.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, -840, 810)
         tint.set_editor_property('constant', unreal.LinearColor(*(value * EMISSIVE_GAIN
                                                                   for value in glow_colour(glow['tint'])), 1))
-        if record.get('ascend_additive'):
+        if record.get('ascend_water'):
+            # TA standing water (Tartarus's swamp): the silt texture mixes the two fill colours, scaled by the
+            # slime colour, see-through at WATER_OPACITY and fading out where it meets the shore.
+            water = record['ascend_water']
+            repeat = [value * WATER_BASE_REPEAT for value in water['tiling']]
+            silt = texture_input({**glow['color'], 'tiling': repeat}, 'SourceWaterSilt', -840, 520)
+            fill_a, fill_b = (lib.create_material_expression(material, unreal.MaterialExpressionConstant3Vector,
+                                                             -840, y) for y in (760, 900))
+            fill_a.set_editor_property('constant', unreal.LinearColor(*water['fill'][0], 1))
+            fill_b.set_editor_property('constant', unreal.LinearColor(*water['fill'][1], 1))
+            mixed = lib.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate, -550, 700)
+            slime = lib.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, -550, 900)
+            slime.set_editor_property('constant', unreal.LinearColor(*(value * EMISSIVE_GAIN * WATER_BRIGHTNESS
+                                                                       for value in water['tint']), 1))
+            coloured = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -400, 760)
+            streak = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -550, 1060)
+            streak.set_editor_property('const_b', WATER_SILT_CONTRAST)
+            lifted = lib.create_material_expression(material, unreal.MaterialExpressionAdd, -400, 1060)
+            lifted.set_editor_property('const_b', 1.0 - WATER_SILT_CONTRAST / 2)
+            glowing = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -250, 860)
+            depth = lib.create_material_expression(material, unreal.MaterialExpressionDepthFade, -300, 960)
+            depth.set_editor_property('fade_distance_default', WATER_SHORE_FADE_CM)
+            depth.set_editor_property('opacity_default', WATER_OPACITY)
+            if (not lib.connect_material_expressions(fill_a, '', mixed, 'A')
+                    or not lib.connect_material_expressions(fill_b, '', mixed, 'B')
+                    or not lib.connect_material_expressions(silt, 'R', mixed, 'Alpha')
+                    or not lib.connect_material_expressions(mixed, '', coloured, 'A')
+                    or not lib.connect_material_expressions(slime, '', coloured, 'B')
+                    or not lib.connect_material_expressions(silt, 'R', streak, 'A')
+                    or not lib.connect_material_expressions(streak, '', lifted, 'A')
+                    or not lib.connect_material_expressions(coloured, '', glowing, 'A')
+                    or not lib.connect_material_expressions(lifted, '', glowing, 'B')
+                    or not lib.connect_material_property(glowing, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+                    or not lib.connect_material_property(depth, '', unreal.MaterialProperty.MP_OPACITY)):
+                raise ValueError('Unreal did not bind the Ascend water surface.')
+        elif record.get('ascend_effect'):
+            # A scrolling translucent effect (the waterfall): bright tinted streaks where the mask is bright,
+            # see-through elsewhere.
+            nodes = []
+            for code, kind, y in ((EFFECT_GLOW, unreal.CustomMaterialOutputType.CMOT_FLOAT3, 545),
+                                  (EFFECT_OPACITY, unreal.CustomMaterialOutputType.CMOT_FLOAT1, 700)):
+                node = lib.create_material_expression(material, unreal.MaterialExpressionCustom, -550, y)
+                node.set_editor_property('description', 'Waterfall: body of water plus bright streaks')
+                node.set_editor_property('output_type', kind)
+                node.set_editor_property('code', code)
+                pins = []
+                for name in ('Tex', 'Tint'):
+                    pin = unreal.CustomInput()
+                    pin.set_editor_property('input_name', name)
+                    pins.append(pin)
+                node.set_editor_property('inputs', pins)
+                if (not lib.connect_material_expressions(color, 'RGB', node, 'Tex')
+                        or not lib.connect_material_expressions(tint, '', node, 'Tint')):
+                    raise ValueError('Unreal did not bind the Ascend translucent effect inputs.')
+                nodes.append(node)
+            if (not lib.connect_material_property(nodes[0], '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+                    or not lib.connect_material_property(nodes[1], '', unreal.MaterialProperty.MP_OPACITY)):
+                raise ValueError('Unreal did not bind the Ascend translucent effect.')
+        elif record.get('ascend_additive'):
             # Star fields and nebulae fade into the sky: the texture's near-black floor is dropped (the
             # exposure gain lifted it into a visible band) and the card fades out toward its edges.
             glowing = lib.create_material_expression(material, unreal.MaterialExpressionCustom, -550, 545)
@@ -222,7 +309,14 @@ def source_material(folder, inventory, record, *, destination, mode='opaque', tw
         if record.get('ascend_unlit'):
             # Ascend sky domes and backdrops light themselves: only the emissive (the glow binding) shows.
             material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_UNLIT)
-            if record.get('ascend_additive'):
+            if record.get('ascend_effect'):
+                material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_TRANSLUCENT)
+                material.set_editor_property('two_sided', True)
+            elif record.get('ascend_water'):
+                material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_TRANSLUCENT)
+                material.set_editor_property('two_sided', True)  # Seen from below when swimming.
+                unreal.EditorAssetLibrary.set_metadata_tag(material, WATER_TAG, 'stagnant_water')
+            elif record.get('ascend_additive'):
                 material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_ADDITIVE)
             elif not masked:
                 # An opaque self-lit surface is the sky dome. Tagged Is Sky, the real-time sky light

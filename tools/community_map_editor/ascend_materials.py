@@ -356,6 +356,52 @@ def texture_scope(index, owner, stream, objects):
     return texture, owner, stream, objects
 
 
+PANNER = "materialexpressionpanner"
+TEXTURE_COORDINATE = "materialexpressiontexturecoordinate"
+MAX_PAN_SPEED = 64.0
+
+
+def sample_motion(expression, owner, stream, objects, open_art):
+    """{"tiling": [u, v], "pan": [x, y]} for a sample scrolled by a Panner over a TextureCoordinate, else None.
+
+    Effect textures (Tartarus's waterfall) scroll and repeat: a Panner's SpeedX and SpeedY move the
+    coordinate, and the TextureCoordinate under it sets the repeat. Anything else returns None and the
+    sample keeps the mesh's own coordinates.
+    """
+    try:
+        sample, owner, stream, objects = open_art(expression, owner, stream, objects)
+        tags, _ = properties(sample, owner, stream, objects)
+        tag = typed_tag(tags, "coordinates", "StructProperty", "expressioninput")
+        fields = material_input(tag, owner, stream) if tag else {}
+        node = objects.get(fields.get("expression", 0))
+        if not node or node["class_name"].casefold() != PANNER:
+            return None
+        node, owner, stream, objects = open_art(node, owner, stream, objects)
+        panner, _ = properties(node, owner, stream, objects)
+        pan = []
+        for name in ("speedx", "speedy"):
+            speed = typed_tag(panner, name, "FloatProperty")
+            pan.append(tag_data(stream, speed).fields("f")[0] if speed and speed["size"] == 4 else 0.0)
+        tiling = [1.0, 1.0]
+        coordinate = typed_tag(panner, "coordinate", "StructProperty", "expressioninput")
+        under = objects.get(material_input(coordinate, owner, stream).get("expression", 0)) if coordinate else None
+        if under and under["class_name"].casefold() == TEXTURE_COORDINATE:
+            under, owner, stream, objects = open_art(under, owner, stream, objects)
+            coordinate_tags, _ = properties(under, owner, stream, objects)
+            for axis, name in enumerate(("utiling", "vtiling")):
+                value = typed_tag(coordinate_tags, name, "FloatProperty")
+                if value and value["size"] == 4:
+                    tiling[axis] = tag_data(stream, value).fields("f")[0]
+        elif under:
+            return None  # A Panner over something other than plain coordinates: leave it out.
+    except (ValueError, KeyError, TypeError):
+        return None
+    if (any(not isfinite(value) or abs(value) > MAX_PAN_SPEED for value in pan)
+            or any(not isfinite(value) or not 0 < abs(value) <= 1024 for value in tiling)):
+        return None
+    return {"tiling": [round(value, 4) for value in tiling], "pan": [round(value, 4) for value in pan]}
+
+
 def sample_texture(expression, owner, stream, objects, open_art, overrides, *, allow_custom_uv=False):
     """Return (texture scope, uv); with allow_custom_uv, (texture scope, uv, custom) and default tiling."""
     sample, owner, stream, objects = open_art(expression, owner, stream, objects)
@@ -611,8 +657,59 @@ def colour_value(expression, tags, report, stream, vectors):
     return [values["r"], values["g"], values["b"]]
 
 
+WATER_EXCLUDED = ("rushing", "fall", "plant", "lily", "splash", "droplet", "drip")
+WATER_PARAMETERS = {"slime color": "tint", "fill noise a": "fill_a", "fill noise b": "fill_b", "tiling": "tiling"}
+
+
+def water_surface(asset, owner, stream, objects, open_art):
+    """TA standing-water parameters for a material named as water, or None.
+
+    Tartarus's swamp (SPL_Water_Unlit_A and its instances) is an unlit, see-through surface coloured by a
+    "slime color", two "fill noise" colours mixed through a silt texture, and a "Tiling" repeat. Rushing
+    water, waterfalls and water plants are other effects and are left to the self-lit path.
+    """
+    vectors, names = {}, []
+    for _ in range(16):
+        material, owner, stream, objects = open_art(asset, owner, stream, objects)
+        names.append(material.get("object_path", "").casefold())
+        tags, _ = properties(material, owner, stream, objects)
+        if material["class_name"].casefold() == "material":
+            break
+        for name, value in vector_overrides(tags, owner, stream).items():
+            vectors.setdefault(name, value)
+        parent = object_reference(tags, stream, "parent")
+        if not parent or parent not in objects:
+            return None
+        asset = objects[parent]
+    else:
+        return None
+    if not any("water" in name.rsplit(".", 1)[-1] or ".water." in name for name in names) or any(
+            word in name.rsplit(".", 1)[-1] for name in names for word in WATER_EXCLUDED):
+        return None
+    found = {}
+    for row in owner["exports"]:
+        if row.get("outer") != material["index"] or row["class_name"].casefold() != VECTOR_PARAMETER:
+            continue
+        try:
+            node_tags, _ = properties(row, owner, stream, objects)
+            name_tag = typed_tag(node_tags, "parametername", "NameProperty")
+            name = table_name(tag_data(stream, name_tag), owner["names"], True).casefold() if name_tag else ""
+            if name in WATER_PARAMETERS:
+                found[WATER_PARAMETERS[name]] = colour_value(row, node_tags, owner, stream, vectors)
+        except ValueError:
+            continue
+    if "tint" not in found:
+        return None
+    clean = lambda values: [round(min(64.0, max(0.0, value)), 4) for value in values]  # noqa: E731
+    water = {"tint": clean(found["tint"]), "fill": [clean(found.get("fill_a", [0.2, 0.2, 0.2])),
+                                                     clean(found.get("fill_b", [0.2, 0.2, 0.2]))]}
+    tiling = found.get("tiling", [1.0, 1.0])[:2]
+    water["tiling"] = [round(min(1024.0, max(0.01, value)), 4) for value in tiling]
+    return water
+
+
 def material_emissive(asset, owner, stream, objects, open_art):
-    """Return (texture scope, linear tint, channel or None) for an Ascend material's glow, or None (#40).
+    """Return (texture scope, linear tint, channel or None, motion or None) for an Ascend glow, or None (#40).
 
     Ascend glows are usually an emissive texture multiplied by a colour parameter (above 1 for
     brightness), with masks and edge falloff around them. This takes the first texture and the
@@ -637,7 +734,7 @@ def material_emissive(asset, owner, stream, objects, open_art):
     tag = typed_tag(tags, "emissivecolor", "StructProperty", "colormaterialinput")
     fields = material_input(tag, owner, stream) if tag else {}
     queue, seen = [(fields.get("expression", 0), input_channel(fields))], set()
-    texture, tint, channel, mask_fallback = None, None, None, None
+    texture, tint, channel, mask_fallback, motion = None, None, None, None, None
     while queue and len(seen) < GLOW_NODES and (texture is None or tint is None):
         index, reads = queue.pop(0)
         node = objects.get(index)
@@ -655,13 +752,14 @@ def material_emissive(asset, owner, stream, objects, open_art):
                 # A glow or sky sampled through custom coordinates (a panning sky) falls back to the
                 # mesh's own UVs: the art shows, without the motion.
                 found, *_ = sample_texture(node, owner, stream, objects, open_art, textures, allow_custom_uv=True)
+                found_motion = sample_motion(node, owner, stream, objects, open_art)
                 name = found[0].get("object_path", "").rsplit(".", 1)[-1].casefold()
                 if name.endswith("_msk") or "mask" in name:
                     # A cloud or opacity mask multiplied into a painted sky: keep looking for the art
                     # (Arx Novena's sky is two _EMI halves x a cloud mask), using the mask only if alone.
-                    mask_fallback = mask_fallback or (found, reads)
+                    mask_fallback = mask_fallback or (found, reads, found_motion)
                 else:
-                    texture, channel = found, reads
+                    texture, channel, motion = found, reads, found_motion
             continue
         if kind in (VECTOR_PARAMETER, CONSTANT_COLOR):
             if tint is None:
@@ -680,13 +778,13 @@ def material_emissive(asset, owner, stream, objects, open_art):
                     continue
         queue.extend(inputs)
     if texture is None and mask_fallback:
-        texture, channel = mask_fallback
+        texture, channel, motion = mask_fallback
     if texture is None:
         return None
     tint = [min(MAX_GLOW_TINT, max(0.0, value)) for value in (tint or [1.0, 1.0, 1.0])]
     if max(tint) < 0.01:
         return None  # A black glow colour: the surface does not glow in the source.
-    return texture, tint, channel
+    return texture, tint, channel, motion
 
 
 def channel_png(png, channel):
@@ -787,7 +885,7 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
                     raise ValueError("Ascend artwork package changed during import.")
             return local
 
-        unlit = None
+        unlit, unlit_channel, unlit_motion, water = None, None, None, None
         try:
             texture, settings, approximate = material_texture(asset, report, stream, objects, open_art)
         except ValueError as error:
@@ -800,12 +898,23 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
                 emissive = material_emissive(asset, report, stream, objects, open_art)
             except ValueError:
                 emissive = None
-            if not emissive or emissive[2] is not None:
+            if not emissive:
                 raise error
             texture, settings, approximate = emissive[0], {}, None
             unlit = emissive[1]
+            # An effect drawn from one channel of a mask (Tartarus's waterfall: T_RainDance_Waterfalls_MSK
+            # x a green-grey tint) becomes that channel as grey art; drawn additive it glows where the
+            # mask is bright and is see-through elsewhere. Its scrolling motion is left out for now.
+            unlit_channel = emissive[2]
+            unlit_motion = emissive[3]
+            try:
+                water = water_surface(asset, report, stream, objects, open_art)
+            except ValueError:
+                water = None
         image, source, pixels, exports = open_art(*texture)
         data, size, fallback, cache_receipts = texture_mip(image, source, pixels, exports, rtc)
+        if unlit and unlit_channel is not None:
+            data = channel_png(data, unlit_channel)
         mask_png, blend_issue = None, None
         try:
             blend, two_sided, mask = material_blend(asset, report, stream, objects, open_art)
@@ -891,8 +1000,19 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
         binding["ascend_glow"] = dict(color=dict(file=name, source=image_source["name"],
                                                  source_sha256=image_source["sha256"], size=size),
                                       tint=[round(min(MAX_GLOW_TINT, max(0.0, value)), 4) for value in unlit])
+        if unlit_motion:
+            # The waterfall's streaks repeat and scroll as in the source.
+            binding["ascend_glow"].update(unlit_motion)
+        if water:
+            # Standing water (Tartarus's swamp): a see-through surface in TA's colours over a water volume.
+            binding["ascend_water"] = water
+            binding.pop("ascend_additive", None)
         binding["ascend_unlit"] = True
-        if not masked and blend in ("BLEND_Additive", "BLEND_Translucent"):
+        if not masked and blend == "BLEND_Translucent" and unlit_motion:
+            # A scrolling translucent effect (Tartarus's waterfall): solid where its mask is bright and
+            # see-through elsewhere. Drawn additive with the star cards' dimming it all but vanished.
+            binding["ascend_effect"] = True
+        elif not masked and blend in ("BLEND_Additive", "BLEND_Translucent"):
             # Star fields, nebulae and light shafts: black adds nothing, bright parts glow. Drawn opaque
             # they became dark panels in Katabatic's sky.
             binding["ascend_additive"] = True

@@ -378,10 +378,85 @@ def apply(actors, component, destination, view=None):
     return placed
 
 
-def liquid_row(zone_id, box_min_cm, box_max_cm, surface_z_cm):
-    """One row for the client's liquid hook (T3FrontEndClient lua/damnation_water.lua): lava entry and
-    exit sounds by speed, from the map's sound set (Ascend maps fall back to Tribes 2's lava)."""
-    return dict(id=zone_id, liquid_type="lava", splash_pool_tag=SPLASH_POOL_TAG,
+# Standing water, as QuagmireTWLT22026 r2 builds it: a native water PhysicsVolume whose fluid friction
+# gives the drag, and a bounded underwater post-process just under the surface.
+WATER_DEPTH_CM = 3000.0  # How deep the volume reaches under a source water surface.
+WATER_VOLUME = {"fluid_friction": 0.6, "terminal_velocity": 4000.0, "priority": 1}
+UNDER_WATER = {"priority": 10.0, "blend_radius": 50.0, "below_surface_cm": 50.0,
+               "tint": (0.76, 0.88, 0.88), "gain": 0.7, "offset": (0.06, 0.18, 0.18), "saturation": 0.8,
+               "contrast": 0.85, "vignette": 0.6, "bloom": 0.9}
+LIQUID_TYPE_TAG = "T3HazardLiquid_"
+
+
+def water_surfaces(actors):
+    """(actor, liquid type) for every placed mesh whose material is tagged as a liquid surface."""
+    import unreal
+    from draft_model_materials import WATER_TAG
+
+    found = []
+    for actor in actors.get_all_level_actors():
+        if not isinstance(actor, unreal.StaticMeshActor):
+            continue
+        component = actor.static_mesh_component
+        for slot in range(component.get_num_materials()):
+            material = component.get_material(slot)
+            base = material.get_base_material() if material else None
+            kind = unreal.EditorAssetLibrary.get_metadata_tag(base, WATER_TAG) if base else None
+            if kind:
+                found.append((actor, kind))
+                break
+    return found
+
+
+def place_water(actors):
+    """Give every source water surface a water volume with drag and an underwater look. Returns the count."""
+    import unreal
+
+    folder_path = "TRIBES CTF/Hazards"
+    placed = 0
+    for index, (surface, kind) in enumerate(water_surfaces(actors), 1):
+        item = {"id": f"water{index}"}
+        origin, extent = surface.get_actor_bounds(False)
+        top = origin.z + extent.z
+        half = [max(extent.x, 50.0), max(extent.y, 50.0), WATER_DEPTH_CM / 2]
+        label = f"Hazard · {item['id']}"
+        volume = actors.spawn_actor_from_class(unreal.PhysicsVolume, unreal.Vector(origin.x, origin.y, top - half[2]))
+        place_box_volume(volume, {"center": [origin.x, origin.y, top - half[2]], "half": half})
+        volume.set_editor_property("water_volume", True)
+        for key, value in WATER_VOLUME.items():
+            volume.set_editor_property(key, value)
+        volume.set_editor_property("tags", tag_names(item, "T3HazardVolume", LIQUID_TYPE_TAG + kind))
+        volume.set_actor_label(label + " · water")
+        volume.set_folder_path(folder_path)
+        under_half = [half[0], half[1], half[2] - UNDER_WATER["below_surface_cm"] / 2]
+        under_center = [origin.x, origin.y, top - UNDER_WATER["below_surface_cm"] - under_half[2]]
+        ppv = actors.spawn_actor_from_class(unreal.PostProcessVolume, unreal.Vector(*under_center))
+        place_box_volume(ppv, {"center": under_center, "half": under_half})
+        ppv.set_editor_property("priority", UNDER_WATER["priority"])
+        ppv.set_editor_property("blend_radius", UNDER_WATER["blend_radius"])
+        settings = ppv.get_editor_property("settings")
+        for key, value in (("scene_color_tint", unreal.LinearColor(*UNDER_WATER["tint"], 1)),
+                           ("color_gain", unreal.Vector4(*(UNDER_WATER["gain"],) * 3, 1)),
+                           ("color_offset", unreal.Vector4(*UNDER_WATER["offset"], 0)),
+                           ("color_saturation", unreal.Vector4(*(UNDER_WATER["saturation"],) * 3, 1)),
+                           ("color_contrast", unreal.Vector4(*(UNDER_WATER["contrast"],) * 3, 1)),
+                           ("vignette_intensity", UNDER_WATER["vignette"]), ("bloom_intensity", UNDER_WATER["bloom"])):
+            settings.set_editor_property("override_" + key, True)
+            settings.set_editor_property(key, value)
+        ppv.set_editor_property("settings", settings)
+        ppv.set_editor_property("tags", tag_names(item, "T3HazardUnder"))
+        ppv.set_actor_label(label + " · under water")
+        ppv.set_folder_path(folder_path)
+        # The source plane is the surface the liquid hook reads.
+        surface.tags = [*surface.tags, *tag_names(item, SURFACE_TAG)]
+        placed += 1
+    return placed
+
+
+def liquid_row(zone_id, box_min_cm, box_max_cm, surface_z_cm, liquid_type="lava"):
+    """One row for the client's liquid hook (T3FrontEndClient lua/damnation_water.lua): entry and exit
+    sounds by speed from the map's sound set; lava, or water such as stagnant_water."""
+    return dict(id=zone_id, liquid_type=liquid_type, splash_pool_tag=SPLASH_POOL_TAG,
                 box_min_cm=[round(value, 1) for value in box_min_cm],
                 box_max_cm=[round(value, 1) for value in box_max_cm], surface_z_cm=round(surface_z_cm, 1))
 
@@ -390,13 +465,14 @@ def host_liquids(actors):
     """Liquid rows for the draft's placed lava: each damage volume's box and its surface height."""
     import unreal
 
-    volumes, surfaces = {}, {}
+    volumes, surfaces, kinds = {}, {}, {}
     for actor in actors.get_all_level_actors():
         tags = [str(tag) for tag in actor.get_editor_property("tags")]
         zone = next((tag[len(HAZARD_TAG) + 1:] for tag in tags if tag.startswith(HAZARD_TAG + "_")), None)
         if zone is None:
             continue
         origin, extent = actor.get_actor_bounds(False)
+        kinds.update((zone, tag[len(LIQUID_TYPE_TAG):]) for tag in tags if tag.startswith(LIQUID_TYPE_TAG))
         if "T3HazardVolume" in tags:
             volumes[zone] = ([origin.x - extent.x, origin.y - extent.y, origin.z - extent.z],
                              [origin.x + extent.x, origin.y + extent.y, origin.z + extent.z])
@@ -406,7 +482,7 @@ def host_liquids(actors):
     for zone in sorted(volumes.keys() & surfaces.keys()):
         low, high = volumes[zone]
         if low[2] <= surfaces[zone] <= high[2]:
-            rows.append(liquid_row(zone, low, high, surfaces[zone]))
+            rows.append(liquid_row(zone, low, high, surfaces[zone], kinds.get(zone, "lava")))
         else:
-            unreal.log_warning(f"Lava {zone}: its surface lies outside its damage volume; no lava sounds.")
+            unreal.log_warning(f"Liquid {zone}: its surface lies outside its volume; no liquid sounds.")
     return rows

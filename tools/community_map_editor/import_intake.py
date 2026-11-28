@@ -1064,6 +1064,11 @@ class DraftImport:
             from hazards_ue5 import apply as apply_hazards
 
             apply_hazards(self.editor.ACTORS, self.header["hazards"], f"/Game/Community/{self.ident}/Hazards", view)
+        # Source water surfaces (an Ascend swamp) get a native water volume with drag and an underwater look,
+        # as QuagmireTWLT22026 has, and export as liquid rows.
+        from hazards_ue5 import place_water
+
+        place_water(self.editor.ACTORS)
 
     def weather(self, _):
         header, terrain, rows, editor, ident = self.header, self.terrain, self.rows, self.editor, self.ident

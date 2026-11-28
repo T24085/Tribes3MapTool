@@ -142,8 +142,12 @@ MAX_LIQUIDS = 32
 MAX_LIQUIDS_BYTES = 64 * 1024
 
 
+# Liquid types the client's liquid hook knows: converted lava and water (Tartarus's swamp is stagnant water).
+LIQUID_TYPES = frozenset({'lava', 'stagnant_water', 'river_water'})
+
+
 def draft_liquids(run, map_id):
-    """Validated lava rows the editor wrote for the client's liquid hook, or None."""
+    """Validated lava and water rows the editor wrote for the client's liquid hook, or None."""
     path = run / 'liquids.json'
     if not path.is_file():
         return None
@@ -154,7 +158,7 @@ def draft_liquids(run, map_id):
     for row in rows:
         box = [row.get('box_min_cm'), row.get('box_max_cm')] if isinstance(row, dict) else None
         if (not isinstance(row, dict) or set(row) != {'id', 'liquid_type', 'splash_pool_tag', 'box_min_cm', 'box_max_cm', 'surface_z_cm'}
-                or row['liquid_type'] != 'lava' or not all(isinstance(row[key], str) and 0 < len(row[key]) <= 64
+                or row['liquid_type'] not in LIQUID_TYPES or not all(isinstance(row[key], str) and 0 < len(row[key]) <= 64
                                                             for key in ('id', 'splash_pool_tag'))
                 or not all(isinstance(corner, list) and len(corner) == 3 and all(
                     type(value) in (int, float) and abs(value) <= 2_000_000 for value in corner) for corner in box)
