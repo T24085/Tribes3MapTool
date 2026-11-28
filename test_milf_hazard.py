@@ -7,7 +7,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent / "tools/community_map_editor"))
 from hazards_ascend import hull_xy, zone  # noqa: E402
 from milf_hazard import validate  # noqa: E402
-from hazards_ue5 import CONTACT_CM, KILL_DAMAGE_PER_SEC, MOLTEN_SEEN, WALL_OVERLAP_CM, emissive, plan  # noqa: E402
+from hazards_ue5 import BODY_GAP_CM, CONTACT_CM, KILL_DAMAGE_PER_SEC, MOLTEN_SEEN, WALL_OVERLAP_CM, emissive, plan  # noqa: E402
 
 PIT = {
     "format": 1,
@@ -98,6 +98,9 @@ class UnrealAdapterPlanTests(unittest.TestCase):
         under = item["under"]
         self.assertAlmostEqual(under["center"][2] + under["half"][2], 2650)  # The under-lava view ends at the surface.
         self.assertEqual(item["surface"]["center"][2], 2650)
+        body = item["body"]  # Solid lava fills the pit just under the surface.
+        self.assertAlmostEqual(body["center"][2] + body["half"][2], 2650 - BODY_GAP_CM)
+        self.assertAlmostEqual(body["center"][2] - body["half"][2], -130)
         self.assertEqual(len(item["glow"]), 1)
         self.assertEqual(item["glow"][0]["center"], [-22040.0, 48000.0, 2650.0])
 
@@ -137,7 +140,8 @@ class UnrealAdapterPlanTests(unittest.TestCase):
         zone.update(kind="void", damage={"mode": "per_second", "per_second": 40, "cause": "fall"}, look={"preset": "none"})
         del zone["surface_m"]
         item, = plan(component)
-        self.assertEqual((item["damage_per_sec"], "under" in item, "surface" in item, "glow" in item), (40.0, False, False, False))
+        self.assertEqual((item["damage_per_sec"], "under" in item, "surface" in item, "body" in item, "glow" in item),
+                         (40.0, False, False, False, False))
 
 
 if __name__ == "__main__":

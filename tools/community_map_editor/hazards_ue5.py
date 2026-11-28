@@ -23,6 +23,7 @@ KILL_DAMAGE_PER_SEC = 5000.0  # Two ticks a second remove more health than any a
 PAIN_INTERVAL_S = 0.5
 CONTACT_CM = 150.0  # Firestorm lifts the damage volume's top this far above the lava surface.
 WALL_OVERLAP_CM = 100.0  # Lava raised to a shaft's first wall covers its bottom edge by this much.
+BODY_GAP_CM = 10.0  # The lava body's top sits this far under the surface plane, out of sight from above.
 UNDER_LAVA = dict(priority=10.0, blend_radius=50.0, tint=(1.0, 0.42, 0.1), bloom=4.0, vignette=0.8)
 HAZARD_TAG = "T3Hazard"
 LOOK_DEFAULT = {"lava": "t3-lava", "liquid": "t3-lava", "void": "none"}
@@ -125,6 +126,9 @@ def plan(component, wall_bottoms=None):
         if surface_cm is not None and preset != "none":
             item["under"] = box(x0, x1, y0, y1, floor, surface_cm)
             item["surface"] = dict(center=[(x0 + x1) / 2, (y0 + y1) / 2, surface_cm], half=[(x1 - x0) / 2, (y1 - y0) / 2])
+            # Solid lava below the surface: a camera that sinks in (the death camera) sees glowing lava
+            # all around instead of the unbuilt pit below the walls. Ascend's dense glow fog did this.
+            item["body"] = box(x0, x1, y0, y1, floor, surface_cm - BODY_GAP_CM)
             item["tint"] = list(look.get("tint", (1.0, 1.0, 1.0)))
         glow = look.get("glow")
         if glow and preset in GLOW_LOOKS:
@@ -179,7 +183,7 @@ def place_box_volume(actor, spec):
     actor.set_actor_scale3d(unreal.Vector(*(max(half, 1.0) / BRUSH_HALF_CM for half in spec["half"])))
 
 
-def lava_material(folder, name, tint, view=None):
+def lava_material(folder, name, tint, view=None, two_sided=False):
     """A procedural molten surface: slow drifting noise between dark crust and glowing orange."""
     import unreal
 
@@ -189,6 +193,7 @@ def lava_material(folder, name, tint, view=None):
     material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(name, folder, unreal.Material, unreal.MaterialFactoryNew())
     lib = unreal.MaterialEditingLibrary
     material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    material.set_editor_property("two_sided", two_sided)
     world = lib.create_material_expression(material, unreal.MaterialExpressionWorldPosition, -1100, 0)
     time = lib.create_material_expression(material, unreal.MaterialExpressionTime, -1100, 200)
     drift = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -900, 200)
@@ -258,7 +263,10 @@ def unit_mesh(folder, name, sphere):
         return unreal.EditorAssetLibrary.load_asset(path)
     mesh = unreal.DynamicMesh()
     options = unreal.GeometryScriptPrimitiveOptions()
-    if sphere:
+    if sphere == "box":
+        unreal.GeometryScript_Primitives.append_box(mesh, options, unreal.Transform(), 200.0, 200.0, 200.0, 0, 0, 0,
+                                                    unreal.GeometryScriptPrimitiveOriginMode.CENTER)
+    elif sphere:
         unreal.GeometryScript_Primitives.append_sphere_lat_long(mesh, options, unreal.Transform(), 100.0, 24, 32)
     else:
         unreal.GeometryScript_Primitives.append_rectangle_xy(mesh, options, unreal.Transform(), 200.0, 200.0, 8, 8)
@@ -350,6 +358,11 @@ def apply(actors, component, destination, view=None):
             material = lava_material(destination, "M_HazardLava", item["tint"], view)
             mesh_actor(actors, plane, material, surface["center"],
                        (surface["half"][0] / 100.0, surface["half"][1] / 100.0, 1.0), label + " · surface", item, folder_path)
+            body = item["body"]
+            cube = unit_mesh(destination, "SM_HazardBody", sphere="box")
+            inside = lava_material(destination, "M_HazardLavaBody", item["tint"], view, two_sided=True)
+            mesh_actor(actors, cube, inside, body["center"], [max(half, 1.0) / 100.0 for half in body["half"]],
+                       label + " · lava body", item, folder_path)
         if item.get("glow"):
             sphere = unit_mesh(destination, "SM_HazardGlowSphere", sphere=True)
             material = glow_material(destination, "M_HazardGlow", item["glow_color"], view)
