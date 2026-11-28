@@ -119,10 +119,11 @@ def draw_picture(sheet, draw, box, record, caption_font):
         raise ValueError(f"{path.name} changed before contact sheet rendering.")
     left, top, width, height = box
     draw.rectangle((left, top, left + width - 1, top + height - 1), fill="#111923")
-    with Image.open(io.BytesIO(raw), formats=("PNG",)) as source:
-        w, h = source.size
-        source.thumbnail((width - 2, height - 2), Image.Resampling.LANCZOS)
-        with source.convert("RGBA") as preview:
+    with Image.open(io.BytesIO(raw), formats=("PNG",)) as original:
+        w, h = original.size
+        # Convert first: Pillow cannot shrink palette and 16-bit images ("image has wrong mode").
+        with original.convert("RGBA") as preview:
+            preview.thumbnail((width - 2, height - 2), Image.Resampling.LANCZOS)
             sheet.paste(preview, (left + (width - preview.width) // 2,
                                   top + (height - preview.height) // 2), preview)
     subtitle = (record["label"] + "   " if record["label"] else "") + f"{w} × {h}"
