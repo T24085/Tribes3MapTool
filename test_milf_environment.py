@@ -46,7 +46,7 @@ class AdapterPlanTests(unittest.TestCase):
         scale = 2 ** settings["exposure"]["bias"]
         self.assertAlmostEqual(scale, exposure_scale(EV100))
         for seen, sent in zip(TARTARUS["fog"]["color"], settings["fog"]["inscattering"]):
-            self.assertAlmostEqual(sent * scale, seen)
+            self.assertAlmostEqual(sent, seen)  # Height fog colour is not exposed in UE5.
         self.assertAlmostEqual(settings["sun"]["lux"], 4.0 * LUX_PER_BRIGHTNESS, places=3)
         self.assertAlmostEqual(settings["fog"]["start_cm"], 2880.0)
 
@@ -134,4 +134,14 @@ class ToneFitTests(unittest.TestCase):
         red, green, blue = grade["gain"]
         self.assertGreater(green, 0.6 * red)  # No longer a green wipe-out (magenta).
         self.assertEqual(grade["offset"], [0.0, 0.0, 0.0])
+
+
+class FogColourTests(unittest.TestCase):
+    def test_only_the_extra_toward_sun_colour_is_added(self):
+        # Arx Novena: away from the sun blue-violet, toward it warm pink (both at brightness 0.5).
+        from environment_ue5 import plan
+
+        fog = {"start_m": 28.8, "density": 0.0034, "color": [0.23, 0.23, 0.46], "sun_color": [0.345, 0.25, 0.23]}
+        settings = plan({"format": 1, "fog": fog})["fog"]
+        self.assertEqual([round(value, 4) for value in settings["sun_inscattering"]], [0.115, 0.02, 0.0])
 

@@ -71,13 +71,15 @@ def plan(component, lut_rows=None):
             if key in fog:
                 settings[key] = fog[key]
         if "color" in fog:
-            # The component gives fog as it is seen; UE5 multiplies fog light by the exposure.
-            gain = 1 / scale if scale else 1
-            settings["inscattering"] = [value * gain for value in fog["color"]]
+            # The component gives fog as it is seen, and UE5's height fog colour is NOT darkened by the
+            # fixed exposure: an exposure gain made Arx Novena's haze ten times too bright (checked live).
+            settings["inscattering"] = list(fog["color"])
         if "sun_color" in fog:
-            # The haze seen looking toward the sun (UE5 directional inscattering).
-            gain = 1 / scale if scale else 1
-            settings["sun_inscattering"] = [value * gain for value in fog["sun_color"]]
+            # UE3 shows the toward-sun colour INSTEAD of the base colour when looking at the sun; UE5 ADDS
+            # directional inscattering on top of the base. So only the difference is added: adding the full
+            # colour washed Arx Novena out to white toward the sun.
+            base = fog.get("color", [0.0, 0.0, 0.0])
+            settings["sun_inscattering"] = [max(0.0, toward - away) for toward, away in zip(fog["sun_color"], base)]
         result["fog"] = settings
     grade = component.get("grade")
     if grade:
@@ -111,7 +113,7 @@ def plan(component, lut_rows=None):
     return result
 
 
-def apply(actors, component, assets=None):
+def apply(actors, component, assets=None, own_sky=False):
     """Place the sun, sky light, atmosphere, fog, fixed exposure and grade for a component.
 
     ``assets`` gives the folder, file inventory and Unreal destination for any images the
