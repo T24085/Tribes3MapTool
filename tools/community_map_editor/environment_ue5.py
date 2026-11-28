@@ -17,6 +17,29 @@ UE5_BLOOM_INTENSITY = 0.675  # UE5's default bloom; a MILF bloom intensity of 1 
 DISPLAY_GAMMA = 2.2  # Display-space gain to linear gain.
 
 
+# Display values 0.2 to 0.9: the visible mid-range. A fit that reached into near-black let a source
+# shadows term dominate (Arx Novena's green 0.12 made the whole map magenta); clipped whites add nothing.
+TONE_SAMPLES = [0.2 + index * 0.7 / 28 for index in range(29)]
+
+
+def tone_fit(shadow, midtone, highlight):
+    """Fit UE3's display-space tone curve, pow(max(x - shadow, 0) / highlight, midtone) clipped to 1,
+    as a x x^p by least squares in log space over the visible range."""
+    import math
+
+    points = []
+    for x in TONE_SAMPLES:
+        y = min(1.0, max(x - shadow, 0.0) / max(highlight, 1e-3)) ** max(midtone, 1e-3)
+        if y > 1e-3:
+            points.append((math.log(x), math.log(y)))
+    if len(points) < 2:
+        return 1.0, 1.0
+    mx = sum(x for x, _ in points) / len(points)
+    my = sum(y for _, y in points) / len(points)
+    slope = sum((x - mx) * (y - my) for x, y in points) / sum((x - mx) ** 2 for x, _ in points)
+    return math.exp(my - slope * mx), slope
+
+
 def plan(component, lut_rows=None):
     """Return the UE5 settings for a validated component, as plain numbers.
 
@@ -51,16 +74,26 @@ def plan(component, lut_rows=None):
             # The component gives fog as it is seen; UE5 multiplies fog light by the exposure.
             gain = 1 / scale if scale else 1
             settings["inscattering"] = [value * gain for value in fog["color"]]
+        if "sun_color" in fog:
+            # The haze seen looking toward the sun (UE5 directional inscattering).
+            gain = 1 / scale if scale else 1
+            settings["sun_inscattering"] = [value * gain for value in fog["sun_color"]]
         result["fog"] = settings
     grade = component.get("grade")
     if grade:
-        # UE3-style tones onto UE5 colour grading. Mid-tones above 1 darken the mid-tones in UE3
-        # but a UE5 gamma above 1 brightens them, so the gamma is 1 / mid-tones; highlights scale
-        # brightness (gain = highlights) and shadows subtract (offset = -shadows). Checked in the
-        # editor on Tartarus: the direct mapping washed the scene out.
-        tones = {"gamma": [1 / max(value, 1e-3) for value in grade.get("midtones", [1, 1, 1])],
-                 "gain": list(grade.get("highlights", [1, 1, 1])),
-                 "offset": [-value for value in grade.get("shadows", [0, 0, 0])]}
+        # UE3 applied its tones to the displayed image: pow(max(colour - shadows, 0) / highlights,
+        # mid-tones), per channel, in display space. UE5's gain and offset act on linear colour before
+        # tonemapping, so copying the numbers across fails: a display shadows of 0.12 became a linear
+        # offset that removed green everywhere (Arx Novena turned magenta). Instead the UE3 curve is
+        # fitted as out = a x in^p in display space, like the LUT below, and folded the same way:
+        # gamma = 1 / p, gain = a^2.2, no offset. Mid-tones alone reproduce the gamma = 1 / mid-tones
+        # rule checked in the editor on Tartarus.
+        fits = [tone_fit(*channel) for channel in zip(grade.get("shadows", [0, 0, 0]),
+                                                      grade.get("midtones", [1, 1, 1]),
+                                                      grade.get("highlights", [1, 1, 1]))]
+        tones = {"gamma": [1 / max(power, 1e-3) for _, power in fits],
+                 "gain": [scale ** DISPLAY_GAMMA for scale, _ in fits],
+                 "offset": [0.0, 0.0, 0.0]}
         if lut_rows is not None:
             # The LUT acts after tonemapping, in display space: out = a x in^p per channel. A power
             # carries over to linear unchanged and a display gain a becomes a^2.2, so after the
@@ -98,10 +131,17 @@ def apply(actors, component, assets=None):
                                           unreal.Rotator(pitch=sun["pitch"], yaw=sun["yaw"]))
     light.light_component.set_editor_property("atmosphere_sun_light", True)
     light.light_component.set_intensity(sun["lux"])
+    # Movable: drafts never build lighting, and a stationary sun relies on built shadow data.
+    light.light_component.set_mobility(unreal.ComponentMobility.MOVABLE)
     if sun["color"]:
         light.set_light_color(unreal.LinearColor(*sun["color"], 1))
     sky_actor = actors.spawn_actor_from_class(unreal.SkyLight, unreal.Vector(0, 0, 1500))
     sky_light = sky_actor.get_component_by_class(unreal.SkyLightComponent)
+    # Movable: drafts never build lighting, and a stationary sky light only fills shadows through
+    # lightmaps, so cooked maps rendered unlit sides black. Real-time capture keeps the ambient matched
+    # to the map's own sky, atmosphere and fog.
+    sky_light.set_mobility(unreal.ComponentMobility.MOVABLE)
+    sky_light.set_editor_property("real_time_capture", True)
     sky_light.set_intensity(settings["sky"]["intensity"])
     if settings["sky"]["color"]:
         sky_light.set_light_color(unreal.LinearColor(*settings["sky"]["color"], 1))
@@ -118,6 +158,9 @@ def apply(actors, component, assets=None):
             component_fog.set_fog_max_opacity(fog["max_opacity"])
         if "inscattering" in fog:
             component_fog.set_fog_inscattering_color(unreal.LinearColor(*fog["inscattering"], 1))
+        if "sun_inscattering" in fog:
+            component_fog.set_editor_property("directional_inscattering_luminance",
+                                              unreal.LinearColor(*fog["sun_inscattering"], 1))
     exposure, grade = settings.get("exposure"), settings.get("grade")
     if exposure or grade:
         # One unbound volume holds the whole-map exposure and grade.

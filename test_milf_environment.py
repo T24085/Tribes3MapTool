@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "tools/community_map_editor"))
-from environment_ascend import EV100, LUX_PER_BRIGHTNESS, RULES, convert  # noqa: E402
+from environment_ascend import EV100, EXPOSURE_UNIT_LUX, LUX_PER_BRIGHTNESS, RULES, convert  # noqa: E402
 from environment_ue5 import plan  # noqa: E402
 from milf_environment import exposure_scale, validate  # noqa: E402
 
@@ -23,7 +23,7 @@ class AscendConverterTests(unittest.TestCase):
     def test_tartarus_becomes_a_milf_component(self):
         component = convert(TARTARUS, VALUES)
         self.assertEqual(component["provenance"], {"game": "ascend", "rules": RULES})
-        self.assertEqual(component["sun"]["illuminance_lux"], 4.0 * LUX_PER_BRIGHTNESS)
+        self.assertAlmostEqual(component["sun"]["illuminance_lux"], 4.0 * LUX_PER_BRIGHTNESS, places=3)
         self.assertEqual(component["sun"]["direction"], [0.00064, -0.83486, -0.55046])  # MILF flips Y
         self.assertEqual(component["sky"], {"color": [1.0, 0.888, 0.515], "intensity": 0.5})
         self.assertEqual(component["fog"]["start_m"], 28.8)
@@ -32,11 +32,12 @@ class AscendConverterTests(unittest.TestCase):
 
     def test_per_map_tuning_flows_through_the_profile_values(self):
         component = convert(TARTARUS, dict(VALUES, **{"sun.intensity_scale": 2.0, "sun.ambient_scale": 1.5}))
-        self.assertEqual(component["sun"]["illuminance_lux"], 20.0)
+        self.assertAlmostEqual(component["sun"]["illuminance_lux"], 2.0 * LUX_PER_BRIGHTNESS, places=3)
         self.assertEqual(component["sky"]["intensity"], 1.5)
 
     def test_the_default_exposure_shows_one_ue3_unit_at_its_ue3_brightness(self):
-        self.assertAlmostEqual(exposure_scale(EV100) * LUX_PER_BRIGHTNESS, 1, places=3)
+        self.assertAlmostEqual(exposure_scale(EV100) * EXPOSURE_UNIT_LUX, 1, places=3)
+        self.assertAlmostEqual(LUX_PER_BRIGHTNESS, 31.4159, places=3)  # UE5 lux carry a 1/pi.
 
 
 class AdapterPlanTests(unittest.TestCase):
@@ -46,7 +47,7 @@ class AdapterPlanTests(unittest.TestCase):
         self.assertAlmostEqual(scale, exposure_scale(EV100))
         for seen, sent in zip(TARTARUS["fog"]["color"], settings["fog"]["inscattering"]):
             self.assertAlmostEqual(sent * scale, seen)
-        self.assertEqual(settings["sun"]["lux"], 40.0)
+        self.assertAlmostEqual(settings["sun"]["lux"], 4.0 * LUX_PER_BRIGHTNESS, places=3)
         self.assertAlmostEqual(settings["fog"]["start_cm"], 2880.0)
 
     def test_the_sun_direction_returns_to_unreal_axes(self):
@@ -73,10 +74,12 @@ class GradeTests(unittest.TestCase):
         from environment_ue5 import UE5_BLOOM_INTENSITY
 
         settings = plan(convert(dict(TARTARUS, grade=GRADE), VALUES))["grade"]
-        # UE3 mid-tones above 1 darken, so the UE5 gamma is their inverse; highlights are the gain.
-        self.assertAlmostEqual(settings["gamma"][0], 1 / 1.3)
-        self.assertEqual(settings["gain"], [0.9, 0.9, 0.9])
-        self.assertEqual(settings["offset"], [-0.01, -0.01, -0.01])
+        # UE3 mid-tones above 1 darken, so the UE5 gamma is their inverse; UE3 divides by the highlights.
+        self.assertAlmostEqual(settings["gamma"][0], 1 / 1.3, delta=0.04)  # Shadows and highlights shift the fit slightly.
+        # UE3's display-space curve pow((x - shadows) / highlights, mid-tones) is folded as a fit:
+        # highlights 0.9 brighten (gain above 1), and there is no raw linear offset.
+        self.assertTrue(all(gain > 1 for gain in settings["gain"]))
+        self.assertEqual(settings["offset"], [0.0, 0.0, 0.0])
         self.assertEqual(settings["bloom_intensity"], UE5_BLOOM_INTENSITY)
         self.assertIsNone(settings["bloom_threshold"])  # UE5 keeps its own threshold
 
@@ -112,3 +115,23 @@ class ValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ToneFitTests(unittest.TestCase):
+    def test_midtones_alone_fit_exactly(self):
+        from environment_ue5 import tone_fit
+
+        scale, power = tone_fit(0, 1.3, 1)
+        self.assertAlmostEqual(scale, 1.0, places=6)
+        self.assertAlmostEqual(power, 1.3, places=6)
+
+    def test_arx_novena_grade_stays_neutral_in_green(self):
+        # Shadows (0.04, 0.12, 0.05), mid-tones (0.75, 0.7, 0.75), highlights (0.7, 0.7, 0.9).
+        from environment_ue5 import plan
+
+        grade = plan({"format": 1, "grade": {"shadows": [0.04, 0.12, 0.05], "midtones": [0.75, 0.7, 0.75],
+                                               "highlights": [0.7, 0.7, 0.9]}})["grade"]
+        red, green, blue = grade["gain"]
+        self.assertGreater(green, 0.6 * red)  # No longer a green wipe-out (magenta).
+        self.assertEqual(grade["offset"], [0.0, 0.0, 0.0])
+

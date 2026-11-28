@@ -327,11 +327,11 @@ def validate_environment(settings, *, unreal=False):
         native_ranges = {"density": (0, 5), "height_falloff": (0, 2), "max_opacity": (0, 1),
                          "height_cm": (-2e6, 2e6)} if unreal else {}
         if (not isinstance(fog, dict) or "start_cm" not in fog
-                or fog.keys() - distances - {"color"} - native_ranges.keys()
+                or fog.keys() - distances - {"color", "sun_color"} - native_ranges.keys()
                 or any(not finite(fog[key], 2e6) or fog[key] < 0 for key in fog.keys() & distances)
                 or any(not finite(fog[key], max(abs(low), high)) or not low <= fog[key] <= high
                        for key, (low, high) in native_ranges.items() if key in fog)
-                or ("color" in fog and (not vector(fog["color"]) or min(fog["color"]) < 0))):
+                or any(key in fog and (not vector(fog[key]) or min(fog[key]) < 0) for key in ("color", "sun_color"))):
             raise ValueError("Invalid intake fog.")
 
 
