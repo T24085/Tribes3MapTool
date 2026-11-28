@@ -1012,6 +1012,13 @@ def run(library, meshes=(), drafts=(), game=None):
         except (ValueError, KeyError, TypeError, OSError, RuntimeError, zipfile.BadZipFile) as exc:
             notice.set("Map conversion could not finish.")
             messagebox.showerror("Map conversion", str(exc), parent=root)
+        except Exception as exc:  # noqa: BLE001 - an unexpected bug must still be reported, not just vanish.
+            import traceback
+
+            notice.set("Map conversion stopped on an unexpected error.")
+            where = traceback.extract_tb(exc.__traceback__)[-1]
+            messagebox.showerror("Map conversion", f"Unexpected error: {type(exc).__name__}: {exc}\n\n"
+                                 f"at {Path(where.filename).name}:{where.lineno}. Please report this.", parent=root)
 
     def clear():
         show_stage("open")
