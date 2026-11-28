@@ -260,7 +260,12 @@ def package_preview(parent, cooked, target, ident, markers, *, host_export=False
 
 # Editor-only stand-ins at original-game asset paths (the lava damage effect). The cooked map keeps
 # the reference; the installed game supplies the real asset, so the stand-in is never exported.
-ORIGINAL_GAME_STAND_INS = frozenset({'Abilities/Effects/GE_Damage_Generic'})
+# Editor stand-ins at original-game paths: never exported, so the game uses its own asset. The T3
+# border style places the retail energy-wall meshes; the material pair is from an earlier version.
+ORIGINAL_GAME_STAND_INS = frozenset({'Abilities/Effects/GE_Damage_Generic',
+                                     'Environment/BorderWall/MIC_EnergyWall_Inst',
+                                     'Environment/BorderWall/MAT_EnergyWall',
+                                     *(f'Environment/BorderWall/SM_Border_TopWall_{piece}' for piece in 'ABCD')})
 
 
 PLUGINS = ['-NoEnginePlugins', '-EnablePlugins=PythonScriptPlugin,EditorScriptingUtilities,'

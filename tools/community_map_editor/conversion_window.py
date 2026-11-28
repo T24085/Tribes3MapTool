@@ -52,7 +52,8 @@ WALL_COLLISION_CHOICES = {
     "Vehicles (Vehicle)": ("vehicle",),
     "Pawn and Vehicle": ("pawn", "vehicle"),
 }
-WALL_VISUAL_CHOICES = {"Invisible": None, "Cyan energy": "energy", "Amber warning": "warning"}
+WALL_VISUAL_CHOICES = {"Invisible": None, "Cyan energy": "energy", "Amber warning": "warning",
+                       "T3 style (retail border)": "t3"}
 
 
 def show_boundary_settings(parent, header, terrain, rows, selection, on_save):

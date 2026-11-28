@@ -872,8 +872,13 @@ class DraftImport:
                 actor.static_mesh_component.set_material(0, material)
             ground.append(actor)
         if boxes:
+            # Under a MILF fixed exposure (Ascend) the wall glow needs the same gain as source glows, or the
+            # energy field shows as a dark sheet (Katabatic).
+            gain = 1.0
+            if self.header["profile"] in MILF_ENVIRONMENT_CONVERTERS:
+                from environment_ascend import EMISSIVE_GAIN as gain
             place_walls(editor.ACTORS, boxes, draft=ident, block_channels=self.options.get("wall_block_channels"),
-                        visual=self.options.get("wall_visual"))
+                        visual=self.options.get("wall_visual"), emissive_gain=gain)
         if self.warning_zone is not None:
             from perimeter_warning_unreal import place_warning
 
