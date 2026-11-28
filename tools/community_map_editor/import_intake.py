@@ -306,6 +306,9 @@ def place_static_objects(actors, planned, meshes, material_overrides=None, light
         if str(row.get('properties', {}).get('CastShadow')) == 'False':
             # The source mesh cast no shadow (sky domes, skyline backdrops, grass).
             actor.static_mesh_component.set_cast_shadow(False)
+        if str(row.get('properties', {}).get('Collision')) == 'False':
+            # The source mesh did not collide (grass, small props): players pass through it.
+            actor.static_mesh_component.set_collision_profile_name('NoCollision')
         if native_modes and path in native_modes:
             visible, solid, format_version = native_modes[path]
             if format_version == VENGEANCE_STATIC_MESH:
