@@ -89,13 +89,15 @@ def ascend_fog(actor, node, stream, endian, cm_per_unit):
     start = values.get("startdistance", 0) * cm_per_unit
     if not 0 <= start <= 2e6 or height is not None and not finite(height * cm_per_unit, 2e6):
         raise ValueError("Saved height fog placement exceeds the editor range.")
-    result = dict(start_cm=start, density=density)
+    # UE3 and UE5 both apply density and height falloff per 1000 world units; a UE3 unit is
+    # cm_per_unit centimetres after import, so both shrink by that factor (Katabatic fog).
+    result = dict(start_cm=start, density=density / cm_per_unit)
     if height is not None:
         result["height_cm"] = height * cm_per_unit
     for source, key, limit in (("fogheightfalloff", "height_falloff", 2), ("fogmaxopacity", "max_opacity", 1)):
         value = bounded_scalar(values, source, 0, limit)
         if value is not None:
-            result[key] = value
+            result[key] = value / cm_per_unit if key == "height_falloff" else value
     opposite = values.get("oppositelightcolor")
     primary = values.get("lightinscatteringcolor")
     if primary or opposite:

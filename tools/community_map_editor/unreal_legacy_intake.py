@@ -25,6 +25,7 @@ from interior_geometry import MAX_GEOMETRY_BYTES, NATIVE_VERTEX_FIELDS
 from model_textures import PackageMaterials, SURFACE_DETAIL, TEXTURE_INDEX, has_shader_inputs, texture_records
 from minimap import framing, terrain_png
 from mission_equipment import ascend_equipment_class
+from hazards_ascend import read_ascend_hazards
 from ascend_bounds import (BOUNDARY_PANEL_REASON, boundary_panel, boundary_recipe, derive_play_box,
                            describe as describe_bounds, read_source_bounds)
 from vengeance_bounds import (boundary_recipe as vengeance_boundary_recipe, describe as describe_vengeance_bounds,
@@ -75,13 +76,26 @@ def terrain_based_start(actor, kind, ascend_terrain):
             and "attachparent" not in actor["references"] and actor["links"].get("base") == ascend_terrain)
 
 
-def usable_marker(actor, kind, ascend_terrain=None):
+def world_lines(actors):
+    """Lines of each level's WorldInfo actor. A Base on WorldInfo means "resting on the world"."""
+    return frozenset(actor["line"] for actor in actors
+                     if (actor["source_class"] or "").casefold().rsplit(".", 1)[-1] == "worldinfo")
+
+
+def world_based(actor, worlds):
+    # UE3 saves Base = the level's WorldInfo for an actor resting on BSP or world geometry (Katabatic's
+    # flag stands). Its Location is still a world position, so it is not really attached.
+    return ("attachparent" not in actor["references"] and actor["references"].keys() & {"base"}
+            and actor["links"].get("base") in worlds)
+
+
+def usable_marker(actor, kind, ascend_terrain=None, worlds=frozenset()):
     transform = actor["transform"]
     unresolved_component = (any(item["transform"] is not None for item in actor["components"])
                             and any("root component" in reason for reason in actor["review"]))
     attached = actor["references"].keys() & {"base", "attachparent"}
     return (transform is not None and transform["authored"] and not unresolved_component
-            and (not attached or terrain_based_start(actor, kind, ascend_terrain)))
+            and (not attached or terrain_based_start(actor, kind, ascend_terrain) or world_based(actor, worlds)))
 
 
 def project_markers(scene, teams):
@@ -100,12 +114,13 @@ def project_markers(scene, teams):
         raise ValueError("Provide the flag and spawns for each of the two CTF teams.")
     markers = {}
     ascend_terrain = scene.get("native_terrain", {}).get("export_index") if scene["profile"] == "ascend" else None
+    worlds = world_lines(scene["actors"])
 
     def marker(name, team, kind):
         if not isinstance(name, str) or len(matches := by_name.get(name.casefold(), ())) != 1:
             raise ValueError(f"Select one unambiguous source actor for each {kind}.")
         actor, = matches
-        if not usable_marker(actor, kind, ascend_terrain):
+        if not usable_marker(actor, kind, ascend_terrain, worlds):
             raise ValueError(f"Choose a {kind} with an independent actor transform.")
         if actor["line"] in markers:
             raise ValueError("One source actor cannot be assigned twice.")
@@ -746,6 +761,11 @@ def convert_unreal(source, output, metadata=None, *, native_settings=None):
         header["sources"][1]["origin"] = "Editor import settings"
     if environment:
         header["environment"] = environment
+    if game == "ascend" and binary:
+        # Kill volumes and their glow become MILF hazards (T3BackEndServer#150).
+        hazards = read_ascend_hazards([source, *level_paths], units)
+        if hazards:
+            header["hazards"] = hazards
     if ascend_material:
         header.update(format=ASCEND_BASE_MATERIAL_VERSION, scene_format=version)
     elif game == "vengeance" and any("local_light" in row for row in rows):

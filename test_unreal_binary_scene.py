@@ -2246,9 +2246,9 @@ class UnrealBinarySceneTests(unittest.TestCase):
                 if game == "ascend":
                     self.assertEqual(lighting["fog"]["height_cm"], 480)
                     self.assertEqual(lighting["fog"]["start_cm"], 3000)
-                    self.assertEqual(lighting["fog"]["height_falloff"], .375)
+                    self.assertEqual(lighting["fog"]["height_falloff"], .1875)  # .375 per UE3 unit; 2 cm per unit
                     self.assertEqual(lighting["fog"]["max_opacity"], .75)
-                    self.assertEqual(projected["fog.density"]["value"], .25)
+                    self.assertEqual(projected["fog.density"]["value"], .125)  # .25 per UE3 unit
                     self.assertEqual(projected["sun.ambient_scale"]["value"], .5)
                     self.assertEqual(projected["sun.intensity_scale"]["value"], .625)
                     self.assertAlmostEqual(lighting["sun"]["color"][0], .95597335)

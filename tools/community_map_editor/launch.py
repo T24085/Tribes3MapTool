@@ -99,6 +99,7 @@ def install_editor_scripts(project, env, *, include_seed=True):
                  'model_textures.py', 'draft_model_materials.py', 'mission_equipment.py', 'mission_weather.py',
                  'mission_audio.py', 'mission_audio_profiles.py', 'draft_audio.py', 'outside_audio.py', 'mission_lighting.py',
                  'milf_environment.py', 'environment_ascend.py', 'environment_ue5.py', 'ascend_post_process.py',
+                 'milf_hazard.py', 'hazards_ascend.py', 'hazards_ue5.py',
                  'equipment_unreal.py', 'source_library.py', 'draft_showcase.py', 'model_library.py',
                  'contact_sheets_unreal.py', 'conversion_rules.py', 'tribes2_conversion.json', 'profile_exchange.py',
                  'batch_rebuild.py', 'batch_rebuild_unreal.py', 'batch_stage.py', 'batch_stage_unreal.py',
@@ -214,8 +215,9 @@ def package_preview(parent, cooked, target, ident, markers, *, host_export=False
     editor_asset_prefix = BRUSH_PREVIEW_FOLDER.removeprefix('/Game/') + '/'
     for source in cooked.rglob('*'):
         rel = source.relative_to(cooked).as_posix()
-        if rel.startswith(editor_asset_prefix) or source.suffix.lower() not in (
-                '.uasset', '.umap', '.uexp', '.ubulk', '.uptnl'):
+        if (rel.startswith(editor_asset_prefix) or rel.split('.', 1)[0] in ORIGINAL_GAME_STAND_INS
+                or source.suffix.lower() not in (
+                '.uasset', '.umap', '.uexp', '.ubulk', '.uptnl')):
             continue
         if rel.startswith('Community/'):
             name = 'content/'+rel
@@ -256,6 +258,11 @@ def package_preview(parent, cooked, target, ident, markers, *, host_export=False
     return target
 
 
+# Editor-only stand-ins at original-game asset paths (the lava damage effect). The cooked map keeps
+# the reference; the installed game supplies the real asset, so the stand-in is never exported.
+ORIGINAL_GAME_STAND_INS = frozenset({'Abilities/Effects/GE_Damage_Generic'})
+
+
 PLUGINS = ['-NoEnginePlugins', '-EnablePlugins=PythonScriptPlugin,EditorScriptingUtilities,'
            'CommunityNativeWorldSettings,TextureFormatOodle,WorldPartitionHLODUtilities,Water,GeometryScripting,'
            'GeometryCache,LevelSequenceEditor,SequencerScripting,Metasound']
@@ -293,7 +300,10 @@ def editor_plugin_args(project, engine, *, smoke, authoring_only=False):
         elif (folder / f'Binaries/Win64/UnrealEditor-{module}.dll').is_file():
             print(f'Build {name} for this Unreal Editor version to {purpose}.', flush=True)
     plugins = [*args[1].split(','), *enabled]
-    if authoring_only:
+    native = project.parent / 'Plugins' / 'CommunityNativeWorldSettings'
+    if authoring_only and not editor_plugin_matches(native, engine, 'Valhalla'):
+        # Authoring-only workspaces load the native mirror only when it is installed for this editor
+        # build, so drafts can place original-game volumes (lava). World settings stay unconverted.
         plugins.remove('CommunityNativeWorldSettings')
     return [args[0], ','.join(plugins)]
 

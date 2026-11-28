@@ -193,6 +193,40 @@ def decode_object(stream, summary, export, names, objects, block):
     return row
 
 
+MAX_ARCHETYPE_DEPTH = 8
+NOT_INHERITED = {"location", *ACTOR_REFERENCES}  # Prefab-relative or owner-specific values.
+
+
+def inherit_archetype(row, stream, summary, names, objects):
+    """Fill placement values an instance left at its in-package archetype's value.
+
+    UE3 saves only properties that differ from the object's archetype. Prefab pieces
+    (Katabatic's generator atrium) take their mesh, rotation and scale from archetype
+    exports cooked into the map, so the instance alone has no StaticMesh. Location is
+    never inherited: a prefab archetype's location is relative to the prefab.
+    """
+    have = {field["key"].casefold() for field in row["entries"]}
+    archetype, seen, inherited = row["archetype"], set(), 0
+    while archetype > 0 and archetype in objects and archetype not in seen and len(seen) < MAX_ARCHETYPE_DEPTH:
+        seen.add(archetype)
+        source = objects[archetype]
+        try:
+            _, fields, issues, _ = read_properties(stream, summary, source, names, objects)
+        except ValueError as error:
+            fields, issues = [], [str(error)]
+        if issues:
+            row["property_issues"].extend(f'Archetype {source["object_path"]}. {issue}' for issue in issues)
+            break
+        for field in fields:
+            key = field["key"].casefold()
+            if key not in have and key not in NOT_INHERITED:
+                have.add(key)
+                row["entries"].append(dict(line=row["line"], key=field["key"], value=field["value"]))
+                inherited += 1
+        archetype = source["archetype"]
+    return inherited
+
+
 def level_actors(level, report, stream, objects):
     summary = report["summary"]
     modern = summary["game"] == "ascend"
@@ -250,6 +284,8 @@ def actor_scene(report, stream, units_per_m):
             scope["entries"].append(node)
             components = [decode_object(stream, summary, child, report["names"], objects, "Object")
                           for child in children[export["index"]] if child["class_name"].casefold().endswith("component")]
+            inherited = sum(inherit_archetype(item, stream, summary, report["names"], objects)
+                            for item in (node, *components))
             node["entries"].extend(components)
             tag_count += len(node["tags"]) + sum(len(item["tags"]) for item in components)
             if tag_count > MAX_PROPERTIES:
@@ -264,6 +300,8 @@ def actor_scene(report, stream, units_per_m):
                               for tag in item["tags"])
             if unsupported:
                 actor["review"].append(f"Source scene retains {unsupported} properties for manual review.")
+            if inherited:
+                actor["review"].append(f"{inherited} placement values are inherited from prefab archetypes.")
             if (not any(field.get("key", "").casefold() == "location" for field in node["entries"])
                     or any(item["property_issues"] for item in (node, *components))):
                 actor["review"].append("No independent serialized placement was established for this actor.")

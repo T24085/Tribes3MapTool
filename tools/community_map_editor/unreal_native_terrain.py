@@ -19,6 +19,7 @@ from vengeance_terrain_layers import read_terrain_paint
 
 HEIGHT_MIDPOINT = 32768
 HEIGHT_UNITS = 128
+UE3_TERRAIN_SCALE = (256.0, 256.0, 256.0)  # The UE3 Terrain class default DrawScale3D.
 HIDDEN_PATCH = 1
 TURNED_PATCH = 2
 MAX_HEIGHT_SAMPLES = intake_file_limit("terrain.json", UNREAL_INTAKE_VERSION) // 16
@@ -110,11 +111,18 @@ def terrain_tiles(heights, flags, width, height, columns, rows, factor, midpoint
 
 def ascend_heightfield(actor, node, scene, stream, endian):
     placement = actor["transform"]
-    if (not placement or placement["rotation_xyzw"] != [0, 0, 0, 1]
-            or not any(field.get("key", "").casefold() == "drawscale3d" for field in node["entries"])):
-        raise ValueError("Native terrain requires an independent, axis-aligned actor with serialized scale.")
+    if not placement or placement["rotation_xyzw"] != [0, 0, 0, 1]:
+        raise ValueError("Native terrain requires an independent, axis-aligned actor.")
+    keys = {field.get("key", "").casefold() for field in node["entries"]}
     units = scene["coordinate_frame"]["source_units_per_m"]
-    sx, sy, sz = placement["scale"]
+    if "drawscale3d" in keys:
+        sx, sy, sz = placement["scale"]
+    elif "drawscale" in keys or placement["scale"] != [1.0, 1.0, 1.0]:
+        raise ValueError("Native terrain scale is saved in a form this importer does not read.")
+    else:
+        # UE3 saves only values that differ from the class default; a terrain with no saved
+        # DrawScale3D (Katabatic) uses the Terrain class default of 256 on every axis.
+        sx, sy, sz = UE3_TERRAIN_SCALE
     width, height = dimensions(node, stream, endian)
     tile_dimensions(width, height)  # Bound the array reads before allocating the payload.
     raw, flags, provenance = terrain_arrays(node, stream, endian, width * height)
