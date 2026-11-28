@@ -952,10 +952,16 @@ class DraftImport:
 
             assets = dict(folder=self.folder, inventory=self.header["files"],
                           destination=f"/Game/Community/{self.ident}/Environment")
-            apply_environment(self.editor.ACTORS, converter()(self.environment, self.values), assets)
+            view = apply_environment(self.editor.ACTORS, converter()(self.environment, self.values), assets)
         else:
+            view = None
             place_environment(self.editor.ACTORS, self.environment, self.values)
         place_local_lights(self.editor.ACTORS, self.rows)
+        if self.header.get("hazards"):
+            # MILF hazards become the native lava kit (T3BackEndServer#150).
+            from hazards_ue5 import apply as apply_hazards
+
+            apply_hazards(self.editor.ACTORS, self.header["hazards"], f"/Game/Community/{self.ident}/Hazards", view)
 
     def weather(self, _):
         header, terrain, rows, editor, ident = self.header, self.terrain, self.rows, self.editor, self.ident

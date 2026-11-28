@@ -7,6 +7,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent / "tools/community_map_editor"))
 from hazards_ascend import hull_xy, zone  # noqa: E402
 from milf_hazard import validate  # noqa: E402
+from hazards_ue5 import CONTACT_CM, KILL_DAMAGE_PER_SEC, MOLTEN_SEEN, WALL_OVERLAP_CM, emissive, plan  # noqa: E402
 
 PIT = {
     "format": 1,
@@ -82,6 +83,61 @@ class AscendConverterTests(unittest.TestCase):
     def test_weak_damage_stays_per_second(self):
         result = zone(dict(self.VOLUME, per_second=40.0), [])
         self.assertEqual(result["damage"], {"mode": "per_second", "per_second": 40.0, "cause": "fall"})
+
+
+class UnrealAdapterPlanTests(unittest.TestCase):
+    def test_lava_pit_plan_in_unreal_centimetres(self):
+        item, = plan(copy.deepcopy(PIT))
+        self.assertEqual(item["damage_per_sec"], KILL_DAMAGE_PER_SEC)
+        volume = item["volume"]
+        # MILF Y -455..-504 m flips to Unreal +45500..+50400 cm.
+        self.assertAlmostEqual(volume["center"][1], (45500 + 50400) / 2)
+        self.assertAlmostEqual(volume["center"][2] - volume["half"][2], -130)
+        # Visible lava kills on contact: the volume ends just above the surface, not at the kill slab.
+        self.assertAlmostEqual(volume["center"][2] + volume["half"][2], 2650 + CONTACT_CM)
+        under = item["under"]
+        self.assertAlmostEqual(under["center"][2] + under["half"][2], 2650)  # The under-lava view ends at the surface.
+        self.assertEqual(item["surface"]["center"][2], 2650)
+        self.assertEqual(len(item["glow"]), 1)
+        self.assertEqual(item["glow"][0]["center"], [-22040.0, 48000.0, 2650.0])
+
+    def test_lava_rises_until_every_wall_column_is_closed(self):
+        # Katabatic: side walls start at 37.63 m, corner pieces at 47.6 m (with more stacked above),
+        # the catwalk far above the zone; the glow centre is 26.5 m.
+        walls = [(-23560, 47920, 3763.0), (-23560, 47920, 4746.0), (-21660, 46020, 3763.0),
+                 (-22670, 45960, 4760.0), (-22670, 45960, 6730.0), (-20670, 49890, 4760.0),
+                 (-21660, 47920, 13590.0)]
+        item, = plan(copy.deepcopy(PIT), {"utkillzvolume_1": walls})
+        surface = 4760.0 + WALL_OVERLAP_CM
+        self.assertEqual(item["surface"]["center"][2], surface)
+        self.assertAlmostEqual(item["under"]["center"][2] + item["under"]["half"][2], surface)
+        self.assertAlmostEqual(item["volume"]["center"][2] + item["volume"]["half"][2], surface + CONTACT_CM)
+
+    def test_no_walls_above_keeps_the_source_surface(self):
+        item, = plan(copy.deepcopy(PIT), {"utkillzvolume_1": [(0, 0, 1000.0)]})
+        self.assertEqual(item["surface"]["center"][2], 2650)
+
+    def test_emissive_lands_below_white_after_exposure_and_grade(self):
+        view = {"exposure": {"bias": -3.32}, "grade": {"gain": [1.02, 1.08, 1.3]}}
+        lava = emissive(MOLTEN_SEEN, view)
+        shown = [value * 2 ** -3.32 * gain for value, gain in zip(lava, view["grade"]["gain"])]
+        self.assertEqual([round(value, 6) for value in shown], list(MOLTEN_SEEN))
+        self.assertLess(max(shown), 1)
+        self.assertGreater(lava[0], lava[1] * 3)  # Still orange-red before the grade.
+
+    def test_an_invisible_zone_keeps_its_source_height(self):
+        component = copy.deepcopy(PIT)
+        component["zones"][0]["look"] = {"preset": "none"}
+        item, = plan(component)
+        self.assertAlmostEqual(item["volume"]["center"][2] + item["volume"]["half"][2], 6810)
+
+    def test_void_zone_places_only_the_damage_volume(self):
+        component = copy.deepcopy(PIT)
+        zone = component["zones"][0]
+        zone.update(kind="void", damage={"mode": "per_second", "per_second": 40, "cause": "fall"}, look={"preset": "none"})
+        del zone["surface_m"]
+        item, = plan(component)
+        self.assertEqual((item["damage_per_sec"], "under" in item, "surface" in item, "glow" in item), (40.0, False, False, False))
 
 
 if __name__ == "__main__":

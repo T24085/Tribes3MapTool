@@ -142,3 +142,4 @@ def apply(actors, component, assets=None):
             post.set_editor_property(key, value)
         volume.set_editor_property("settings", post)
     unreal.log("T3_MILF_ENVIRONMENT|" + __import__("json").dumps(component, separators=(",", ":")))
+    return settings

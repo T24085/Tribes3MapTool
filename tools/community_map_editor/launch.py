@@ -99,7 +99,7 @@ def install_editor_scripts(project, env, *, include_seed=True):
                  'model_textures.py', 'draft_model_materials.py', 'mission_equipment.py', 'mission_weather.py',
                  'mission_audio.py', 'mission_audio_profiles.py', 'draft_audio.py', 'outside_audio.py', 'mission_lighting.py',
                  'milf_environment.py', 'environment_ascend.py', 'environment_ue5.py', 'ascend_post_process.py',
-                 'milf_hazard.py', 'hazards_ascend.py',
+                 'milf_hazard.py', 'hazards_ascend.py', 'hazards_ue5.py',
                  'equipment_unreal.py', 'source_library.py', 'draft_showcase.py', 'model_library.py',
                  'contact_sheets_unreal.py', 'conversion_rules.py', 'tribes2_conversion.json', 'profile_exchange.py',
                  'batch_rebuild.py', 'batch_rebuild_unreal.py', 'batch_stage.py', 'batch_stage_unreal.py',
@@ -215,8 +215,9 @@ def package_preview(parent, cooked, target, ident, markers, *, host_export=False
     editor_asset_prefix = BRUSH_PREVIEW_FOLDER.removeprefix('/Game/') + '/'
     for source in cooked.rglob('*'):
         rel = source.relative_to(cooked).as_posix()
-        if rel.startswith(editor_asset_prefix) or source.suffix.lower() not in (
-                '.uasset', '.umap', '.uexp', '.ubulk', '.uptnl'):
+        if (rel.startswith(editor_asset_prefix) or rel.split('.', 1)[0] in ORIGINAL_GAME_STAND_INS
+                or source.suffix.lower() not in (
+                '.uasset', '.umap', '.uexp', '.ubulk', '.uptnl')):
             continue
         if rel.startswith('Community/'):
             name = 'content/'+rel
@@ -255,6 +256,11 @@ def package_preview(parent, cooked, target, ident, markers, *, host_export=False
                     map_runtime={ident:[]}, shared_content=shared, files=list(records.values()))
     (target/'package-manifest.json').write_text(json.dumps(manifest, indent=2)+'\n', encoding='utf-8')
     return target
+
+
+# Editor-only stand-ins at original-game asset paths (the lava damage effect). The cooked map keeps
+# the reference; the installed game supplies the real asset, so the stand-in is never exported.
+ORIGINAL_GAME_STAND_INS = frozenset({'Abilities/Effects/GE_Damage_Generic'})
 
 
 PLUGINS = ['-NoEnginePlugins', '-EnablePlugins=PythonScriptPlugin,EditorScriptingUtilities,'
