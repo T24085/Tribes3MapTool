@@ -77,6 +77,14 @@ def save_material(material, digest):
         raise ValueError(f'Unreal could not save the source material: {material.get_path_name()}')
 
 
+# Additive star fields and nebulae: drop the near-black floor, fade out over the outer 35 % of the card
+# and keep 70 % of the source brightness, so the card blends into the sky instead of showing its edges.
+ADDITIVE_FADE = """float2 Edge = abs(UV - 0.5) * 2.0;
+float Fade = smoothstep(0.0, 0.35, 1.0 - max(Edge.x, Edge.y));
+float3 Lit = max(Tex - 0.04, 0.0) / 0.96;
+return Lit * Tint * Fade * 0.7;"""
+
+
 def bind_shader_inputs(material, lib, sample, folder, inventory, record, destination):
     def texture_input(channel, label, x, y, *, normal=False):
         name = channel['file']
@@ -135,11 +143,31 @@ def bind_shader_inputs(material, lib, sample, folder, inventory, record, destina
         tint = lib.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, -840, 810)
         tint.set_editor_property('constant', unreal.LinearColor(*(value * EMISSIVE_GAIN
                                                                   for value in glow_colour(glow['tint'])), 1))
-        glowing = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -550, 545)
-        if (not lib.connect_material_expressions(color, 'RGB', glowing, 'A')
-                or not lib.connect_material_expressions(tint, '', glowing, 'B')
-                or not lib.connect_material_property(glowing, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)):
-            raise ValueError('Unreal did not bind the Ascend glow.')
+        if record.get('ascend_additive'):
+            # Star fields and nebulae fade into the sky: the texture's near-black floor is dropped (the
+            # exposure gain lifted it into a visible band) and the card fades out toward its edges.
+            glowing = lib.create_material_expression(material, unreal.MaterialExpressionCustom, -550, 545)
+            glowing.set_editor_property('description', 'Additive backdrop: black floor and soft edges')
+            glowing.set_editor_property('output_type', unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+            glowing.set_editor_property('code', ADDITIVE_FADE)
+            pins = []
+            for name in ('Tex', 'Tint', 'UV'):
+                pin = unreal.CustomInput()
+                pin.set_editor_property('input_name', name)
+                pins.append(pin)
+            glowing.set_editor_property('inputs', pins)
+            uv = lib.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -840, 960)
+            if (not lib.connect_material_expressions(color, 'RGB', glowing, 'Tex')
+                    or not lib.connect_material_expressions(tint, '', glowing, 'Tint')
+                    or not lib.connect_material_expressions(uv, '', glowing, 'UV')
+                    or not lib.connect_material_property(glowing, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)):
+                raise ValueError('Unreal did not bind the Ascend additive backdrop.')
+        else:
+            glowing = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -550, 545)
+            if (not lib.connect_material_expressions(color, 'RGB', glowing, 'A')
+                    or not lib.connect_material_expressions(tint, '', glowing, 'B')
+                    or not lib.connect_material_property(glowing, '', unreal.MaterialProperty.MP_EMISSIVE_COLOR)):
+                raise ValueError('Unreal did not bind the Ascend glow.')
     if 'normal' in record:
         normal = texture_input(record['normal'], 'SourceNormal', -660, 1110, normal=True)
         if not lib.connect_material_property(normal, 'RGB', unreal.MaterialProperty.MP_NORMAL):
@@ -194,7 +222,9 @@ def source_material(folder, inventory, record, *, destination, mode='opaque', tw
         if record.get('ascend_unlit'):
             # Ascend sky domes and backdrops light themselves: only the emissive (the glow binding) shows.
             material.set_editor_property('shading_model', unreal.MaterialShadingModel.MSM_UNLIT)
-            if not masked:
+            if record.get('ascend_additive'):
+                material.set_editor_property('blend_mode', unreal.BlendMode.BLEND_ADDITIVE)
+            elif not masked:
                 # An opaque self-lit surface is the sky dome. Tagged Is Sky, the real-time sky light
                 # captures the map's own painted sky, and UE's SkyAtmosphere can be left out.
                 material.set_editor_property('is_sky', True)
@@ -425,7 +455,11 @@ def generate_overrides(folder, inventory, models, lighting_index=None, *, moving
     for reference, (filename, geometry) in models.items():
         authored = index.get(filename, {})
         if reference in variants:
-            authored = {**authored, **index.get(reference, {})}
+            # A placement's own material that could not be converted (only a "reason", no file) keeps the
+            # mesh's material: Katabatic's star-field cards override with a material the converter cannot
+            # read, and the empty binding hid the mesh's working self-lit one, leaving the default grid.
+            authored = {**authored, **{slot: record for slot, record in index.get(reference, {}).items()
+                                       if 'file' in record or slot not in authored}}
         lighting = model_lighting(lighting_index, filename, geometry)
         if not authored and not lighting:
             continue

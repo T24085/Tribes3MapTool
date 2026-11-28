@@ -61,7 +61,7 @@ def shader_signature(record, inventory):
     tinted = (glow_tint, 'glow-clip-1') if glow_tint else ()
     if record.get('ascend_unlit'):
         # 'is-sky-1' names the Is Sky dome tag, so self-lit materials built before it are not reused.
-        tinted = (*tinted, 'unlit', 'is-sky-1')
+        tinted = (*tinted, 'unlit', 'is-sky-1', 'additive-fade-1' if record.get('ascend_additive') else 'solid')
     if 'ascend_base' in record:
         shader = record['ascend_base']
         return (*signature, 'ascend', shader.get('uv'), shader.get('vertex_rgb', False), *tinted)
@@ -182,6 +182,10 @@ def validate_bindings(bindings, models, inventory, *, legacy_sizes=None, receipt
                 if record['ascend_unlit'] is not True or 'ascend_glow' not in record:
                     raise ValueError('Invalid Ascend self-lit binding.')
                 required.add('ascend_unlit')
+            if 'ascend_additive' in record and ascend_uvs is not None:
+                if record['ascend_additive'] is not True or 'ascend_unlit' not in record:
+                    raise ValueError('Invalid Ascend additive self-lit binding.')
+                required.add('ascend_additive')
             if record.keys() != required:
                 raise ValueError('Incomplete model texture provenance.')
             modes = ('opaque', 'masked', 'translucent') if shader_inputs else ('opaque', 'masked')

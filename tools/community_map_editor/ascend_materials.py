@@ -884,6 +884,10 @@ def resolve_material(asset, report, stream, objects, companions, _flags, *, rtc,
                                                  source_sha256=image_source["sha256"], size=size),
                                       tint=[round(min(MAX_GLOW_TINT, max(0.0, value)), 4) for value in unlit])
         binding["ascend_unlit"] = True
+        if not masked and blend in ("BLEND_Additive", "BLEND_Translucent"):
+            # Star fields, nebulae and light shafts: black adds nothing, bright parts glow. Drawn opaque
+            # they became dark panels in Katabatic's sky.
+            binding["ascend_additive"] = True
     if glow:
         glow_png, glow_size, glow_source, tint = glow
         glow_name = "texture_" + sha256(glow_png).hexdigest()[:32] + ".png"

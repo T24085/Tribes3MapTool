@@ -346,7 +346,13 @@ def place_static_objects(actors, planned, meshes, material_overrides=None, light
 
             actor.tags = list(actor.tags) + [unreal.Name(f"{BINDING_TAG}{ident}") for ident in light_commands[row["id"]]]
         actor.set_actor_label(row["name"] or f"{row['source_class']} {row['id']}")
-        actor.set_folder_path("TRIBES Import/Moving brushes" if motion else "TRIBES Import/Mapped meshes")
+        folder = "TRIBES Import/Moving brushes" if motion else "TRIBES Import/Mapped meshes"
+        if not motion and self_lit(actor.static_mesh_component):
+            # Sky domes, skylines, star fields and light shafts: grouped and tagged so every map's
+            # backdrops can be found, checked or hidden in one place.
+            folder = "TRIBES Import/Sky and backdrops"
+            actor.tags = [*actor.tags, unreal.Name("T3SelfLit")]
+        actor.set_folder_path(folder)
         if row["source_class"].casefold() in ("interiorinstance", "interiorshape"):
             placed.append(actor)
         if motion:
@@ -485,6 +491,16 @@ def place_local_lights(actors, rows):
         if spotlight:
             component.set_outer_cone_angle(light["outer_angle"])
             component.set_inner_cone_angle(light["inner_angle"])
+
+
+def self_lit(component):
+    """True when any of a mesh's materials is unlit: an imported sky, backdrop or light effect."""
+    for slot in range(component.get_num_materials()):
+        material = component.get_material(slot)
+        base = material.get_base_material() if material else None
+        if base and base.get_editor_property("shading_model") == unreal.MaterialShadingModel.MSM_UNLIT:
+            return True
+    return False
 
 
 def has_sky_dome(actors):
